@@ -1,0 +1,35 @@
+# Dependencies
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Audit logs (local runtime)
+audit_logs/
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Internal docs (not for public repo)
+docs/HANDOVER.md
+docs/SRD-001-NEURALGUARD.md
+
+# SBOM output (regenerated in CI)
+sbom.json
+sbom.xml
+
+# uv lock (optional — commit if you want reproducible CI)
+# uv.lock

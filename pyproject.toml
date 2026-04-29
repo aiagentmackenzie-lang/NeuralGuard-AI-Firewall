@@ -1,0 +1,118 @@
+[project]
+name = "neuralguard"
+version = "0.1.0"
+description = "LLM Guard / AI Application Firewall — defensive middleware for prompt injection, jailbreak detection, and agentic security"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Raphael", email = "raphael@mobiussec.com" },
+]
+keywords = ["llm", "security", "firewall", "prompt-injection", "owasp", "ai-safety"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "httpx>=0.28.0",
+    "orjson>=3.10.0",
+    "regex>=2024.11.0",
+    "structlog>=24.4.0",
+    "python-dateutil>=2.9.0",
+]
+
+[project.optional-dependencies]
+semantic = [
+    "sentence-transformers>=3.3.0",
+    "scikit-learn>=1.6.0",
+    "torch>=2.5.0",
+]
+db = [
+    "asyncpg>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+]
+redis = [
+    "redis>=5.2.0",
+]
+all = [
+    "neuralguard[semantic,db,redis]",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "pytest-timeout>=2.3.0",
+    "httpx>=0.28.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pre-commit>=4.0.0",
+    "cyclonedx-bom>=5.0.0",
+    "pip-audit>=2.7.0",
+]
+
+[project.scripts]
+neuralguard = "neuralguard.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/neuralguard"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+timeout = 30
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests",
+    "redteam: red-team adversarial test cases",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH", "RUF"]
+ignore = ["E501", "B008", "RUF001", "RUF012", "RUF006", "E402", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F401", "F841", "TC001", "TC002", "TC003", "B007"]
+"src/neuralguard/scanners/pattern_i18n.py" = ["E402", "F401", "RUF001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["neuralguard"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.coverage.run]
+source = ["neuralguard"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
