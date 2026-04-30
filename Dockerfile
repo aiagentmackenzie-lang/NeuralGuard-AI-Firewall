@@ -12,6 +12,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy project files
 COPY pyproject.toml uv.lock* ./
+COPY README.md LICENSE* ./
 COPY src/ src/
 
 # Install dependencies
@@ -27,7 +28,7 @@ RUN groupadd -r neuralguard && useradd -r -g neuralguard -d /app -s /sbin/nologi
 COPY --from=base /app /app
 
 # Create audit log directory
-RUN mkdir -p /data/audit && chown -R neuralguard:neuralguard /data
+RUN mkdir -p /data/audit && chown -R neuralguard:neuralguard /data /app
 
 USER neuralguard
 
