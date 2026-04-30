@@ -81,6 +81,18 @@ class TestEvaluateRequest:
             r = EvaluateRequest(prompt="test", use_case=uc)
             assert r.use_case == uc
 
+    def test_empty_request_rejected(self):
+        """Empty requests (no prompt, no messages) must be rejected at validation."""
+        with pytest.raises(ValidationError, match="At least one"):
+            EvaluateRequest(prompt=None, messages=None)
+
+    def test_prompt_with_empty_messages_allowed(self):
+        """Messages array can be empty — validation only requires prompt OR messages."""
+        r = EvaluateRequest(messages=[], prompt=None)
+        # Note: empty messages list passes validation but structural scanner
+        # will handle it. This test ensures the model_validator allows it.
+        assert r.messages == []
+
 
 class TestFinding:
     """Tests for Finding model."""

@@ -102,7 +102,7 @@ class StructuralScanner(BaseScanner):
             texts = [m.content for m in request.messages]
         elif request.prompt:
             texts = [request.prompt]
-        else:
+        else:  # pragma: no cover — defense-in-depth; validation rejects this at schema level
             return self._result(
                 Verdict.BLOCK,
                 [
@@ -216,7 +216,7 @@ class StructuralScanner(BaseScanner):
                                 mitigation="Block base64-encoded injection payloads",
                             )
                         )
-                except Exception:
+                except Exception:  # pragma: no cover — best-effort base64 decode
                     pass
 
         # Hex-encoded strings

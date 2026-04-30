@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ── Enums ──────────────────────────────────────────────────────────────────
 
@@ -87,6 +87,8 @@ class EvaluateRequest(BaseModel):
 
     Accepts a full conversation (messages array) for multi-turn analysis
     or a single prompt string for simple checks.
+
+    At least one of `messages` or `prompt` must be provided.
     """
 
     messages: list[Message] | None = Field(
@@ -113,6 +115,13 @@ class EvaluateRequest(BaseModel):
         if len(v) > 64:
             raise ValueError("tenant_id must be <= 64 chars")
         return v.strip().lower()
+
+    @model_validator(mode="after")
+    def validate_input_provided(self) -> EvaluateRequest:
+        """Ensure at least one of messages or prompt is provided."""
+        if self.messages is None and not self.prompt:
+            raise ValueError("At least one of 'messages' or 'prompt' must be provided")
+        return self
 
 
 class ScanOutputRequest(BaseModel):

@@ -154,6 +154,26 @@ class TestEvaluateEndpoint:
         data = response.json()
         assert data["verdict"] == "block"
 
+    @pytest.mark.asyncio
+    async def test_empty_request_rejected_422(self, client):
+        """Empty requests (no prompt, no messages) are rejected at validation."""
+        response = await client.post(
+            "/v1/evaluate",
+            json={"tenant_id": "test"},
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_health_uptime_is_small(self, client):
+        """Health endpoint should report actual uptime, not epoch time."""
+        import time
+
+        time.sleep(0.1)  # Let app start settle
+        response = await client.get("/v1/health")
+        data = response.json()
+        uptime = data["uptime_seconds"]
+        assert uptime < 300, f"Uptime should be small (seconds since start), got {uptime}"
+
 
 class TestScanOutputEndpoint:
     """Tests for POST /v1/scan/output."""

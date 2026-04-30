@@ -113,7 +113,7 @@ class AuditSettings(BaseSettings):
         default=Path("./audit_logs"), description="Directory for JSONL audit files"
     )
     postgres_url: str | None = Field(default=None, description="PostgreSQL connection string")
-    retention_days: int = Field(default=90, description="Audit log retention in days")
+    retention_days: int = Field(default=30, description="Audit log retention in days")
     tokenize_pii: bool = Field(default=True, description="Tokenize PII in audit logs")
 
 

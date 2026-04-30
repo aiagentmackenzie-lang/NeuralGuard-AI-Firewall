@@ -195,18 +195,23 @@ async def scan_output(
 
 @router.get("/health", response_model=HealthResponse)
 async def health(
+    request: Request,
     config: NeuralGuardConfig = Depends(get_config),
     pipeline: ScannerPipeline = Depends(get_pipeline),
 ) -> HealthResponse:
     """Health check endpoint."""
     scanners = {layer.value: layer in pipeline._scanners for layer in ScanLayer}
 
+    # Calculate actual uptime from app start time
+    start_time = getattr(request.app.state, "start_time", None)
+    uptime = time.time() - start_time if start_time else 0.0
+
     return HealthResponse(
         status="healthy",
         version=config.version,
         environment=config.environment,
         scanners=scanners,
-        uptime_seconds=time.time(),  # Approximate; replaced by app startup time
+        uptime_seconds=uptime,
     )
 
 

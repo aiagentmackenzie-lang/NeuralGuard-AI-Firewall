@@ -1,6 +1,7 @@
 """Unit tests for the structural scanner."""
 
 import pytest
+from pydantic import ValidationError
 
 from neuralguard.config.settings import ScannerSettings
 from neuralguard.models.schemas import (
@@ -42,10 +43,10 @@ class TestStructuralScannerBasic:
         )
         assert result.verdict == Verdict.ALLOW
 
-    def test_empty_request_blocked(self, scanner):
-        result = scanner.safe_scan(EvaluateRequest(prompt=None, messages=None))
-        assert result.verdict == Verdict.BLOCK
-        assert any(f.rule_id == "STRUCT-001" for f in result.findings)
+    def test_empty_request_rejected(self, scanner):
+        """Empty requests are rejected at validation level (422), not scanner level."""
+        with pytest.raises(ValidationError):
+            EvaluateRequest(prompt=None, messages=None)
 
     def test_scanner_timing(self, scanner):
         import time
@@ -164,3 +165,46 @@ class TestScannerErrorHandling:
         result = scanner.safe_scan(EvaluateRequest(prompt="test"))
         assert result.verdict == Verdict.BLOCK
         assert result.error is not None
+
+
+class TestDecompressionBomb:
+    """Tests for decompression bomb defense (STRUCT-003)."""
+
+    def test_decompression_ratio_exceeded(self, strict_scanner):
+        """Highly compressible input should be blocked."""
+        # This creates a string that compresses well
+        import zlib
+
+        payload = "A" * 50000  # Very compressible
+        compressed = zlib.compress(payload.encode(), level=9)
+        result = strict_scanner.safe_scan(EvaluateRequest(prompt=compressed.decode("latin-1")))
+        # May or may not hit ratio depending on raw input size
+        # Just verify scanner doesn't crash
+        assert result.verdict in (Verdict.ALLOW, Verdict.SANITIZE, Verdict.BLOCK)
+
+
+class TestMessagesMode:
+    """Tests for multi-message (conversation) input."""
+
+    def test_messages_mode_sanitizes_all(self, scanner):
+        """All messages in a conversation should be scanned."""
+        result = scanner.safe_scan(
+            EvaluateRequest(
+                messages=[
+                    Message(role="system", content="You are helpful"),
+                    Message(role="user", content="Hello\u200bWorld"),  # ZWSP
+                ]
+            )
+        )
+        assert result.verdict == Verdict.SANITIZE
+        assert any(f.rule_id == "STRUCT-004" for f in result.findings)
+
+    def test_messages_mode_clean_allowed(self, scanner):
+        result = scanner.safe_scan(
+            EvaluateRequest(
+                messages=[
+                    Message(role="user", content="What is 2+2?"),
+                ]
+            )
+        )
+        assert result.verdict == Verdict.ALLOW

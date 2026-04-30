@@ -590,26 +590,39 @@ class PatternScanner(BaseScanner):
         if context and "sanitized_input" in context:
             texts = [context["sanitized_input"]]
 
+        # Select pattern set: output-only scans use just exfil/PII patterns
         if request.output_only:
-            # Only data exfiltration patterns for output scanning
-            [
+            patterns = [
                 (cat, rid, sev, conf, desc, comp)
                 for cat, rid, sev, conf, desc, comp in self._compiled
                 if cat == ThreatCategory.DATA_EXFILTRATION
             ]
+        else:
+            patterns = self._compiled
 
         for text in texts:
-            text_findings = self._scan_text(text)
+            text_findings = self._scan_text(text, patterns)
             findings.extend(text_findings)
 
         verdict = self._findings_to_verdict(findings)
         return self._result(verdict, findings, start)
 
-    def _scan_text(self, text: str) -> list[Finding]:
-        """Run all patterns against a single text."""
-        findings: list[Finding] = []
+    def _scan_text(
+        self,
+        text: str,
+        patterns: list[tuple[ThreatCategory, str, Severity, float, str, re_module.Pattern]]
+        | None = None,
+    ) -> list[Finding]:
+        """Run patterns against a single text.
 
-        for category, rule_id, severity, confidence, description, compiled in self._compiled:
+        Args:
+            text: The input text to scan.
+            patterns: Pattern set to use. Defaults to all compiled patterns.
+        """
+        findings: list[Finding] = []
+        scan_patterns = patterns if patterns is not None else self._compiled
+
+        for category, rule_id, severity, confidence, description, compiled in scan_patterns:
             try:
                 match_obj = compiled.search(text, timeout=self._timeout_s)
                 if match_obj:
