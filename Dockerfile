@@ -16,7 +16,7 @@ COPY README.md LICENSE* ./
 COPY src/ src/
 
 # Install dependencies
-RUN uv sync --no-dev --frozen
+RUN uv sync --no-dev --extra db --frozen
 
 # Production stage
 FROM base AS production
