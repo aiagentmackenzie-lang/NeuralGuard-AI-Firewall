@@ -206,5 +206,5 @@ MIT — See [LICENSE](LICENSE)
 
 ---
 
-**Maintained by:** Raphael / MobiusSec  
+**Maintained by:** Raphael Main  
 **Last Updated:** 2026-05-02
