@@ -33,3 +33,15 @@ sbom.xml
 
 # uv lock (optional — commit if you want reproducible CI)
 # uv.lock
+
+# ONNX model files (large binaries — export locally)
+models/embedding-onnx/*.onnx
+models/embedding-onnx/*.bin
+models/embedding-onnx/special_tokens_map.json
+models/embedding-onnx/tokenizer_config.json
+models/embedding-onnx/vocab.txt
+!models/.gitkeep
+
+# Pre-computed attack vectors (regenerated from datasets)
+models/attack_vectors.npy
+models/attack_metadata.json

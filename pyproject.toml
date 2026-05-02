@@ -33,9 +33,16 @@ dependencies = [
 
 [project.optional-dependencies]
 semantic = [
+    "onnxruntime>=1.19.0",
+    "tokenizers>=0.21.0",
+    "numpy>=1.26.0",
+]
+semantic-export = [
     "sentence-transformers>=3.3.0",
-    "scikit-learn>=1.6.0",
-    "torch>=2.5.0",
+    "onnxruntime>=1.19.0",
+    "optimum[onnxruntime]>=1.21.0",
+    "tokenizers>=0.21.0",
+    "numpy>=1.26.0",
 ]
 db = [
     "asyncpg>=0.30.0",
@@ -115,4 +122,9 @@ exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
+]
+
+[dependency-groups]
+dev = [
+    "datasets>=4.8.5",
 ]

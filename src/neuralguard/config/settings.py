@@ -63,7 +63,29 @@ class ScannerSettings(BaseSettings):
     # Semantic scanner (Phase 2)
     semantic_enabled: bool = Field(default=False, description="Enable semantic classification")
     semantic_model: str = Field(
-        default="all-MiniLM-L6-v2", description="Sentence-transformer model"
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="Sentence-transformer model name",
+    )
+    semantic_onnx_path: str = Field(
+        default="models/embedding-onnx",
+        description="Path to ONNX model directory",
+    )
+    semantic_max_seq_length: int = Field(
+        default=256, description="Max token sequence length for embedding"
+    )
+    semantic_intra_threads: int = Field(
+        default=0, description="ONNX Runtime intra-op threads (0=auto)"
+    )
+    semantic_similarity_threshold: float = Field(
+        default=0.75, description="Cosine similarity threshold for BLOCK"
+    )
+    semantic_attack_corpus_path: str = Field(
+        default="models/attack_vectors.npy",
+        description="Path to pre-computed attack vector embeddings",
+    )
+    semantic_attack_metadata_path: str = Field(
+        default="models/attack_metadata.json",
+        description="Path to attack corpus metadata JSON",
     )
 
     # LLM-as-Judge (Phase 2)

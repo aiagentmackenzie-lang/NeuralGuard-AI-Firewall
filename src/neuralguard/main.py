@@ -114,6 +114,37 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     pipeline = ScannerPipeline(config)
     pipeline.register_scanner(StructuralScanner(config.scanner))
     pipeline.register_scanner(PatternScanner(config.scanner))
+
+    # Register semantic scanner if enabled and dependencies available
+    if config.scanner.semantic_enabled:
+        try:
+            from neuralguard.semantic.similarity import SimilarityScanner
+
+            pipeline.register_scanner(SimilarityScanner(config.scanner))
+            structlog.get_logger("neuralguard").info("semantic_scanner_registered")
+        except (ImportError, FileNotFoundError) as exc:
+            structlog.get_logger("neuralguard").warning(
+                "semantic_scanner_unavailable",
+                error=str(exc),
+                msg="Install neuralguard[semantic] and run export/corpus scripts",
+            )
+
+    # Register LLM-as-Judge scanner if enabled
+    if config.scanner.judge_enabled:
+        try:
+            from neuralguard.semantic.judge import JudgeScanner
+
+            pipeline.register_scanner(JudgeScanner(config.scanner))
+            structlog.get_logger("neuralguard").info(
+                "judge_scanner_registered", model=config.scanner.judge_model
+            )
+        except (ImportError, FileNotFoundError) as exc:
+            structlog.get_logger("neuralguard").warning(
+                "judge_scanner_unavailable",
+                error=str(exc),
+                msg="Ensure Ollama is running with the configured model",
+            )
+
     app.state.pipeline = pipeline
 
     # ── Initialize audit logger ──

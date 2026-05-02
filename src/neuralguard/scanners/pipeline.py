@@ -1,14 +1,18 @@
-"""Scanner pipeline — orchestrates multi-layer scanning and Layer Arbitration.
+"""Scanner pipeline — orchestrates multi-layer scanning, hybrid scoring,
+and Layer Arbitration.
 
 Pipeline execution order:
   1. Structural (sanitization + normalization)
-  2. Pattern (regex/heuristic — <5ms)
-  3. Semantic (embedding/ML — <50ms, Phase 2)
-  4. Judge (LLM-as-Judge — <500ms, Phase 2)
+  2. Pattern (regex/heuristic - <5ms)
+  3. Semantic (embedding/ML - <50ms, Phase 2)
+     → Hybrid Scoring (combines pattern + semantic)
+  4. Judge (LLM-as-Judge - <500ms, Phase 2, gated by hybrid score)
 
-Arbitration rule: Strictest verdict wins.
-  BLOCK > SANITIZE > ESCALATE > QUARANTINE > RATE_LIMIT > ALLOW
-  BLOCK cannot be overridden without explicit FORCE_ALLOW audit trail.
+Arbitration rule (with hybrid scoring):
+  - Pattern BLOCK always wins (high-precision, early exit)
+  - Hybrid scoring can upgrade verdicts (e.g. ALLOW -> SANITIZE)
+  - Judge only fires in ambiguous zone (composite 0.30-0.70)
+  - BLOCK cannot be overridden without explicit FORCE_ALLOW audit trail
 """
 
 from __future__ import annotations
@@ -56,6 +60,7 @@ class ScannerPipeline:
             ScanLayer.SEMANTIC,
             ScanLayer.JUDGE,
         ]
+        self._hybrid_engine: Any = None  # Lazy init
 
     def register_scanner(self, scanner: BaseScanner) -> None:
         """Register a scanner for its layer."""
@@ -81,8 +86,20 @@ class ScannerPipeline:
             layers.append(ScanLayer.JUDGE)
         return layers
 
+    @property
+    def hybrid_engine(self) -> Any:
+        """Lazy-initialize the hybrid scoring engine."""
+        if self._hybrid_engine is None:
+            try:
+                from neuralguard.semantic.hybrid import HybridScoringEngine
+
+                self._hybrid_engine = HybridScoringEngine(self.config)
+            except ImportError:
+                logger.debug("hybrid_engine_unavailable", msg="semantic extra not installed")
+        return self._hybrid_engine
+
     def execute(self, request: EvaluateRequest) -> LayerArbitrationResult:
-        """Run all enabled scanner layers and arbitrate results."""
+        """Run all enabled scanner layers, apply hybrid scoring, and arbitrate results."""
         start = time.perf_counter()
         layers = self.get_enabled_layers(request)
         results: list[ScannerResult] = []
@@ -116,20 +133,32 @@ class ScannerPipeline:
 
             logger.info(
                 "scanner_complete",
-                layer=layer.value,
+                layer=layer.layer.value if hasattr(layer, "layer") else layer.value,
                 verdict=result.verdict.value,
                 findings=len(result.findings),
                 latency_ms=f"{result.latency_ms:.2f}",
                 error=result.error,
             )
 
-            # Early exit on BLOCK if fail-closed (don't waste time on deeper layers)
+            # Early exit on BLOCK if fail-closed
             if result.verdict == Verdict.BLOCK and self.config.action.fail_closed:
                 logger.info("pipeline_early_exit", reason="block_verdict_fail_closed")
                 break
 
+            # After semantic layer: apply hybrid scoring and inject into context
+            # so the Judge scanner can use it for its gate check
+            if layer == ScanLayer.SEMANTIC:
+                self._apply_hybrid_to_context(results, context)
+
         total_ms = (time.perf_counter() - start) * 1000
-        final_verdict, reason = self._arbitrate(results)
+
+        # Final hybrid scoring (if not already done via context injection)
+        hybrid_result = context.get("_hybrid_result")
+        final_verdict, reason = self._arbitrate(results, hybrid_result)
+
+        # Enhance findings with hybrid metadata
+        if hybrid_result is not None and self.hybrid_engine is not None:
+            all_findings = self.hybrid_engine.enhance_findings(results, hybrid_result)
 
         logger.info(
             "pipeline_complete",
@@ -147,18 +176,47 @@ class ScannerPipeline:
             arbitration_reason=reason,
         )
 
-    def _arbitrate(self, results: list[ScannerResult]) -> tuple[Verdict, str]:
-        """Layer Arbitration — strictest verdict wins.
+    def _apply_hybrid_to_context(
+        self,
+        results: list[ScannerResult],
+        context: dict[str, Any],
+    ) -> None:
+        """Apply hybrid scoring and inject result into pipeline context.
+
+        This runs after the semantic layer, so the Judge scanner can check
+        the hybrid composite score to decide whether to fire.
+        """
+        has_pattern = any(r.layer == ScanLayer.PATTERN for r in results)
+        has_semantic = any(r.layer == ScanLayer.SEMANTIC for r in results)
+        any_findings = any(len(r.findings) > 0 for r in results)
+
+        if has_pattern and has_semantic and any_findings and self.hybrid_engine is not None:
+            hybrid_result = self.hybrid_engine.score(results)
+            context["_hybrid_result"] = hybrid_result
+            logger.info(
+                "hybrid_score_applied",
+                composite=f"{hybrid_result.composite:.4f}",
+                hybrid_verdict=hybrid_result.verdict.value,
+                pattern_max=f"{hybrid_result.pattern_max_confidence:.4f}",
+                semantic_max=f"{hybrid_result.semantic_max_similarity:.4f}",
+            )
+
+    def _arbitrate(
+        self,
+        results: list[ScannerResult],
+        hybrid_result: Any | None = None,
+    ) -> tuple[Verdict, str]:
+        """Layer Arbitration - strictest verdict wins, hybrid can upgrade.
 
         Priority: BLOCK > SANITIZE > ESCALATE > QUARANTINE > RATE_LIMIT > ALLOW
+        Hybrid scoring can upgrade a verdict but can never downgrade.
         """
         if not results:
-            # No scanners ran — fail-closed returns BLOCK, otherwise ALLOW
             if self.config.action.fail_closed:
                 return Verdict.BLOCK, "No scanners executed; fail-closed default"
             return Verdict.ALLOW, "No scanners executed; fail-open default"
 
-        # Find the highest-priority verdict
+        # Find the highest-priority verdict from scanner layers
         max_priority = -1
         winning_verdict = Verdict.ALLOW
         winning_layer = "none"
@@ -170,8 +228,24 @@ class ScannerPipeline:
                 winning_verdict = result.verdict
                 winning_layer = result.layer.value
 
+        # Check if hybrid scoring would upgrade the verdict
+        if hybrid_result is not None:
+            hybrid_priority = _VERDICT_PRIORITY.get(hybrid_result.verdict, 0)
+            if hybrid_priority > max_priority:
+                winning_verdict = hybrid_result.verdict
+                winning_layer = "hybrid"
+                max_priority = hybrid_priority
+
         # Build arbitration reason
         verdicts_seen = [f"{r.layer.value}={r.verdict.value}" for r in results]
-        reason = f"Strictest verdict: {winning_verdict.value} from {winning_layer} layer. All: [{', '.join(verdicts_seen)}]"
+        hybrid_info = ""
+        if hybrid_result is not None:
+            hybrid_info = (
+                f" | Hybrid: composite={hybrid_result.composite:.3f}->{hybrid_result.verdict.value}"
+            )
+        reason = (
+            f"Strictest verdict: {winning_verdict.value} from {winning_layer} layer. "
+            f"All: [{', '.join(verdicts_seen)}]{hybrid_info}"
+        )
 
         return winning_verdict, reason
