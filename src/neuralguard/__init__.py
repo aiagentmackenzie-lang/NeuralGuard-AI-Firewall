@@ -1,6 +1,11 @@
 """NeuralGuard — LLM Guard / AI Application Firewall."""
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _version
+
+    __version__ = _version("neuralguard")
+except Exception:
+    __version__ = "0.1.0"  # fallback for editable installs
 
 
 def create_app(config=None):

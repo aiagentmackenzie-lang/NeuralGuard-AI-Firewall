@@ -22,7 +22,7 @@ TODO: Native-speaking security review required per SRD FR-001.
 
 from __future__ import annotations
 
-from neuralguard.models.schemas import Severity
+from neuralguard.models.schemas import Severity, ThreatCategory
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PT — Portuguese
@@ -476,9 +476,6 @@ _CATEGORY_MAP: dict[str, str] = {
     "JB": "T-JB",
     "EXT": "T-EXT",
 }
-
-
-from neuralguard.models.schemas import ThreatCategory
 
 
 def resolve_category(rule_id: str) -> ThreatCategory:

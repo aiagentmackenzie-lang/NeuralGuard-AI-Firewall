@@ -31,6 +31,7 @@ services:
     environment:
       POSTGRES_DB: neuralguard
       POSTGRES_USER: neuralguard
+      # ⚠️ CHANGE THIS IN PRODUCTION! Use a strong password via POSTGRES_PASSWORD env var.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
     volumes:
       - pgdata:/var/lib/postgresql/data
