@@ -462,3 +462,52 @@ class TestPostgresRouting:
         files = list(tmp_path.glob("audit-*.jsonl"))
         lines = files[0].read_text().strip().split("\n")
         assert len(lines) == 3
+
+    def test_m01_retention_uses_filename_date(self, tmp_path):
+        """M-01: Retention should parse date from filename, not rely on mtime."""
+        settings = AuditSettings(
+            enabled=True,
+            backend="jsonl",
+            jsonl_path=tmp_path,
+            retention_days=7,
+        )
+        audit = AuditLogger(settings)
+
+        # Create a file named audit-2026-01-01.jsonl but with recent mtime
+        old_file = tmp_path / "audit-2026-01-01.jsonl"
+        old_file.write_text('{"old": true}\n')
+        # Set mtime to NOW (not old) — should still be deleted by filename date
+        now = time.time()
+        os.utime(old_file, (now, now))
+
+        # Set counter to trigger cleanup
+        audit._write_counter = 99
+        _make_log_entry(audit)
+
+        # Old file should be deleted despite recent mtime
+        assert not old_file.exists()
+
+    def test_m02_pii_tokenization_uses_regex(self):
+        """M-02: PII tokenization should detect emails, phones, SSNs, API keys."""
+        settings = AuditSettings(enabled=True, backend="jsonl", tokenize_pii=True)
+        audit = AuditLogger(settings)
+
+        # Email should be tokenized even though < 10 chars pattern
+        metadata = {"user_email": "a@b.co"}
+        result = audit._tokenize_metadata(metadata)
+        assert result["user_email"].startswith("TOK:")
+
+        # Short string that is NOT PII should NOT be tokenized
+        metadata2 = {"name": "hi"}
+        result2 = audit._tokenize_metadata(metadata2)
+        assert result2["name"] == "hi"
+
+        # Long non-PII string should be tokenized as fallback
+        metadata3 = {"notes": "This is a long note that should be tokenized"}
+        result3 = audit._tokenize_metadata(metadata3)
+        assert result3["notes"].startswith("TOK:")
+
+        # SSN should be tokenized
+        metadata4 = {"ssn": "123-45-6789"}
+        result4 = audit._tokenize_metadata(metadata4)
+        assert result4["ssn"].startswith("TOK:")

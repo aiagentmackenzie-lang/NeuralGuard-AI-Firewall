@@ -351,7 +351,7 @@ class AuditLogger:
             if isinstance(value, str):
                 result = value
                 for pattern in pii_patterns:
-                    result = pattern.sub(tokenize_value, result)
+                    result = pattern.sub(lambda m: tokenize_value(m.group()), result)
                 # Fallback: tokenize remaining long strings
                 if len(result) > 10 and result == value:  # No PII patterns matched
                     tokenized[key] = tokenize_value(result)

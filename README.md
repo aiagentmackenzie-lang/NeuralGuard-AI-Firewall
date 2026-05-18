@@ -16,7 +16,7 @@ NeuralGuard is the defensive layer of your AI security posture. It sits between 
 
 **OWASP LLM Top 10 2025 Coverage:** LLM01 (Prompt Injection), LLM02 (Sensitive Disclosure), LLM05 (Improper Output), LLM07 (System Prompt Leakage), LLM10 (Unbounded Consumption), and more.
 
-**OWASP Agentic Top 10 2026 Coverage:** ASI01 (Goal Hijack), ASI02 (Tool Misuse), ASI04 (Supply Chain), ASI06 (Memory Poisoning), ASI10 (Rogue Agents).
+**OWASP Agentic Top 10 2026 Coverage:** ASI01 (Goal Hijack), ASI02 (Tool Misuse), ASI06 (Memory Poisoning). ASI04 (Supply Chain) and ASI10 (Rogue Agents) are covered via corpus-only vectors, not dedicated detection rules.
 
 ### Why Build This?
 - You have **NeuralStrike** (offensive AI) — NeuralGuard completes the story
@@ -84,11 +84,7 @@ LLM Provider / Local Model / Agent Framework
 
 ## Documentation
 
-- **[SRD-001](SRD-001-NEURALGUARD.md)** — Full Security Requirements Document (threat model, architecture, phased build plan)
-- **[docs/api.md](docs/api.md)** — API specification (OpenAPI-compatible)
-- **[docs/deployment.md](docs/deployment.md)** — Deployment guide (Docker, K8s)
-- **[docs/integration.md](docs/integration.md)** — AI Agent Security Monitor integration
-- **[docs/runbooks.md](docs/runbooks.md)** — Incident response runbooks
+- **API docs** — OpenAPI auto-generated docs at `http://localhost:8000/docs`
 
 ---
 
@@ -173,7 +169,7 @@ curl -X POST http://localhost:8000/v1/scan/output \
 }
 ```
 
-> **API docs:** OpenAPI auto-generated docs at `http://localhost:8000/docs`
+> **Note:** Canary token verification is planned for Phase 3. Output scanning currently covers PII/credential leakage, system prompt extraction, and encoding evasion patterns.
 
 ---
 
