@@ -39,6 +39,22 @@ class SlidingWindowCounter:
     def __init__(self, window_seconds: int = 60) -> None:
         self._window = window_seconds
         self._counters: dict[str, list[float]] = defaultdict(list)
+        self._last_cleanup: float = time.time()
+        self._cleanup_interval: float = 300.0  # Cleanup every 5 minutes
+
+    def _cleanup_inactive(self) -> None:
+        """Remove counters for tenants with no activity in the last window."""
+        now = time.time()
+        if now - self._last_cleanup < self._cleanup_interval:
+            return
+        self._last_cleanup = now
+        inactive_keys = [
+            key
+            for key, timestamps in self._counters.items()
+            if not timestamps or now - timestamps[-1] > self._window
+        ]
+        for key in inactive_keys:
+            del self._counters[key]
 
     def check(self, key: str, limit: int, burst: int) -> tuple[bool, int, int]:
         """Check if request is within limits.
@@ -54,6 +70,9 @@ class SlidingWindowCounter:
         now = time.time()
         # Clean old entries outside the window
         self._counters[key] = [ts for ts in self._counters[key] if now - ts < self._window]
+
+        # Periodic cleanup of inactive tenants
+        self._cleanup_inactive()
 
         current = len(self._counters[key])
 

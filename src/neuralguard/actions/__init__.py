@@ -6,7 +6,7 @@ execution after Layer Arbitration.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from neuralguard.models.schemas import (
     EvaluateRequest,
@@ -61,18 +61,26 @@ class ActionDispatcher:
     ) -> ActionResult:
         """Dispatch to the appropriate action handler.
 
-        Unknown verdicts (including ALLOW) fall back to 200 OK.
+        ALLOW verdict returns a 200 response with all EvaluateResponse fields.
         """
         handler = self._handlers.get(arbitration.verdict)
         if handler is None:
+            # ALLOW verdict — return full response body matching EvaluateResponse schema
             confidence = max((f.confidence for f in arbitration.findings), default=0.0)
+            layers_used = [r.layer.value for r in arbitration.scanner_results]
+            body: dict[str, Any] = {
+                "verdict": arbitration.verdict.value,
+                "findings": [f.model_dump() for f in arbitration.findings],
+                "confidence": confidence,
+                "scan_layers_used": layers_used,
+                "total_latency_ms": arbitration.total_latency_ms,
+            }
+            # Add sanitized_content for SANITIZE verdict
+            if arbitration.verdict == Verdict.SANITIZE:
+                body["sanitized_content"] = None
             return ActionResult(
                 status_code=200,
-                body={
-                    "verdict": arbitration.verdict.value,
-                    "findings": [f.model_dump() for f in arbitration.findings],
-                    "confidence": confidence,
-                },
+                body=body,
                 headers={"X-NeuralGuard-Verdict": arbitration.verdict.value},
             )
         return handler.execute(arbitration, request)

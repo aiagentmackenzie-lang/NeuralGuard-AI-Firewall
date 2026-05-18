@@ -221,8 +221,21 @@ class HybridScoringEngine:
 
         # Add hybrid composite finding if score is meaningful
         if hybrid_result.composite > 0.0:
+            # Use the category from the highest-severity finding, not SELF_ATTACK
+            composite_category = ThreatCategory.PROMPT_INJECTION_DIRECT  # Default
+            if findings:
+                # Priority order for severity
+                severity_order = {
+                    Severity.CRITICAL: 5,
+                    Severity.HIGH: 4,
+                    Severity.MEDIUM: 3,
+                    Severity.LOW: 2,
+                    Severity.INFO: 1,
+                }
+                top_finding = max(findings, key=lambda f: severity_order.get(f.severity, 0))
+                composite_category = top_finding.category
             composite_finding = Finding(
-                category=ThreatCategory.SELF_ATTACK,
+                category=composite_category,
                 severity=self._severity_for_score(hybrid_result.composite),
                 verdict=hybrid_result.verdict,
                 confidence=hybrid_result.composite,

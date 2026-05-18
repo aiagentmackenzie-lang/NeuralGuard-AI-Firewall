@@ -117,6 +117,20 @@ class EvaluateRequest(BaseModel):
         return v.strip().lower()
 
     @model_validator(mode="after")
+    def validate_scanners_unique(self) -> EvaluateRequest:
+        """Remove duplicate scanner layers."""
+        if self.scanners is not None:
+            seen = set()
+            unique = []
+            for s in self.scanners:
+                if s not in seen:
+                    seen.add(s)
+                    unique.append(s)
+            if len(unique) < len(self.scanners):
+                self.scanners = unique
+        return self
+
+    @model_validator(mode="after")
     def validate_input_provided(self) -> EvaluateRequest:
         """Ensure at least one of messages or prompt is provided."""
         if self.messages is None and not self.prompt:

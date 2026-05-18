@@ -279,7 +279,8 @@ class AuditLogger:
     def _cleanup_retention(self) -> None:
         """Delete JSONL files older than retention_days.
 
-        Uses file modification time for age calculation.
+        Uses the date from the filename (audit-YYYY-MM-DD.jsonl) for age
+        calculation, falling back to mtime if the filename doesn't parse.
         Called periodically from _write_jsonl to avoid per-write overhead.
         """
         if self.settings.retention_days <= 0:
@@ -289,20 +290,73 @@ class AuditLogger:
 
         for f in self._jsonl_path.glob("audit-*.jsonl"):
             try:
-                if f.stat().st_mtime < cutoff:
+                file_ts = self._parse_file_date(f)
+                if file_ts < cutoff:
                     f.unlink()
                     logger.info("jsonl_retention_cleanup", deleted=f.name)
             except OSError:
                 pass  # File may have been rotated/deleted concurrently
 
+    @staticmethod
+    def _parse_file_date(filepath: Path) -> float:
+        """Extract timestamp from audit filename, falling back to mtime.
+
+        Filenames: audit-YYYY-MM-DD.jsonl or audit-YYYY-MM-DD-N.jsonl
+        """
+        name = filepath.name
+        # Try audit-YYYY-MM-DD.jsonl or audit-YYYY-MM-DD-N.jsonl
+        import re
+
+        match = re.match(r"audit-(\d{4}-\d{2}-\d{2})", name)
+        if match:
+            try:
+                from datetime import date as date_type
+
+                file_date = date_type.fromisoformat(match.group(1))
+                return datetime(file_date.year, file_date.month, file_date.day, tzinfo=UTC).timestamp()
+            except ValueError:
+                pass
+        # Fallback to mtime
+        return filepath.stat().st_mtime
+
     # ── PII Tokenization ──────────────────────────────────────────────────
 
     def _tokenize_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
-        """Tokenize string values in metadata for PII protection."""
+        """Tokenize PII in metadata using regex patterns.
+
+        Detects and tokenizes:
+        - Email addresses
+        - Phone numbers (various formats)
+        - SSNs (XXX-XX-XXXX)
+        - Credit card numbers
+        - API keys (sk-, AKIA, ghp_, etc.)
+        - Connection strings
+        - Strings longer than 10 chars (fallback for non-matched PII)
+        """
+        import re as _re
+
+        pii_patterns = [
+            _re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'),  # Email
+            _re.compile(r'(?:\+?\d{1,3}[\s.\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.\-]?\d{3,5}[\s.\-]?\d{3,5}'),  # Phone
+            _re.compile(r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b'),  # SSN-like
+            _re.compile(r'\b(?:4\d{12,18}|5[1-5]\d{10,14}|3[47]\d{11,13})\b'),  # CC
+            _re.compile(r'\bsk-(?:proj|org|[a-zA-Z0-9])-[a-zA-Z0-9_-]{20,}\b'),  # OpenAI key
+            _re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'),  # AWS key
+            _re.compile(r'\bgh[pous]_[a-zA-Z0-9]{36}\b'),  # GitHub token
+            _re.compile(r'(?:mongodb|postgres(?:ql)?|mysql|redis|amqp)://[^\s"\']{10,}'),  # Conn string
+        ]
+
         tokenized: dict[str, Any] = {}
         for key, value in metadata.items():
-            if isinstance(value, str) and len(value) > 10:
-                tokenized[key] = tokenize_value(value)
+            if isinstance(value, str):
+                result = value
+                for pattern in pii_patterns:
+                    result = pattern.sub(tokenize_value, result)
+                # Fallback: tokenize remaining long strings
+                if len(result) > 10 and result == value:  # No PII patterns matched
+                    tokenized[key] = tokenize_value(result)
+                else:
+                    tokenized[key] = result
             else:
                 tokenized[key] = value
         return tokenized

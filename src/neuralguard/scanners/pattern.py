@@ -590,12 +590,18 @@ class PatternScanner(BaseScanner):
         if context and "sanitized_input" in context:
             texts = [context["sanitized_input"]]
 
-        # Select pattern set: output-only scans use just exfil/PII patterns
+        # Select pattern set: output-only scans check EXF, EXT, and ENC categories
+        # (PII/credential leakage, system prompt extraction, encoding evasion in output)
         if request.output_only:
+            output_categories = {
+                ThreatCategory.DATA_EXFILTRATION,
+                ThreatCategory.SYSTEM_PROMPT_EXTRACTION,
+                ThreatCategory.ENCODING_EVASION,
+            }
             patterns = [
                 (cat, rid, sev, conf, desc, comp)
                 for cat, rid, sev, conf, desc, comp in self._compiled
-                if cat == ThreatCategory.DATA_EXFILTRATION
+                if cat in output_categories
             ]
         else:
             patterns = self._compiled

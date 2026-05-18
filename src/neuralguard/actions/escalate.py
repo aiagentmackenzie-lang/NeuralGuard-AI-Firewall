@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
+
+import httpx
 
 from .base import ActionResult, BaseAction
 
@@ -39,18 +42,37 @@ class EscalateAction(BaseAction):
         )
 
     def _send_webhook(self, arbitration: LayerArbitrationResult) -> bool:
-        try:
-            import httpx  # type: ignore[import-untyped]
+        """Send escalation webhook using async httpx when in an async context.
 
-            with httpx.Client(timeout=5.0) as client:
-                response = client.post(
-                    self.config.action.escalation_webhook_url,
-                    json={
-                        "verdict": "escalate",
-                        "findings_count": len(arbitration.findings),
-                        "arbitration_reason": arbitration.arbitration_reason,
-                    },
-                )
-                return response.status_code < 400
-        except Exception:
-            return False
+        Falls back to synchronous httpx.Client if no event loop is available
+        (e.g., CLI or test contexts).
+        """
+        payload = {
+            "verdict": "escalate",
+            "findings_count": len(arbitration.findings),
+            "arbitration_reason": arbitration.arbitration_reason,
+        }
+        url = self.config.action.escalation_webhook_url
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running event loop — use synchronous client
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.post(url, json=payload)
+                    return response.status_code < 400
+            except Exception:
+                return False
+
+        # We're in an async context — schedule the webhook as a fire-and-forget task
+        async def _async_send() -> bool:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.post(url, json=payload)
+                    return response.status_code < 400
+            except Exception:
+                return False
+
+        loop.create_task(_async_send())
+        return True  # Task scheduled; actual delivery is best-effort
