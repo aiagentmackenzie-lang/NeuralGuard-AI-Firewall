@@ -28,6 +28,10 @@ docs/HANDOVER.md
 docs/SRD-001-NEURALGUARD.md
 docs/PHASE2-PLAN.md
 
+# Audit artifacts (internal — regenerated per session)
+AUDIT_HANDOFF.md
+BUG_CATALOG.md
+
 # SBOM output (regenerated in CI)
 sbom.json
 sbom.xml
