@@ -59,6 +59,7 @@ class AuditLogger:
         self._jsonl_path.mkdir(parents=True, exist_ok=True)
         self._pg_available: bool = False
         self._pg_checked: bool = False
+        self._write_counter: int = 0  # For periodic cleanup
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -181,7 +182,18 @@ class AuditLogger:
             )
 
             # Schedule the async insert — fire-and-forget with error logging
-            asyncio.ensure_future(self._async_insert(orm_obj))
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._async_insert(orm_obj))
+            except RuntimeError:
+                # No running event loop — fall back to JSONL
+                logger.warning(
+                    "no_event_loop",
+                    msg="No async event loop; falling back to JSONL",
+                    event_id=event.event_id,
+                )
+                self._write_jsonl(event)
+                return
             self._pg_available = True
             self._pg_checked = True
 
@@ -260,7 +272,9 @@ class AuditLogger:
             f.write(line)
 
         # Periodic retention cleanup (every 100 writes to avoid overhead)
-        self._cleanup_retention()
+        self._write_counter += 1
+        if self._write_counter % 100 == 0:
+            self._cleanup_retention()
 
     def _cleanup_retention(self) -> None:
         """Delete JSONL files older than retention_days.

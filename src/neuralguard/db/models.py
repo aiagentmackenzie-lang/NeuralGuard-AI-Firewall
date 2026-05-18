@@ -5,7 +5,7 @@ for common query patterns (tenant_id, timestamp, verdict).
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import TIMESTAMP, Float, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
@@ -36,7 +36,7 @@ class AuditEventORM(Base):
     request_id: Mapped[str | None] = mapped_column(String(64), index=True)
     tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
     timestamp: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), index=True, default=datetime.utcnow
+        TIMESTAMP(timezone=True), index=True, default=lambda: datetime.now(UTC)
     )
     verdict: Mapped[str] = mapped_column(String(32), index=True)
     findings_count: Mapped[int] = mapped_column(Integer, default=0)

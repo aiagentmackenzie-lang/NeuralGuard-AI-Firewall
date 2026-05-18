@@ -266,9 +266,10 @@ class TestAuditLoggerPostgresPath:
             ),
         )
 
-        # Should NOT have written to JSONL (went to postgres path)
+        # In a sync context (no running event loop), _persist_postgres
+        # correctly falls back to JSONL (C-04 fix).
         files = list(tmp_path.glob("audit-*.jsonl"))
-        assert len(files) == 0
+        assert len(files) == 1
 
         # Cleanup
         import asyncio

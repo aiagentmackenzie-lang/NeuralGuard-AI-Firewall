@@ -37,29 +37,29 @@ class SlidingWindowCounter:
     def check(self, key: str, limit: int, burst: int) -> tuple[bool, int, int]:
         """Check if request is within limits.
 
+        Logic:
+        - Allow up to `limit` requests per window (normal rate)
+        - Allow up to `limit + burst` total (burst allowance)
+        - Beyond `limit + burst`, reject with retry_after
+        - Between `limit` and `limit + burst`, allow but track burst usage
+
         Returns: (allowed, remaining, retry_after_seconds)
         """
         now = time.time()
-        # Clean old entries
+        # Clean old entries outside the window
         self._counters[key] = [ts for ts in self._counters[key] if now - ts < self._window]
 
         current = len(self._counters[key])
 
-        # Burst check
+        # Hard limit: beyond burst allowance
         if current >= limit + burst:
             oldest = self._counters[key][0] if self._counters[key] else now
             retry_after = int(self._window - (now - oldest)) + 1
             return False, 0, max(retry_after, 1)
 
-        # Rate check
-        if current >= limit:
-            oldest = self._counters[key][0] if self._counters[key] else now
-            retry_after = int(self._window - (now - oldest)) + 1
-            return False, 0, max(retry_after, 1)
-
-        # Allow
+        # Within limits — allow and record
         self._counters[key].append(now)
-        remaining = limit - current - 1
+        remaining = max(0, (limit + burst) - current - 1)
         return True, remaining, 0
 
 

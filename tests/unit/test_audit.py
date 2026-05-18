@@ -278,6 +278,8 @@ class TestRetentionCleanup:
         os.utime(old_file, (old_mtime, old_mtime))
 
         # Write a new event — triggers cleanup
+        # Set counter to 99 so the next write triggers periodic cleanup
+        audit._write_counter = 99
         _make_log_entry(audit)
 
         # Old file should be deleted
