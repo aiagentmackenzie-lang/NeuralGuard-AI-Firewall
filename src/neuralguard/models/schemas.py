@@ -136,6 +136,14 @@ class ScanOutputRequest(BaseModel):
         default=None, description="Hash of system prompt for integrity check"
     )
 
+    @field_validator("output")
+    @classmethod
+    def output_not_empty(cls, v: str) -> str:
+        """Validate that output is not empty or whitespace-only."""
+        if not v.strip():
+            raise ValueError("Output must not be empty or whitespace-only")
+        return v
+
 
 # ── Internal Models ────────────────────────────────────────────────────────
 

@@ -559,7 +559,7 @@ class PatternScanner(BaseScanner):
         for category, patterns in ALL_PATTERN_SETS + I18N_FLAT:
             for rule_id, severity, confidence, description, pattern_str in patterns:
                 try:
-                    compiled = re_module.compile(pattern_str, flags=re_module.IGNORECASE)
+                    compiled = re_module.compile(pattern_str)
                     self._compiled.append(
                         (category, rule_id, severity, confidence, description, compiled)
                     )
@@ -671,12 +671,17 @@ class PatternScanner(BaseScanner):
         return findings
 
     def _severity_to_verdict(self, severity: Severity) -> Verdict:
-        """Map severity to default verdict."""
+        """Map severity to default verdict.
+
+        LOW-severity matches are informational — they should be logged
+        but not trigger SANITIZE (which modifies the response). Only
+        MEDIUM+ should trigger action.
+        """
         mapping = {
             Severity.CRITICAL: Verdict.BLOCK,
             Severity.HIGH: Verdict.BLOCK,
             Severity.MEDIUM: Verdict.SANITIZE,
-            Severity.LOW: Verdict.SANITIZE,
+            Severity.LOW: Verdict.ALLOW,
             Severity.INFO: Verdict.ALLOW,
         }
         return mapping.get(severity, Verdict.SANITIZE)

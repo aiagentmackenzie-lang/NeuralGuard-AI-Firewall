@@ -383,11 +383,21 @@ class JudgeScanner(BaseScanner):
 
         logger.debug("judge_call_start", model=model, text_len=len(text))
 
+        # Track wall-clock time for latency measurement
+        call_start = time.perf_counter()
+
         with httpx.Client(timeout=self.JUDGE_TIMEOUT_SECONDS) as client:
             response = client.post(f"{url}/api/chat", json=payload)
             response.raise_for_status()
 
         data = response.json()
+
+        # Compute latency: prefer Ollama's total_duration if available, else wall clock
+        latency_ns = data.get("total_duration", 0)
+        if latency_ns > 0:
+            latency_ms = latency_ns / 1_000_000  # nanoseconds to ms
+        else:
+            latency_ms = (time.perf_counter() - call_start) * 1000
         content = data.get("message", {}).get("content", "").strip()
 
         if not content:
@@ -413,9 +423,7 @@ class JudgeScanner(BaseScanner):
         confidence = min(1.0, max(0.0, float(parsed.get("confidence", 0.5))))
         reasoning = parsed.get("reasoning", "No reasoning provided")
 
-        latency_ms = data.get("total_duration", 0) / 1_000_000  # nanoseconds to ms
-        if latency_ms == 0:
-            latency_ms = (time.perf_counter() - time.perf_counter()) * 1000
+
 
         logger.info(
             "judge_verdict",

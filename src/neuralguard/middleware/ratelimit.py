@@ -28,7 +28,13 @@ logger = structlog.get_logger(__name__)
 
 
 class SlidingWindowCounter:
-    """In-memory sliding window rate limiter."""
+    """In-memory sliding window rate limiter.
+
+    Note: This counter is per-process. With multiple uvicorn workers,
+    each worker maintains its own counter, so a tenant could make
+    up to (limit + burst) x workers requests per minute. For
+    multi-worker deployments, use a Redis-backed rate limiter instead.
+    """
 
     def __init__(self, window_seconds: int = 60) -> None:
         self._window = window_seconds

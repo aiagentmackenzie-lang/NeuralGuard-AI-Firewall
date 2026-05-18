@@ -32,6 +32,10 @@ class ServerSettings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", description="Log level"
     )
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="Allowed CORS origins. Use [\"*\"] for dev, specific domains for production.",
+    )
 
     @field_validator("port")
     @classmethod

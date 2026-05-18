@@ -27,6 +27,13 @@ from neuralguard.models.schemas import (
     Verdict,
 )
 
+# Response models for non-200 status codes
+_BLOCK_RESPONSES: dict[int, Any] = {
+    403: {"description": "Request blocked by firewall", "model": EvaluateResponse},
+    429: {"description": "Rate limit exceeded"},
+    422: {"description": "Validation error"},
+}
+
 if TYPE_CHECKING:
     from neuralguard.config.settings import NeuralGuardConfig
     from neuralguard.logging.audit import AuditLogger
@@ -55,7 +62,7 @@ def get_audit_logger(request: Request) -> AuditLogger:
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
 
-@router.post("/evaluate", response_model=EvaluateResponse)
+@router.post("/evaluate", response_model=EvaluateResponse, responses=_BLOCK_RESPONSES)
 async def evaluate(
     body: EvaluateRequest,
     pipeline: ScannerPipeline = Depends(get_pipeline),
@@ -127,7 +134,7 @@ async def evaluate(
     return audit_response
 
 
-@router.post("/scan/output", response_model=ScanOutputResponse)
+@router.post("/scan/output", response_model=ScanOutputResponse, responses=_BLOCK_RESPONSES)
 async def scan_output(
     body: ScanOutputRequest,
     pipeline: ScannerPipeline = Depends(get_pipeline),

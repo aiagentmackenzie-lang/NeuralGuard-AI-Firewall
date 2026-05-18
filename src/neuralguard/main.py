@@ -152,9 +152,13 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     app.state.audit_logger = audit_logger
 
     # ── Middleware ──
+    cors_origins = config.server.cors_origins
+    # In production, if cors_origins is empty, use a restrictive default
+    if config.environment == "production" and not cors_origins:
+        cors_origins = []  # No CORS — API-only, no browser access
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if config.environment == "development" else [],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["POST", "GET"],
         allow_headers=["*"],
