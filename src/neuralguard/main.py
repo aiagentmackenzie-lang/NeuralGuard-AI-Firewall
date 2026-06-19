@@ -6,16 +6,19 @@ FastAPI application factory and server entrypoint.
 from __future__ import annotations
 
 import time
+import uuid
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from neuralguard.api.routes import router
 from neuralguard.config.settings import NeuralGuardConfig, load_config
 from neuralguard.logging.audit import AuditLogger
+from neuralguard.metrics import metrics
 from neuralguard.middleware.auth import AuthMiddleware
 from neuralguard.middleware.bodysize import BodySizeMiddleware
 from neuralguard.middleware.ratelimit import RateLimitMiddleware
@@ -26,15 +29,30 @@ from neuralguard.scanners.structural import StructuralScanner
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-structlog.configure(
-    processors=[
+
+def _build_processors(environment: str) -> list[Any]:
+    """Return structlog processors — JSON in production, console in dev."""
+    if environment == "production":
+        return [
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.StackInfoRenderer(),
+            structlog.dev.set_exc_info,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
+        ]
+    return [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.StackInfoRenderer(),
         structlog.dev.set_exc_info,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.dev.ConsoleRenderer(),
-    ],
+    ]
+
+
+structlog.configure(
+    processors=_build_processors("development"),
     wrapper_class=structlog.make_filtering_bound_logger(30),  # WARNING default
     context_class=dict,
     logger_factory=structlog.PrintLoggerFactory(),
@@ -127,6 +145,17 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     if config is None:
         config = load_config()
 
+    # Configure structured logging for this environment (JSON in production).
+    structlog.configure(
+        processors=_build_processors(config.environment),
+        wrapper_class=structlog.make_filtering_bound_logger(
+            _log_level_int(config.server.log_level)
+        ),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
     app = FastAPI(
         title=config.app_name,
         version=config.version,
@@ -139,6 +168,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     # ── Store config and services on app state ──
     app.state.config = config
     app.state.start_time = time.time()
+    app.state.metrics = metrics
 
     # ── Initialize scanner pipeline ──
     pipeline = ScannerPipeline(config)
@@ -209,7 +239,33 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     # ── Routes ──
     app.include_router(router)
 
+    # ── Global exception handler: request_id correlation + sanitized 500 ──
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        corr_id = str(uuid.uuid4())
+        structlog.get_logger("neuralguard").error(
+            "unhandled_exception",
+            correlation_id=corr_id,
+            path=request.url.path,
+            error=repr(exc),
+        )
+        # Avoid leaking internals to the client.
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_error",
+                "message": "An internal error occurred.",
+                "correlation_id": corr_id,
+            },
+        )
+
     return app
+
+
+def _log_level_int(level: str) -> int:
+    import logging
+
+    return getattr(logging, level, logging.INFO)
 
 
 def main() -> None:
@@ -223,6 +279,7 @@ def main() -> None:
 
     log_level = getattr(logging, config.server.log_level)
     structlog.configure(
+        processors=_build_processors(config.environment),
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
     )
 

@@ -17,6 +17,8 @@ import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from neuralguard.metrics import metrics
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -50,6 +52,7 @@ class BodySizeMiddleware(BaseHTTPMiddleware):
                 except ValueError:
                     return self._too_large("Invalid Content-Length header")
                 if declared > self._max_bytes:
+                    metrics.record_body_rejection()
                     logger.warning(
                         "body_too_large",
                         path=request.url.path,
@@ -65,13 +68,14 @@ class BodySizeMiddleware(BaseHTTPMiddleware):
             if "chunked" in transfer_encoding or content_length_header is None:
                 body = await self._read_bounded(request)
                 if len(body) > self._max_bytes:
+                    metrics.record_body_rejection()
                     return self._too_large(f"Request body exceeds limit of {self._max_bytes} bytes")
 
                 # Re-inject the consumed body for downstream consumers.
                 async def receive() -> dict[str, Any]:
                     return {"type": "http.request", "body": body, "more_body": False}
 
-                request._receive = receive  # type: ignore[attr-defined]
+                request._receive = receive  # re-inject bounded body
 
         return await call_next(request)
 

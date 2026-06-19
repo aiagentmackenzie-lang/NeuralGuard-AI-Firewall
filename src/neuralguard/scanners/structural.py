@@ -17,6 +17,7 @@ import re
 import time
 import unicodedata
 import zlib
+from typing import Any
 
 import structlog as _structlog
 
@@ -139,7 +140,9 @@ class StructuralScanner(BaseScanner):
 
     layer = ScanLayer.STRUCTURAL
 
-    def scan(self, request: EvaluateRequest, context: dict | None = None) -> ScannerResult:
+    def scan(
+        self, request: EvaluateRequest, context: dict[str, Any] | None = None
+    ) -> ScannerResult:
         start = time.perf_counter()
         findings: list[Finding] = []
         sanitized_parts: list[str] = []

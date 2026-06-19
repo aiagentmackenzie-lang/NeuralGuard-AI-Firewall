@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import structlog
@@ -156,7 +156,7 @@ class EmbeddingEngine:
         """
         if not self._loaded:
             raise RuntimeError("EmbeddingEngine not loaded. Call load() first.")
-        return self.embed_batch([text])[0]
+        return cast("np.ndarray", self.embed_batch([text])[0])
 
     def embed_batch(self, texts: list[str]) -> np.ndarray:
         """Compute L2-normalized embeddings for multiple texts.
@@ -172,6 +172,7 @@ class EmbeddingEngine:
         """
         if not self._loaded:
             raise RuntimeError("EmbeddingEngine not loaded. Call load() first.")
+        assert self._tokenizer is not None and self._session is not None
 
         # Tokenize
         encoded = self._tokenizer.encode_batch(texts)
@@ -202,7 +203,7 @@ class EmbeddingEngine:
         norms = np.clip(norms, a_min=1e-9, a_max=None)
         normalized = mean_embeddings / norms
 
-        return normalized.astype(np.float32)
+        return cast("np.ndarray", normalized.astype(np.float32))
 
     def embed_raw(self, text: str) -> dict[str, Any]:
         """Compute embedding with metadata (for debugging/testing).
@@ -211,6 +212,7 @@ class EmbeddingEngine:
         """
         if not self._loaded:
             raise RuntimeError("EmbeddingEngine not loaded. Call load() first.")
+        assert self._tokenizer is not None and self._session is not None
 
         start = time.perf_counter()
         encoded = self._tokenizer.encode_batch([text])

@@ -10,13 +10,14 @@ Primary endpoints:
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from neuralguard.actions import ActionDispatcher
+from neuralguard.metrics import metrics
 from neuralguard.models.schemas import (
     EvaluateRequest,
     EvaluateResponse,
@@ -28,7 +29,7 @@ from neuralguard.models.schemas import (
 )
 
 # Response models for non-200 status codes
-_BLOCK_RESPONSES: dict[int, Any] = {
+_BLOCK_RESPONSES: dict[int | str, dict[str, Any]] = {
     403: {"description": "Request blocked by firewall", "model": EvaluateResponse},
     429: {"description": "Rate limit exceeded"},
     422: {"description": "Validation error"},
@@ -48,15 +49,15 @@ router = APIRouter(prefix="/v1", tags=["NeuralGuard API"])
 
 
 def get_pipeline(request: Request) -> ScannerPipeline:
-    return request.app.state.pipeline
+    return cast("ScannerPipeline", request.app.state.pipeline)
 
 
 def get_config(request: Request) -> NeuralGuardConfig:
-    return request.app.state.config
+    return cast("NeuralGuardConfig", request.app.state.config)
 
 
 def get_audit_logger(request: Request) -> AuditLogger:
-    return request.app.state.audit_logger
+    return cast("AuditLogger", request.app.state.audit_logger)
 
 
 def _auth_tenant(request: Request) -> str | None:
@@ -82,6 +83,33 @@ def _check_tenant_binding(request: Request, body_tenant: str) -> None:
         )
 
 
+def _internal_error(exc: Exception, path: str) -> JSONResponse:
+    """Log an unexpected error and return a sanitized 500 with a correlation id.
+
+    Wrapped at the route level because Starlette `BaseHTTPMiddleware` re-raises
+    route exceptions past `@app.exception_handler`, defeating the global
+    handler. This keeps clients from receiving a raw traceback while giving
+    operators a correlation id for log lookup.
+    """
+    import uuid as _uuid
+
+    corr_id = str(_uuid.uuid4())
+    logger.error(
+        "internal_error",
+        correlation_id=corr_id,
+        path=path,
+        error=repr(exc),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "message": "An internal error occurred.",
+            "correlation_id": corr_id,
+        },
+    )
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
 
@@ -92,7 +120,7 @@ async def evaluate(
     pipeline: ScannerPipeline = Depends(get_pipeline),
     config: NeuralGuardConfig = Depends(get_config),
     audit: AuditLogger = Depends(get_audit_logger),
-) -> EvaluateResponse:
+) -> EvaluateResponse | JSONResponse:
     """Scan input messages/prompts for security threats.
 
     Runs through all enabled scanner layers and returns a verdict
@@ -111,17 +139,29 @@ async def evaluate(
         has_prompt=body.prompt is not None,
     )
 
-    # Execute scanner pipeline
-    arbitration = pipeline.execute(body)
+    # Execute scanner pipeline (fail-closed on unexpected internal error)
+    try:
+        arbitration = pipeline.execute(body)
+    except Exception as exc:
+        return _internal_error(exc, "/v1/evaluate")
+
+    # Record metrics: per-scanner latency and verdict
+    for r in arbitration.scanner_results:
+        metrics.observe_scanner(r.layer.value, r.latency_ms / 1000.0)
+    metrics.record_verdict(arbitration.verdict.value)
 
     # Dispatch response action
     dispatcher = ActionDispatcher(config)
-    action_result = dispatcher.execute(arbitration, body)
+    try:
+        action_result = dispatcher.execute(arbitration, body)
+    except Exception as exc:
+        return _internal_error(exc, "/v1/evaluate")
 
     # Compute confidence and layers used
     confidence = max((f.confidence for f in arbitration.findings), default=0.0)
     layers_used = [r.layer for r in arbitration.scanner_results]
     total_ms = (time.perf_counter() - start) * 1000
+    metrics.observe_pipeline(total_ms / 1000.0)
 
     # Build canonical response for audit logging
     sanitized = None
@@ -168,7 +208,7 @@ async def scan_output(
     pipeline: ScannerPipeline = Depends(get_pipeline),
     config: NeuralGuardConfig = Depends(get_config),
     audit: AuditLogger = Depends(get_audit_logger),
-) -> ScanOutputResponse:
+) -> ScanOutputResponse | JSONResponse:
     """Validate LLM output before delivery.
 
     Checks for:
@@ -198,16 +238,28 @@ async def scan_output(
         output_only=True,  # Only run output-relevant patterns (PII/EXF)
     )
 
-    arbitration = pipeline.execute(eval_request)
+    try:
+        arbitration = pipeline.execute(eval_request)
+    except Exception as exc:
+        return _internal_error(exc, "/v1/scan/output")
+
+    # Record metrics
+    for r in arbitration.scanner_results:
+        metrics.observe_scanner(r.layer.value, r.latency_ms / 1000.0)
+    metrics.record_verdict(arbitration.verdict.value)
 
     # Dispatch response action (output scan uses action framework)
     dispatcher = ActionDispatcher(config)
-    action_result = dispatcher.execute(arbitration, body)
+    try:
+        action_result = dispatcher.execute(arbitration, body)
+    except Exception as exc:
+        return _internal_error(exc, "/v1/scan/output")
 
-    # Canary detection (Phase 2 — for now, stub)
+    # Canary detection (Phase 3 — not yet implemented; see PRODUCTION_HARDENING_PLAN)
     canary_leaked = False
 
     total_ms = (time.perf_counter() - start) * 1000
+    metrics.observe_pipeline(total_ms / 1000.0)
 
     redacted = action_result.body.get("sanitized_content", body.output)
 
@@ -254,22 +306,48 @@ async def health(
 
 
 @router.get("/info")
-async def info(config: NeuralGuardConfig = Depends(get_config)) -> dict[str, Any]:
-    """Service metadata endpoint."""
+async def info(
+    request: Request,
+    config: NeuralGuardConfig = Depends(get_config),
+) -> dict[str, Any]:
+    """Service metadata endpoint.
+
+    Requires authentication (not in `public_endpoints`) so version/environment
+    and scanner coverage are not disclosed to unauthenticated callers.
+    """
+    _ = request  # auth enforced by AuthMiddleware on /v1/* (info is not public)
     return {
         "name": config.app_name,
         "version": config.version,
         "environment": config.environment,
         "description": "LLM Guard / AI Application Firewall",
-        "owasp_coverage": [
-            "LLM01 (Prompt Injection)",
-            "LLM02 (Sensitive Disclosure)",
-            "LLM05 (Improper Output)",
-            "LLM07 (System Prompt Leakage)",
-            "LLM10 (Unbounded Consumption)",
-            "ASI01 (Goal Hijack)",
-            "ASI02 (Tool Misuse)",
-            "ASI06 (Memory Poisoning)",
-        ],
+        "owasp_coverage": {
+            "dedicated_rules": [
+                "LLM01 (Prompt Injection)",
+                "LLM02 (Sensitive Disclosure)",
+                "LLM05 (Improper Output)",
+                "LLM07 (System Prompt Leakage)",
+                "LLM10 (Unbounded Consumption)",
+                "ASI01 (Goal Hijack)",
+                "ASI02 (Tool Misuse)",
+                "ASI06 (Memory Poisoning)",
+            ],
+            # Corpus-assisted only: no dedicated detection rules. Tracked for
+            # honesty so customers do not rely on coverage that is incidental.
+            "corpus_assisted_only": ["ASI04 (Supply Chain)", "ASI10 (Rogue Agents)"],
+        },
         "api_version": "v1",
     }
+
+
+@router.get("/metrics")
+async def metrics_endpoint(request: Request) -> Response:
+    """Prometheus metrics endpoint.
+
+    Exposes counters/histograms for SOC observability. Auth-protected (not in
+    `public_endpoints`) so external observers cannot scrape internal signal.
+    """
+    _ = request  # auth enforced by AuthMiddleware
+    m = request.app.state.metrics
+    payload, content_type = m.expose()
+    return Response(content=payload, media_type=content_type)

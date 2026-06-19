@@ -13,13 +13,18 @@ from neuralguard.scanners.pattern import EXF_PATTERNS
 from .base import ActionResult, BaseAction
 
 if TYPE_CHECKING:
-    from neuralguard.models.schemas import LayerArbitrationResult
+    from neuralguard.config.settings import NeuralGuardConfig
+    from neuralguard.models.schemas import (
+        EvaluateRequest,
+        LayerArbitrationResult,
+        ScanOutputRequest,
+    )
 
 
 class SanitizeAction(BaseAction):
     """Handle SANITIZE verdict."""
 
-    def __init__(self, config: object) -> None:
+    def __init__(self, config: NeuralGuardConfig) -> None:
         super().__init__(config)
         self._redaction_patterns: list[tuple[re_module.Pattern, str]] = []
         for rule_id, _severity, _confidence, _description, pattern_str in EXF_PATTERNS:
@@ -32,7 +37,7 @@ class SanitizeAction(BaseAction):
     def execute(
         self,
         arbitration: LayerArbitrationResult,
-        request: object,  # EvaluateRequest | ScanOutputRequest
+        request: EvaluateRequest | ScanOutputRequest,
     ) -> ActionResult:
         # Prefer structural sanitized output if available
         sanitized: str | None = None

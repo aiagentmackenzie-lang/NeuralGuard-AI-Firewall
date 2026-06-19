@@ -34,7 +34,6 @@ jobs:
 
       - name: Mypy type check
         run: uv run mypy src/neuralguard/
-        continue-on-error: true  # Don't block CI on strict typing yet
 
   # ── Test ─────────────────────────────────────────────────────────────
   test:

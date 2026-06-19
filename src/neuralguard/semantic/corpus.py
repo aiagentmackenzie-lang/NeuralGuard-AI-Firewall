@@ -121,13 +121,14 @@ class AttackCorpus:
         """
         if not self._loaded:
             raise RuntimeError("AttackCorpus not loaded. Call load() first.")
+        assert self._vectors is not None
 
         if threshold is None:
             threshold = self.settings.semantic_similarity_threshold
 
         # Cosine similarity = dot product for L2-normalized vectors
         # query: (384,), vectors: (n, 384) → similarities: (n,)
-        similarities = np.dot(self._vectors, query_embedding)  # type: ignore[union-attr]
+        similarities = np.dot(self._vectors, query_embedding)
 
         # Filter by threshold
         above_mask = similarities >= threshold
@@ -174,7 +175,8 @@ class AttackCorpus:
         if not self._loaded:
             raise RuntimeError("AttackCorpus not loaded. Call load() first.")
 
-        similarities = np.dot(self._vectors, query_embedding)  # type: ignore[union-attr]
+        assert self._vectors is not None
+        similarities = np.dot(self._vectors, query_embedding)
         return float(np.max(similarities))
 
     def category_distribution(self) -> dict[str, int]:

@@ -21,6 +21,8 @@ import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from neuralguard.metrics import metrics
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -96,11 +98,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         candidate = _extract_key(request)
         if candidate is None:
             logger.warning("auth_missing_key", path=path)
+            metrics.record_auth_rejection("missing_key")
             return self._unauthorized("Missing API key")
 
         tenant = _constant_time_lookup(candidate, self._key_map)
         if tenant is None:
             logger.warning("auth_invalid_key", path=path)
+            metrics.record_auth_rejection("invalid_key")
             return self._unauthorized("Invalid API key")
 
         request.state.authenticated = True

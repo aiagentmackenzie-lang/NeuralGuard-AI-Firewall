@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from neuralguard.metrics import metrics
 from neuralguard.models.schemas import (
     AuditEvent,
     EvaluateRequest,
@@ -60,6 +61,9 @@ class AuditLogger:
         self._pg_available: bool = False
         self._pg_checked: bool = False
         self._write_counter: int = 0  # For periodic cleanup
+        self._inflight: set[Any] = set()  # tracked fire-and-forget DB write tasks
+        self._inflight_lock: Any = None
+        self._dropped_overflow: int = 0
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -137,6 +141,7 @@ class AuditLogger:
             elif self.settings.backend == "jsonl":
                 self._write_jsonl(event)
         except Exception as exc:
+            metrics.record_audit_failure(self.settings.backend)
             logger.error("audit_persist_failed", error=str(exc), event_id=event.event_id)
 
     def _persist_postgres(self, event: AuditEvent) -> None:
@@ -181,10 +186,11 @@ class AuditLogger:
                 metadata_=event.metadata or None,
             )
 
-            # Schedule the async insert — fire-and-forget with error logging
+            # Schedule the async insert — fire-and-forget WITH backpressure.
+            # We cap in-flight writes; beyond the cap we fall back to JSONL to
+            # bound memory under load (slow Postgres must not OOM the worker).
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._async_insert(orm_obj))
             except RuntimeError:
                 # No running event loop — fall back to JSONL
                 logger.warning(
@@ -194,6 +200,22 @@ class AuditLogger:
                 )
                 self._write_jsonl(event)
                 return
+
+            if len(self._inflight) >= self.settings.max_inflight_writes:
+                if not self._dropped_overflow:
+                    logger.warning(
+                        "audit_inflight_overflow",
+                        msg="In-flight DB write cap reached; falling back to JSONL for this event",
+                        event_id=event.event_id,
+                        cap=self.settings.max_inflight_writes,
+                    )
+                self._dropped_overflow += 1
+                self._write_jsonl(event)
+                return
+
+            task = loop.create_task(self._async_insert(orm_obj))
+            self._inflight.add(task)
+            task.add_done_callback(self._inflight.discard)
             self._pg_available = True
             self._pg_checked = True
 

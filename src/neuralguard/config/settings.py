@@ -118,6 +118,15 @@ class ScannerSettings(BaseSettings):
     judge_model: str = Field(default="gpt-4o-mini", description="Judge model identifier")
     judge_max_tokens: int = Field(default=512, description="Max tokens for judge response")
     judge_temperature: float = Field(default=0.0, description="Judge sampling temperature")
+    judge_ollama_url: str = Field(
+        default="http://localhost:11434",
+        description="Ollama base URL for the judge. In production this MUST resolve to a "
+        "loopback/private address to keep prompts inside the trust boundary.",
+    )
+    judge_max_concurrency: int = Field(
+        default=4,
+        description="Max concurrent in-flight judge HTTP calls per worker",
+    )
 
 
 class ActionSettings(BaseSettings):
@@ -218,6 +227,11 @@ class AuditSettings(BaseSettings):
     postgres_url: str | None = Field(default=None, description="PostgreSQL connection string")
     retention_days: int = Field(default=30, description="Audit log retention in days")
     tokenize_pii: bool = Field(default=True, description="Tokenize PII in audit logs")
+    max_inflight_writes: int = Field(
+        default=1000,
+        description="Max concurrent in-flight async Postgres writes per worker. "
+        "Beyond this, audit events fall back to JSONL to bound memory.",
+    )
 
 
 class TenantSettings(BaseSettings):

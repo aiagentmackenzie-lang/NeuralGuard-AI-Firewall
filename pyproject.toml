@@ -51,8 +51,11 @@ db = [
 redis = [
     "redis>=5.2.0",
 ]
+metrics = [
+    "prometheus-client>=0.21.0",
+]
 all = [
-    "neuralguard[semantic,db,redis]",
+    "neuralguard[semantic,db,redis,metrics]",
 ]
 dev = [
     "pytest>=8.3.0",
@@ -65,6 +68,8 @@ dev = [
     "pre-commit>=4.0.0",
     "cyclonedx-bom>=5.0.0",
     "pip-audit>=2.7.0",
+    "prometheus-client>=0.21.0",
+    "hypothesis>=6.115.0",
 ]
 
 [project.scripts]
@@ -110,6 +115,18 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+# Third-party libs without py.typed markers — treat as untyped rather than
+# blocking CI. These are stable, well-known libraries.
+[[tool.mypy.overrides]]
+module = ["regex", "onnxruntime", "tokenizers"]
+ignore_missing_imports = true
+
+# SQLAlchemy mapped_column inference can be noisy; keep strict but allow its
+# internal Any-typed helpers.
+[[tool.mypy.overrides]]
+module = ["sqlalchemy.*"]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 source = ["neuralguard"]

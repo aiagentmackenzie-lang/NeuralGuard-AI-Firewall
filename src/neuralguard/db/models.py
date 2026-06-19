@@ -6,6 +6,7 @@ for common query patterns (tenant_id, timestamp, verdict).
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import TIMESTAMP, Float, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
@@ -42,9 +43,9 @@ class AuditEventORM(Base):
     findings_count: Mapped[int] = mapped_column(Integer, default=0)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     total_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
-    threat_categories: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    scanner_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    threat_categories: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    scanner_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
 
     __table_args__ = (Index("ix_audit_tenant_timestamp", "tenant_id", "timestamp"),)
 
