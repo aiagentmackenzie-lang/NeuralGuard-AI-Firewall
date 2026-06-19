@@ -20,7 +20,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastapi>=0.115.0",
+    "fastapi>=0.136.0",
+    "starlette>=1.3.1",
     "uvicorn[standard]>=0.34.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
@@ -29,6 +30,10 @@ dependencies = [
     "regex>=2024.11.0",
     "structlog>=24.4.0",
     "python-dateutil>=2.9.0",
+    # Pinned floors for known-vulnerable transitive deps (see pip-audit).
+    "aiohttp>=3.14.1",
+    "idna>=3.15",
+    "urllib3>=2.7.0",
 ]
 
 [project.optional-dependencies]
