@@ -31,6 +31,7 @@ docs/PHASE2-PLAN.md
 # Audit artifacts (internal — regenerated per session)
 AUDIT_HANDOFF.md
 BUG_CATALOG.md
+PRODUCTION_HARDENING_PLAN.md
 
 # SBOM output (regenerated in CI)
 sbom.json

@@ -255,7 +255,7 @@ async def scan_output(
     except Exception as exc:
         return _internal_error(exc, "/v1/scan/output")
 
-    # Canary detection (Phase 3 — not yet implemented; see PRODUCTION_HARDENING_PLAN)
+    # Canary detection (Phase 3 — not yet implemented; tracked as P2-1)
     canary_leaked = False
 
     total_ms = (time.perf_counter() - start) * 1000
