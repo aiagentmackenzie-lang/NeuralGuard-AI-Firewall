@@ -60,10 +60,57 @@ ZW_PATTERN = re.compile("[" + "".join(ZERO_WIDTH_CHARS) + "]+")
 
 # ── Encoding evasion patterns ────────────────────────────────────────────
 
+# Cap the length of a single base64 match we will attempt to decode. Longer
+# matches are flagged but NOT decoded, preventing memory-exhaustion via a
+# multi-megabyte base64 blob. 8 KiB of base64 decodes to ~6 KiB of bytes.
+_BASE64_DECODE_CAP = 8 * 1024
+
 BASE64_PATTERN = re.compile(
     r"(?:[A-Za-z0-9+/]{40,}={0,2})",
     re.ASCII,
 )
+
+# Hard cap on decompressed bytes during the zlib bomb check. We decompress
+# incrementally and abort the moment we exceed this, so a crafted bomb cannot
+# materialize hundreds of MB before the ratio check fires.
+_MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024  # 8 MiB
+
+
+def _bounded_decompress(
+    raw: bytes,
+    max_bytes: int = _MAX_DECOMPRESSED_BYTES,
+    ratio_limit: float = 10.0,
+) -> tuple[bool, float, int]:
+    """Decompress `raw` incrementally with a hard byte cap.
+
+    Returns (exceeded_cap, ratio, produced_bytes). Never materializes more
+    than max_bytes+chunk of decompressed data in memory, so a crafted zlib
+    bomb cannot OOM the worker.
+    """
+    decompressor = zlib.decompressobj(wbits=0)
+    produced = 0
+    exceeded_cap = False
+    view = memoryview(raw)
+    chunk_size = 4096
+    try:
+        for i in range(0, len(view), chunk_size):
+            piece = bytes(view[i : i + chunk_size])
+            out = decompressor.decompress(piece, max_bytes + 1 - produced)
+            produced += len(out)
+            if produced > max_bytes:
+                exceeded_cap = True
+                break
+        try:
+            tail = decompressor.flush()
+        except zlib.error:
+            tail = b""
+        produced += len(tail)
+    except zlib.error:
+        # Not a valid zlib/deflate stream - treat as non-compressed (safe).
+        return False, 0.0, 0
+    ratio = produced / max(len(raw), 1)
+    return exceeded_cap, ratio, produced
+
 
 HEX_ENCODED_PATTERN = re.compile(
     r"(?:\\x[0-9a-fA-F]{2}){4,}",
@@ -149,11 +196,19 @@ class StructuralScanner(BaseScanner):
                 )
             )
 
-        # 2. Decompression ratio check (bomb defense)
+        # 2. Decompression ratio check (bomb defense) — BOUNDED.
+        # Decompress incrementally with a hard byte cap so a crafted zlib bomb
+        # cannot materialize in memory before the ratio is checked.
+        raw = text.encode("utf-8")
         try:
-            decompressed = zlib.decompress(text.encode("utf-8"), wbits=0)
-            ratio = len(decompressed) / max(len(text.encode("utf-8")), 1)
-            if ratio > self.settings.max_decompression_ratio:
+            exceeded_cap, ratio, produced = _bounded_decompress(
+                raw,
+                max_bytes=_MAX_DECOMPRESSED_BYTES,
+                ratio_limit=self.settings.max_decompression_ratio,
+            )
+            if (produced > 0 or exceeded_cap) and (
+                exceeded_cap or ratio > self.settings.max_decompression_ratio
+            ):
                 findings.append(
                     Finding(
                         category=ThreatCategory.DOS_ABUSE,
@@ -162,7 +217,11 @@ class StructuralScanner(BaseScanner):
                         confidence=0.99,
                         layer=self.layer,
                         rule_id="STRUCT-003",
-                        description=f"Decompression bomb: ratio {ratio:.1f}:1 exceeds limit {self.settings.max_decompression_ratio}:1",
+                        description=(
+                            f"Decompression bomb: exceeded {_MAX_DECOMPRESSED_BYTES} byte cap"
+                            if exceeded_cap
+                            else f"Decompression bomb: ratio {ratio:.1f}:1 exceeds limit {self.settings.max_decompression_ratio}:1"
+                        ),
                         mitigation="Reject compressed input with excessive ratio",
                     )
                 )
@@ -195,6 +254,21 @@ class StructuralScanner(BaseScanner):
         b64_matches = BASE64_PATTERN.findall(normalized)
         if b64_matches:
             for match in b64_matches[:3]:  # Limit to first 3
+                # Cap match length before decoding to avoid memory DoS.
+                if len(match) > _BASE64_DECODE_CAP:
+                    findings.append(
+                        Finding(
+                            category=ThreatCategory.ENCODING_EVASION,
+                            severity=Severity.HIGH,
+                            verdict=Verdict.BLOCK,
+                            confidence=0.9,
+                            layer=self.layer,
+                            rule_id="STRUCT-005",
+                            description=f"Oversized base64 blob ({len(match)} chars) — possible payload smuggling",
+                            mitigation="Block oversized base64 payloads",
+                        )
+                    )
+                    continue
                 try:
                     import base64
 

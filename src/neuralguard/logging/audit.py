@@ -313,7 +313,9 @@ class AuditLogger:
                 from datetime import date as date_type
 
                 file_date = date_type.fromisoformat(match.group(1))
-                return datetime(file_date.year, file_date.month, file_date.day, tzinfo=UTC).timestamp()
+                return datetime(
+                    file_date.year, file_date.month, file_date.day, tzinfo=UTC
+                ).timestamp()
             except ValueError:
                 pass
         # Fallback to mtime
@@ -336,14 +338,18 @@ class AuditLogger:
         import re as _re
 
         pii_patterns = [
-            _re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'),  # Email
-            _re.compile(r'(?:\+?\d{1,3}[\s.\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.\-]?\d{3,5}[\s.\-]?\d{3,5}'),  # Phone
-            _re.compile(r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b'),  # SSN-like
-            _re.compile(r'\b(?:4\d{12,18}|5[1-5]\d{10,14}|3[47]\d{11,13})\b'),  # CC
-            _re.compile(r'\bsk-(?:proj|org|[a-zA-Z0-9])-[a-zA-Z0-9_-]{20,}\b'),  # OpenAI key
-            _re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'),  # AWS key
-            _re.compile(r'\bgh[pous]_[a-zA-Z0-9]{36}\b'),  # GitHub token
-            _re.compile(r'(?:mongodb|postgres(?:ql)?|mysql|redis|amqp)://[^\s"\']{10,}'),  # Conn string
+            _re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),  # Email
+            _re.compile(
+                r"(?:\+?\d{1,3}[\s.\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.\-]?\d{3,5}[\s.\-]?\d{3,5}"
+            ),  # Phone
+            _re.compile(r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b"),  # SSN-like
+            _re.compile(r"\b(?:4\d{12,18}|5[1-5]\d{10,14}|3[47]\d{11,13})\b"),  # CC
+            _re.compile(r"\bsk-(?:proj|org|[a-zA-Z0-9])-[a-zA-Z0-9_-]{20,}\b"),  # OpenAI key
+            _re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),  # AWS key
+            _re.compile(r"\bgh[pous]_[a-zA-Z0-9]{36}\b"),  # GitHub token
+            _re.compile(
+                r'(?:mongodb|postgres(?:ql)?|mysql|redis|amqp)://[^\s"\']{10,}'
+            ),  # Conn string
         ]
 
         tokenized: dict[str, Any] = {}

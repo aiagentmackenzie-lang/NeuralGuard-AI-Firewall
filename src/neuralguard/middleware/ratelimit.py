@@ -108,8 +108,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith("/v1/"):
             return await call_next(request)
 
-        # Extract tenant ID from request body or header
-        tenant_id = request.headers.get("X-Tenant-ID", "default")
+        # Tenant identity: when auth is enabled, the authenticated principal
+        # (set by AuthMiddleware on request.state.auth_tenant) is authoritative.
+        # Falling back to the client-supplied X-Tenant-ID header is ONLY acceptable
+        # when auth is disabled (development). This prevents the rate-limit
+        # tenant-spoofing bypass.
+        auth_tenant = getattr(request.state, "auth_tenant", None)
+        tenant_id = auth_tenant or request.headers.get("X-Tenant-ID", "default")
 
         # Use tenant-specific limits (future: per-tenant config)
         rpm = self.settings.requests_per_minute

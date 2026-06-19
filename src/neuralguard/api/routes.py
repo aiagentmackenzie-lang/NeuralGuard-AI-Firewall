@@ -13,7 +13,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from neuralguard.actions import ActionDispatcher
@@ -59,12 +59,36 @@ def get_audit_logger(request: Request) -> AuditLogger:
     return request.app.state.audit_logger
 
 
+def _auth_tenant(request: Request) -> str | None:
+    return getattr(request.state, "auth_tenant", None)
+
+
+def _check_tenant_binding(request: Request, body_tenant: str) -> None:
+    """Reject 403 if the authenticated key is bound to a different tenant."""
+    config = request.app.state.config
+    auth_tenant = _auth_tenant(request)
+    if (
+        config.auth.enabled
+        and config.auth.enforce_tenant_from_key
+        and auth_tenant is not None
+        and body_tenant.lower() != auth_tenant.lower()
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "tenant_mismatch",
+                "message": "API key is not authorized for the requested tenant_id.",
+            },
+        )
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
 
 @router.post("/evaluate", response_model=EvaluateResponse, responses=_BLOCK_RESPONSES)
 async def evaluate(
     body: EvaluateRequest,
+    request: Request,
     pipeline: ScannerPipeline = Depends(get_pipeline),
     config: NeuralGuardConfig = Depends(get_config),
     audit: AuditLogger = Depends(get_audit_logger),
@@ -74,6 +98,9 @@ async def evaluate(
     Runs through all enabled scanner layers and returns a verdict
     with detailed findings.
     """
+    # Enforce tenant binding against the authenticated API key.
+    _check_tenant_binding(request, body.tenant_id)
+
     start = time.perf_counter()
 
     logger.info(
@@ -137,6 +164,7 @@ async def evaluate(
 @router.post("/scan/output", response_model=ScanOutputResponse, responses=_BLOCK_RESPONSES)
 async def scan_output(
     body: ScanOutputRequest,
+    request: Request,
     pipeline: ScannerPipeline = Depends(get_pipeline),
     config: NeuralGuardConfig = Depends(get_config),
     audit: AuditLogger = Depends(get_audit_logger),
@@ -149,6 +177,9 @@ async def scan_output(
     - System prompt leakage (if system_prompt_hash provided)
     - Schema compliance
     """
+    # Enforce tenant binding against the authenticated API key.
+    _check_tenant_binding(request, body.tenant_id)
+
     start = time.perf_counter()
 
     logger.info(

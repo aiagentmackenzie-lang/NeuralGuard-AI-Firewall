@@ -423,8 +423,6 @@ class JudgeScanner(BaseScanner):
         confidence = min(1.0, max(0.0, float(parsed.get("confidence", 0.5))))
         reasoning = parsed.get("reasoning", "No reasoning provided")
 
-
-
         logger.info(
             "judge_verdict",
             verdict=verdict.value,

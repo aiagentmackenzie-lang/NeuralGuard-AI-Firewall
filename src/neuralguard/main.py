@@ -16,6 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from neuralguard.api.routes import router
 from neuralguard.config.settings import NeuralGuardConfig, load_config
 from neuralguard.logging.audit import AuditLogger
+from neuralguard.middleware.auth import AuthMiddleware
+from neuralguard.middleware.bodysize import BodySizeMiddleware
 from neuralguard.middleware.ratelimit import RateLimitMiddleware
 from neuralguard.scanners.pattern import PatternScanner
 from neuralguard.scanners.pipeline import ScannerPipeline
@@ -76,6 +78,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             structlog.get_logger("neuralguard").error(
                 "db_init_failed", error=str(exc), msg="PostgreSQL init failed; JSONL fallback"
+            )
+
+    # ── Production security fail-fast ──
+    # Refuse to serve in production unless authentication is configured with at
+    # least one API key. This prevents accidental open deployments.
+    if config.environment == "production":
+        if not config.auth.enabled:
+            raise RuntimeError(
+                "Production startup refused: authentication is disabled. "
+                "Set NEURALGUARD_AUTH_ENABLED=true and NEURALGUARD_AUTH_API_KEYS."
+            )
+        if not config.auth.api_keys:
+            raise RuntimeError(
+                "Production startup refused: no API keys configured. Set NEURALGUARD_AUTH_API_KEYS."
+            )
+        # TLS enforcement: refuse plain HTTP unless explicitly allowed (behind a
+        # TLS-terminating reverse proxy that the operator takes responsibility for).
+        if not config.server.allow_insecure_http:
+            structlog.get_logger("neuralguard").warning(
+                "production_tls_notice",
+                msg="Production mode active. Terminate TLS at a reverse proxy (nginx/Caddy/Traefik) "
+                "or set --ssl-keyfile/--ssl-certfile. Set NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=true "
+                "ONLY if a TLS-terminating proxy is in front.",
+            )
+        else:
+            structlog.get_logger("neuralguard").warning(
+                "production_insecure_http_allowed",
+                msg="allow_insecure_http=true: ensure a TLS-terminating reverse proxy is in front.",
             )
 
     yield
@@ -152,18 +182,29 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     app.state.audit_logger = audit_logger
 
     # ── Middleware ──
+    # Order matters: outermost first. Body-size limit must run BEFORE the app
+    # parses JSON, so it is added first (outermost). Auth runs before rate
+    # limiting so the rate limiter can key on the authenticated tenant.
     cors_origins = config.server.cors_origins
-    # In production, if cors_origins is empty, use a restrictive default
+    # In production, if cors_origins is empty, use a restrictive default (no CORS)
     if config.environment == "production" and not cors_origins:
         cors_origins = []  # No CORS — API-only, no browser access
+    # Safety: never combine allow_credentials=true with a wildcard origin.
+    if config.server.allow_credentials and ("*" in cors_origins):
+        structlog.get_logger("neuralguard").warning(
+            "cors_misconfiguration",
+            msg="allow_credentials=True with wildcard origin is invalid; forcing allow_credentials=False.",
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_credentials=True,
+        allow_credentials=config.server.allow_credentials and ("*" not in cors_origins),
         allow_methods=["POST", "GET"],
-        allow_headers=["*"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
     )
     app.add_middleware(RateLimitMiddleware, settings=config.rate_limit)
+    app.add_middleware(AuthMiddleware, settings=config.auth)
+    app.add_middleware(BodySizeMiddleware, max_bytes=config.server.max_request_body_bytes)
 
     # ── Routes ──
     app.include_router(router)
