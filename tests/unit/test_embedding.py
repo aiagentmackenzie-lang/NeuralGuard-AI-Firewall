@@ -304,6 +304,9 @@ class TestEmbeddingEngineWithModel:
     @pytest.fixture
     def engine(self, settings: ScannerSettings) -> object:
         """Create and load EmbeddingEngine with real model."""
+        # Skip if the semantic extra (onnxruntime/tokenizers) is not installed.
+        pytest.importorskip("onnxruntime")
+        pytest.importorskip("tokenizers")
         from neuralguard.semantic.embedding import EmbeddingEngine
 
         eng = EmbeddingEngine(settings)

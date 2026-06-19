@@ -5,10 +5,12 @@ Imports are lazy to avoid requiring sqlalchemy/asyncpg when the
 directly when the db backend is configured.
 """
 
+from typing import Any
+
 __all__ = ["AuditEventORM", "create_engine", "get_session", "session_factory"]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Lazy import — only load DB modules when actually accessed."""
     if name == "create_engine":
         from neuralguard.db.engine import create_engine

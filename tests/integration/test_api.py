@@ -53,7 +53,9 @@ class TestInfoEndpoint:
         assert data["name"] == "NeuralGuard"
         assert data["version"] == "0.1.0"
         assert "owasp_coverage" in data
-        assert "LLM01" in data["owasp_coverage"][0]
+        assert "LLM01" in data["owasp_coverage"]["dedicated_rules"][0]
+        # ASI04/ASI10 are corpus-assisted only, not dedicated rules
+        assert "ASI04" in data["owasp_coverage"]["corpus_assisted_only"][0]
 
 
 class TestEvaluateEndpoint:

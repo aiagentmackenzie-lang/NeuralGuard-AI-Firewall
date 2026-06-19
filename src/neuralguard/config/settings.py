@@ -10,7 +10,7 @@ Uses pydantic-settings for layered configuration:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,8 +33,22 @@ class ServerSettings(BaseSettings):
         default="INFO", description="Log level"
     )
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["*"],
-        description="Allowed CORS origins. Use [\"*\"] for dev, specific domains for production.",
+        default_factory=list,
+        description="Allowed CORS origins. Empty = no CORS (API-only). "
+        'Explicit allowlist for production. NEVER use ["*"] with allow_credentials=true.',
+    )
+    allow_credentials: bool = Field(
+        default=False,
+        description="CORS allow_credentials. Only enable if you use authenticated browser sessions.",
+    )
+    max_request_body_bytes: int = Field(
+        default=1_048_576,
+        description="Hard cap on inbound request body size (bytes). 413 returned beyond this. Default 1 MiB.",
+    )
+    allow_insecure_http: bool = Field(
+        default=False,
+        description="Allow serving plain HTTP in production. MUST be set explicitly; otherwise "
+        "production startup fails. Intended only behind a TLS-terminating reverse proxy.",
     )
 
     @field_validator("port")
@@ -42,6 +56,13 @@ class ServerSettings(BaseSettings):
     def validate_port(cls, v: int) -> int:
         if not (1 <= v <= 65535):
             raise ValueError(f"Port must be 1-65535, got {v}")
+        return v
+
+    @field_validator("max_request_body_bytes")
+    @classmethod
+    def validate_body_size(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"max_request_body_bytes must be > 0, got {v}")
         return v
 
 
@@ -97,6 +118,15 @@ class ScannerSettings(BaseSettings):
     judge_model: str = Field(default="gpt-4o-mini", description="Judge model identifier")
     judge_max_tokens: int = Field(default=512, description="Max tokens for judge response")
     judge_temperature: float = Field(default=0.0, description="Judge sampling temperature")
+    judge_ollama_url: str = Field(
+        default="http://localhost:11434",
+        description="Ollama base URL for the judge. In production this MUST resolve to a "
+        "loopback/private address to keep prompts inside the trust boundary.",
+    )
+    judge_max_concurrency: int = Field(
+        default=4,
+        description="Max concurrent in-flight judge HTTP calls per worker",
+    )
 
 
 class ActionSettings(BaseSettings):
@@ -124,6 +154,62 @@ class ActionSettings(BaseSettings):
     )
 
 
+class AuthSettings(BaseSettings):
+    """API-key authentication and authorization configuration.
+
+    API keys are bound to a tenant. The authenticated tenant overrides any
+    client-supplied tenant_id, preventing tenant-spoofing rate-limit bypass.
+    Key format in config: either a bare key (tenant="default") or
+    "<key>|<tenant_id>" to bind a key to a specific tenant.
+
+    In production, the application lifespan refuses to start unless `enabled`
+    is true and at least one key is configured.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NEURALGUARD_AUTH_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable API-key authentication")
+    api_keys: list[str] = Field(
+        default_factory=list,
+        description="API keys. Bare key -> tenant 'default'; '<key>|<tenant>' binds a tenant.",
+    )
+    public_endpoints: list[str] = Field(
+        default_factory=lambda: ["/v1/health"],
+        description="Paths accessible without auth (unauthenticated). Kept minimal.",
+    )
+    enforce_tenant_from_key: bool = Field(
+        default=True,
+        description="When true, the request tenant_id is forced to the key's bound tenant; "
+        "a body/header tenant_id that disagrees is rejected with 403.",
+    )
+
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def parse_api_keys(cls, v: Any) -> list[str]:
+        # Accept comma-separated string from env, or a list.
+        if isinstance(v, str):
+            return [k.strip() for k in v.split(",") if k.strip()]
+        if isinstance(v, (list, tuple)):
+            return [str(k).strip() for k in v if str(k).strip()]
+        return v if isinstance(v, list) else []
+
+    def key_to_tenant(self) -> dict[str, str]:
+        """Return {api_key: tenant_id} mapping from the configured key list."""
+        mapping: dict[str, str] = {}
+        for entry in self.api_keys:
+            if "|" in entry:
+                key, tenant = entry.split("|", 1)
+                mapping[key.strip()] = tenant.strip().lower() or "default"
+            else:
+                mapping[entry.strip()] = "default"
+        return mapping
+
+
 class AuditSettings(BaseSettings):
     """Audit logging configuration."""
 
@@ -141,6 +227,11 @@ class AuditSettings(BaseSettings):
     postgres_url: str | None = Field(default=None, description="PostgreSQL connection string")
     retention_days: int = Field(default=30, description="Audit log retention in days")
     tokenize_pii: bool = Field(default=True, description="Tokenize PII in audit logs")
+    max_inflight_writes: int = Field(
+        default=1000,
+        description="Max concurrent in-flight async Postgres writes per worker. "
+        "Beyond this, audit events fall back to JSONL to bound memory.",
+    )
 
 
 class TenantSettings(BaseSettings):
@@ -197,6 +288,7 @@ class NeuralGuardConfig(BaseSettings):
     scanner: ScannerSettings = Field(default_factory=ScannerSettings)
     action: ActionSettings = Field(default_factory=ActionSettings)
     audit: AuditSettings = Field(default_factory=AuditSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
     tenant: TenantSettings = Field(default_factory=TenantSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
 

@@ -495,6 +495,8 @@ class TestSimilarityScannerWithRealModel:
 
     @pytest.fixture
     def scanner(self) -> object:
+        pytest.importorskip("onnxruntime")
+        pytest.importorskip("tokenizers")
         from neuralguard.semantic.similarity import SimilarityScanner
 
         s = ScannerSettings(semantic_enabled=True)

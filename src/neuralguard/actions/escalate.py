@@ -53,6 +53,8 @@ class EscalateAction(BaseAction):
             "arbitration_reason": arbitration.arbitration_reason,
         }
         url = self.config.action.escalation_webhook_url
+        if url is None:
+            return False
 
         try:
             loop = asyncio.get_running_loop()

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from neuralguard.metrics import metrics
 from neuralguard.models.schemas import (
     AuditEvent,
     EvaluateRequest,
@@ -60,6 +61,9 @@ class AuditLogger:
         self._pg_available: bool = False
         self._pg_checked: bool = False
         self._write_counter: int = 0  # For periodic cleanup
+        self._inflight: set[Any] = set()  # tracked fire-and-forget DB write tasks
+        self._inflight_lock: Any = None
+        self._dropped_overflow: int = 0
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -137,6 +141,7 @@ class AuditLogger:
             elif self.settings.backend == "jsonl":
                 self._write_jsonl(event)
         except Exception as exc:
+            metrics.record_audit_failure(self.settings.backend)
             logger.error("audit_persist_failed", error=str(exc), event_id=event.event_id)
 
     def _persist_postgres(self, event: AuditEvent) -> None:
@@ -181,10 +186,11 @@ class AuditLogger:
                 metadata_=event.metadata or None,
             )
 
-            # Schedule the async insert — fire-and-forget with error logging
+            # Schedule the async insert — fire-and-forget WITH backpressure.
+            # We cap in-flight writes; beyond the cap we fall back to JSONL to
+            # bound memory under load (slow Postgres must not OOM the worker).
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._async_insert(orm_obj))
             except RuntimeError:
                 # No running event loop — fall back to JSONL
                 logger.warning(
@@ -194,6 +200,22 @@ class AuditLogger:
                 )
                 self._write_jsonl(event)
                 return
+
+            if len(self._inflight) >= self.settings.max_inflight_writes:
+                if not self._dropped_overflow:
+                    logger.warning(
+                        "audit_inflight_overflow",
+                        msg="In-flight DB write cap reached; falling back to JSONL for this event",
+                        event_id=event.event_id,
+                        cap=self.settings.max_inflight_writes,
+                    )
+                self._dropped_overflow += 1
+                self._write_jsonl(event)
+                return
+
+            task = loop.create_task(self._async_insert(orm_obj))
+            self._inflight.add(task)
+            task.add_done_callback(self._inflight.discard)
             self._pg_available = True
             self._pg_checked = True
 
@@ -313,7 +335,9 @@ class AuditLogger:
                 from datetime import date as date_type
 
                 file_date = date_type.fromisoformat(match.group(1))
-                return datetime(file_date.year, file_date.month, file_date.day, tzinfo=UTC).timestamp()
+                return datetime(
+                    file_date.year, file_date.month, file_date.day, tzinfo=UTC
+                ).timestamp()
             except ValueError:
                 pass
         # Fallback to mtime
@@ -336,14 +360,18 @@ class AuditLogger:
         import re as _re
 
         pii_patterns = [
-            _re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'),  # Email
-            _re.compile(r'(?:\+?\d{1,3}[\s.\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.\-]?\d{3,5}[\s.\-]?\d{3,5}'),  # Phone
-            _re.compile(r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b'),  # SSN-like
-            _re.compile(r'\b(?:4\d{12,18}|5[1-5]\d{10,14}|3[47]\d{11,13})\b'),  # CC
-            _re.compile(r'\bsk-(?:proj|org|[a-zA-Z0-9])-[a-zA-Z0-9_-]{20,}\b'),  # OpenAI key
-            _re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'),  # AWS key
-            _re.compile(r'\bgh[pous]_[a-zA-Z0-9]{36}\b'),  # GitHub token
-            _re.compile(r'(?:mongodb|postgres(?:ql)?|mysql|redis|amqp)://[^\s"\']{10,}'),  # Conn string
+            _re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),  # Email
+            _re.compile(
+                r"(?:\+?\d{1,3}[\s.\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.\-]?\d{3,5}[\s.\-]?\d{3,5}"
+            ),  # Phone
+            _re.compile(r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b"),  # SSN-like
+            _re.compile(r"\b(?:4\d{12,18}|5[1-5]\d{10,14}|3[47]\d{11,13})\b"),  # CC
+            _re.compile(r"\bsk-(?:proj|org|[a-zA-Z0-9])-[a-zA-Z0-9_-]{20,}\b"),  # OpenAI key
+            _re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),  # AWS key
+            _re.compile(r"\bgh[pous]_[a-zA-Z0-9]{36}\b"),  # GitHub token
+            _re.compile(
+                r'(?:mongodb|postgres(?:ql)?|mysql|redis|amqp)://[^\s"\']{10,}'
+            ),  # Conn string
         ]
 
         tokenized: dict[str, Any] = {}

@@ -8,10 +8,14 @@ services:
     environment:
       - NEURALGUARD_ENVIRONMENT=${NEURALGUARD_ENVIRONMENT:-production}
       - NEURALGUARD_LOG_LEVEL=${NEURALGUARD_LOG_LEVEL:-INFO}
+      - NEURALGUARD_AUTH_ENABLED=${NEURALGUARD_AUTH_ENABLED:-true}
+      - NEURALGUARD_AUTH_API_KEYS=${NEURALGUARD_AUTH_API_KEYS:-}
+      - NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=${NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP:-true}
+      - NEURALGUARD_SERVER_MAX_REQUEST_BODY_BYTES=${NEURALGUARD_SERVER_MAX_REQUEST_BODY_BYTES:-1048576}
       - NEURALGUARD_SCANNER_SEMANTIC_ENABLED=${SEMANTIC_ENABLED:-false}
       - NEURALGUARD_SCANNER_JUDGE_ENABLED=${JUDGE_ENABLED:-false}
       - NEURALGUARD_AUDIT_BACKEND=${AUDIT_BACKEND:-jsonl}
-      - NEURALGUARD_AUDIT_POSTGRES_URL=${AUDIT_POSTGRES_URL:-postgresql+asyncpg://neuralguard:changeme@postgres:5432/neuralguard}
+      - NEURALGUARD_AUDIT_POSTGRES_URL=${AUDIT_POSTGRES_URL:-postgresql+asyncpg://neuralguard:${POSTGRES_PASSWORD}@postgres:5432/neuralguard}
       - NEURALGUARD_AUDIT_JSONL_PATH=/data/audit
     volumes:
       - audit_data:/data/audit
@@ -25,18 +29,25 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+        reservations:
+          memory: 256m
 
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: neuralguard
       POSTGRES_USER: neuralguard
-      # ⚠️ CHANGE THIS IN PRODUCTION! Use a strong password via POSTGRES_PASSWORD env var.
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      # ⚠️ REQUIRED: set POSTGRES_PASSWORD in .env. No insecure default is provided.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # NOTE: No `ports:` mapping — the database is internal to the compose
+    # network only. Do not expose 5432 to the host in production.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U neuralguard -d neuralguard"]
       interval: 5s
@@ -44,6 +55,10 @@ services:
       retries: 5
       start_period: 5s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
 volumes:
   audit_data:

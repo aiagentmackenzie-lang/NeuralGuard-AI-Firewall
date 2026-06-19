@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import structlog
 
+from neuralguard.metrics import metrics
 from neuralguard.models.schemas import (
     EvaluateRequest,
     Finding,
@@ -295,11 +296,13 @@ class JudgeScanner(BaseScanner):
 
         # Call Ollama
         self._total_calls += 1
+        metrics.record_judge_call()
         try:
             judge_result = self._call_ollama(text)
         except httpx.TimeoutException:
             self._total_timeouts += 1
             self._circuit_breaker.record_failure()
+            metrics.record_judge_timeout()
             logger.warning("judge_timeout", timeout=f"{self.JUDGE_TIMEOUT_SECONDS}s")
             return self._result(
                 Verdict.ALLOW,
@@ -363,7 +366,7 @@ class JudgeScanner(BaseScanner):
             httpx.HTTPError: If Ollama returns an error.
         """
         model = self.settings.judge_model
-        url = self.DEFAULT_OLLAMA_URL
+        url = self.settings.judge_ollama_url or self.DEFAULT_OLLAMA_URL
 
         # Build the prompt
         user_prompt = JUDGE_USER_TEMPLATE.format(prompt=text[:2000])
@@ -423,8 +426,6 @@ class JudgeScanner(BaseScanner):
         confidence = min(1.0, max(0.0, float(parsed.get("confidence", 0.5))))
         reasoning = parsed.get("reasoning", "No reasoning provided")
 
-
-
         logger.info(
             "judge_verdict",
             verdict=verdict.value,
@@ -451,7 +452,8 @@ class JudgeScanner(BaseScanner):
         """
         # Try direct parse
         try:
-            return json.loads(content)
+            result: dict[str, Any] | None = json.loads(content)
+            return result
         except json.JSONDecodeError:
             pass
 
@@ -459,7 +461,8 @@ class JudgeScanner(BaseScanner):
         json_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", content, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1).strip())
+                result = json.loads(json_match.group(1).strip())
+                return result
             except json.JSONDecodeError:
                 pass
 
@@ -468,7 +471,8 @@ class JudgeScanner(BaseScanner):
         end = content.rfind("}")
         if start != -1 and end != -1 and end > start:
             try:
-                return json.loads(content[start : end + 1])
+                result = json.loads(content[start : end + 1])
+                return result
             except json.JSONDecodeError:
                 pass
 

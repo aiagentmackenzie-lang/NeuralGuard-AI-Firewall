@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
+
+from neuralguard.metrics import metrics
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -102,14 +104,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         if not self.settings.enabled:
-            return await call_next(request)
+            return cast("Response", await call_next(request))
 
         # Skip non-API paths
         if not request.url.path.startswith("/v1/"):
-            return await call_next(request)
+            return cast("Response", await call_next(request))
 
-        # Extract tenant ID from request body or header
-        tenant_id = request.headers.get("X-Tenant-ID", "default")
+        # Tenant identity: when auth is enabled, the authenticated principal
+        # (set by AuthMiddleware on request.state.auth_tenant) is authoritative.
+        # Falling back to the client-supplied X-Tenant-ID header is ONLY acceptable
+        # when auth is disabled (development). This prevents the rate-limit
+        # tenant-spoofing bypass.
+        auth_tenant = getattr(request.state, "auth_tenant", None)
+        tenant_id = auth_tenant or request.headers.get("X-Tenant-ID", "default")
 
         # Use tenant-specific limits (future: per-tenant config)
         rpm = self.settings.requests_per_minute
@@ -122,6 +129,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         )
 
         if not allowed:
+            metrics.record_rate_limit_hit()
             logger.warning(
                 "rate_limit_exceeded",
                 tenant=tenant_id,
@@ -138,7 +146,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(retry_after)},
             )
 
-        response = await call_next(request)
+        response = cast("Response", await call_next(request))
         response.headers["X-RateLimit-Limit"] = str(rpm)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response
