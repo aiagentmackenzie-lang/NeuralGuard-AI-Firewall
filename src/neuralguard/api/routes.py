@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from neuralguard.actions import ActionDispatcher
+from neuralguard.api.readiness import check_readiness
 from neuralguard.metrics import metrics
 from neuralguard.models.schemas import (
     EvaluateRequest,
@@ -303,6 +304,28 @@ async def health(
         scanners=scanners,
         uptime_seconds=uptime,
     )
+
+
+@router.get("/ready")
+async def ready(
+    request: Request,
+    config: NeuralGuardConfig = Depends(get_config),
+) -> JSONResponse:
+    """Readiness probe — can this worker safely accept traffic?
+
+    Returns 200 with ``status=healthy|degraded`` when the core (structural +
+    pattern scanners, required Redis) is functional, and 503
+    ``unhealthy`` when it is not. Optional components (semantic, judge,
+    postgres audit) degrading yields 200 ``degraded`` — the firewall still
+    serves with deterministic detection and JSONL audit fallback.
+
+    Auth-protected by default; add ``/v1/ready`` to
+    ``NEURALGUARD_AUTH_PUBLIC_ENDPOINTS`` for an unauthenticated kubelet probe.
+    """
+    _ = config  # auth enforced by AuthMiddleware on /v1/*
+    result = await check_readiness(request)
+    code = 200 if result.ready else 503
+    return JSONResponse(status_code=code, content=result.to_dict())
 
 
 @router.get("/info")
