@@ -81,8 +81,77 @@ LLM Provider / Local Model / Agent Framework
 | Phase 3 | Agent Guardian | 🔴 Not Started | Weeks 7-9 |
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
-**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete. 502 tests, ruff + mypy clean, 86% coverage gate (87.39% observed on a fresh checkout; ~90%+ with the semantic model present — see Key Metrics). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
+**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete. 510 tests, ruff + mypy clean, 86% coverage gate (87.45% observed on a fresh checkout; ~90%+ with the semantic model present — see Key Metrics). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
 **Next:** Phase 3 — Agent Guardian (multi-turn detection, prompt template analysis).
+
+---
+
+## Benchmarks: NeuralGuard vs NeuralStrike
+
+A benchmark measuring NeuralGuard's detection efficacy against its offensive
+sibling [NeuralStrike](https://github.com/aiagentmackenzie-lang/NeuralStrike).
+Sprint A shipped two phases (see [`docs/ROADMAP.md`](docs/ROADMAP.md)):
+
+> **Same-author caveat:** NeuralStrike (attacker) and NeuralGuard (defender)
+> are by the same author. This measures **defense-in-depth and regression**,
+> not neutral third-party independence. The live attacker uses a **local
+> 7B Ollama model** (no cloud API), so the ASR numbers are a *lower bound* on
+> what a frontier attacker would achieve — the value is the curve across
+> defender configs and the per-layer findings.
+
+### A1 — deterministic regression gate
+
+A labeled corpus (27 attacks / 45 benign) run against `/v1/evaluate` in the
+pattern-only baseline. This is the per-PR **CI gate**
+(`tests/benchmarks/test_a1_regression_gate.py`) and the hard ASR regression
+signal.
+
+| Metric | Result |
+|:--|--:|
+| Attack Success Rate (ASR) | **0.00%** (0 of 27 attacks allowed) |
+| False Positive Rate (FPR) | **0.00%** (0 of 45 benign over-blocked) |
+| Exact verdict match | 100.00% |
+
+### A2 — live NeuralStrike attacker across 3 defender configs
+
+Live `JailbreakForge` (iterative mutation) + `ContextPoison` prompts
+replayed through three NeuralGuard pipeline configurations
+(`mistral:7b`, 18 attacks / 45 benign):
+
+| Config | ASR | FPR | p95 latency |
+|:--|--:|--:|--:|
+| pattern_only | 50.00% | 0.00% | 2.4 ms |
+| pattern + semantic | 44.44% | 6.67% | 24.8 ms |
+| pattern + semantic + judge | 44.44% | 6.67% | 2388.8 ms |
+
+**Monotonic ASR drop across configs: TRUE** (each layer does not raise ASR).
+
+Findings (full detail in [`benchmarks/ng_vs_ns/results/A2_RESULTS.md`](benchmarks/ng_vs_ns/results/A2_RESULTS.md)):
+- The semantic layer drops ASR ~5.5pp but raises FPR to 6.67% (3 benign
+  translation/creative prompts `sanitize`'d at the default 0.75 threshold) —
+  a real production finding; threshold tuning tracked.
+- The judge adds ~2.4s p95 latency but no ASR benefit on this set (no
+  ambiguous-zone hits among survivors).
+- `ContextPoison` context-exhaustion (lorem-ipsum DoS) is undetected by all
+  layers — a future `T-DOS` rule gap.
+
+### Reproduce
+
+```bash
+# A1 (deterministic, no extra deps):
+uv run python -m benchmarks.ng_vs_ns.harness
+
+# A2 (live; needs Ollama + NeuralStrike + the [semantic] extra):
+uv pip install -e ../NeuralStrike
+uv sync --extra dev --extra db --extra semantic
+ollama pull mistral:7b
+uv run python -m benchmarks.ng_vs_ns.live_harness --attacker mistral:7b --judge mistral:7b
+```
+
+A nightly workflow ([`.github/workflows/bench.yml`](.github/workflows/bench.yml))
+re-runs the A1 gate (hard-fails on ASR regression) and the A2 `pattern_only`
+config (informational; the semantic/judge configs need the gitignored ONNX
+model and run locally). Full harness docs: [`benchmarks/ng_vs_ns/README.md`](benchmarks/ng_vs_ns/README.md).
 
 ---
 
