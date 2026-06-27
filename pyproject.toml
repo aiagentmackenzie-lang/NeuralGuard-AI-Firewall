@@ -94,6 +94,9 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 30
 addopts = "-v --tb=short"
+# Make the standalone `benchmarks/` package importable from tests (the A1
+# regression gate in tests/benchmarks/ imports benchmarks.ng_vs_ns.harness).
+pythonpath = ["."]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks integration tests",
