@@ -166,7 +166,7 @@ module** and that the **pattern scanner detects deterministically**:
 
 ---
 
-## Current baseline
+## Current baseline (A1)
 
 ```
 Attacks : 27  | ASR = 0.00%  | exact-match = 100.00%
@@ -175,3 +175,50 @@ PASS    : True
 ```
 
 Reproduce with `uv run python -m benchmarks.ng_vs_ns.harness`.
+
+---
+
+## A2 — live NeuralStrike attacker (local Ollama, skip-in-CI)
+
+A2 wires **live NeuralStrike** (`JailbreakForge` iterative mutation +
+`ContextPoison` templates) as the attacker against NeuralGuard in three
+defender configs and records ASR / FPR / p95 latency per config. It is a
+**local / nightly** harness — it skips in the per-PR CI runner (needs
+NeuralStrike installed, a running Ollama, and the `[semantic]` extra) so
+the per-PR gate stays A1. A3 will re-run it on a nightly schedule.
+
+**Local Ollama only — zero cloud API.** The attacker and the NeuralGuard
+judge both default to `mistral:7b`. A 7B attacker is weaker than a frontier
+cloud model, so the ASR numbers are a *lower bound on what a stronger
+attacker would achieve*; the value is the curve across configs and the
+per-layer findings.
+
+### Run
+
+```bash
+uv pip install -e ../NeuralStrike
+uv sync --extra dev --extra db --extra semantic
+ollama pull mistral:7b
+uv run python -m benchmarks.ng_vs_ns.live_harness --attacker mistral:7b --judge mistral:7b
+```
+
+### Reference snapshot (2026-06-27, mistral:7b, 18 attacks / 45 benign)
+
+| config | ASR | FPR | p95 |
+|:--|---:|---:|---:|
+| `pattern_only` | 50.00% | 0.00% | 2.4 ms |
+| `pattern_semantic` | 44.44% | 6.67% | 24.8 ms |
+| `pattern_semantic_judge` | 44.44% | 6.67% | 2388.8 ms |
+
+Monotonic ASR drop: **TRUE**. Findings (semantic-layer FPR regression on
+benign translation/creative prompts; judge adds latency but no ASR benefit
+on this set; ContextPoison `exhaust_context` undetected by all layers; 7B
+mutation evades pattern): see `results/A2_RESULTS.md` and the JSON
+snapshot `results/a2_results.json`.
+
+### A2 non-goals
+
+- MCPInterceptor (JSON-RPC proxy) is not a clean prompt generator —
+  deferred to A3 / Sprint B's multi-turn extension (B4).
+- No multi-turn attacks until Sprint B.
+- Not a neutral third-party benchmark (same author).
