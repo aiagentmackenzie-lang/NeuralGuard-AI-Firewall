@@ -64,6 +64,11 @@ class AuditLogger:
         self._inflight: set[Any] = set()  # tracked fire-and-forget DB write tasks
         self._inflight_lock: Any = None
         self._dropped_overflow: int = 0
+        # Tamper-evidence chain state (per-process chain; see logging.chain).
+        import uuid as _uuid
+
+        self._worker_id: str = _uuid.uuid4().hex
+        self._last_hash: str | None = None
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -123,9 +128,20 @@ class AuditLogger:
     # ── Persistence ───────────────────────────────────────────────────────
 
     def _persist(self, event: AuditEvent) -> None:
-        """Write audit event to configured backend."""
+        """Stamp the chain hash onto the event, then write to the backend.
+
+        The hash is computed here (before any persistence) so both the JSONL
+        and Postgres backends record the same tamper-evident event.
+        """
         if not self.settings.enabled:
             return
+
+        from neuralguard.logging.chain import compute_event_hash
+
+        event.worker_id = self._worker_id
+        event.prev_hash = self._last_hash
+        event.event_hash = compute_event_hash(event, self._last_hash)
+        self._last_hash = event.event_hash
 
         try:
             if self.settings.backend == "postgres":
@@ -184,6 +200,9 @@ class AuditLogger:
                 ],
                 scanner_details=event.scanner_details or None,
                 metadata_=event.metadata or None,
+                worker_id=event.worker_id,
+                prev_hash=event.prev_hash,
+                event_hash=event.event_hash,
             )
 
             # Schedule the async insert — fire-and-forget WITH backpressure.

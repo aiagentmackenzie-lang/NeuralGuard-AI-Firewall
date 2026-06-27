@@ -107,6 +107,9 @@ class TestAuditEventORMMapping:
             "threat_categories",
             "scanner_details",
             "metadata",
+            "worker_id",
+            "prev_hash",
+            "event_hash",
         }
         actual = {c.name for c in AuditEventORM.__table__.columns}
         assert actual == expected

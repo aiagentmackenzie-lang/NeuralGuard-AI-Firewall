@@ -98,6 +98,9 @@ class TestAuditEventORM:
             "threat_categories",
             "scanner_details",
             "metadata",
+            "worker_id",
+            "prev_hash",
+            "event_hash",
         }
         actual_columns = {c.name for c in AuditEventORM.__table__.columns}
         assert expected_columns == actual_columns
