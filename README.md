@@ -90,7 +90,8 @@ LLM Provider / Local Model / Agent Framework
 
 - **API docs** — OpenAPI auto-generated docs at `http://localhost:8000/docs` (development/staging only; hidden in production for safety).
 - **Runbooks** — [`docs/runbooks/tls_termination.md`](docs/runbooks/tls_termination.md), [`docs/runbooks/secret_rotation.md`](docs/runbooks/secret_rotation.md), [`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md).
-- **Production hardening ledger** — [`PRODUCTION_HARDENING_PLAN.md`](PRODUCTION_HARDENING_PLAN.md) (closed P0+P1 items, remaining P1-2 + P2).
+- **Production hardening ledger** — [`PRODUCTION_HARDENING_PLAN.md`](PRODUCTION_HARDENING_PLAN.md) (internal; closed P0+P1 items, remaining P2).
+- **Roadmap** — [`docs/ROADMAP.md`](docs/ROADMAP.md) (Sprint A: NeuralGuard↔NeuralStrike benchmark harness; Sprint B: Phase 3 Agent Guardian multi-turn detection; Sprint C: enterprise).
 - **Boot smoke test** — `./scripts/smoke_test.sh` (boots uvicorn + exercises every endpoint over HTTP).
 - **Load/perf gate** — `perf/perf_gate.py` (p95 + fail-closed-under-load).
 
