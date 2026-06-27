@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
     from neuralguard.config.settings import RateLimitSettings
+    from neuralguard.middleware.ratelimit_redis import RedisRateLimiter
 
 logger = structlog.get_logger(__name__)
 
@@ -91,16 +92,40 @@ class SlidingWindowCounter:
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Starlette middleware for per-tenant rate limiting."""
+    """Starlette middleware for per-tenant rate limiting.
+
+    Backend is selected by ``RateLimitSettings.backend``:
+    - ``memory``: per-process sliding window (single-worker only in prod).
+    - ``redis``: shared sliding window across workers (requires ``[redis]``).
+
+    A ``redis_client`` may be injected for testing (e.g. a ``fakeredis``
+    instance); otherwise the Redis limiter builds its own client from
+    ``settings.redis_url``.
+    """
 
     def __init__(
         self,
         app: Any,
         settings: RateLimitSettings,
+        redis_client: Any | None = None,
     ) -> None:
         super().__init__(app)
         self.settings = settings
-        self._counter = SlidingWindowCounter(window_seconds=60)
+        self._backend = settings.backend
+        self._counter: SlidingWindowCounter | None = None
+        self._redis: RedisRateLimiter | None = None
+        if settings.backend == "redis":
+            if not settings.redis_url and redis_client is None:
+                raise ValueError(
+                    "Rate-limit backend=redis requires redis_url or an injected client."
+                )
+            from neuralguard.middleware.ratelimit_redis import RedisRateLimiter
+
+            self._redis = RedisRateLimiter(settings, client=redis_client)
+            logger.info("ratelimit_backend", backend="redis")
+        else:
+            self._counter = SlidingWindowCounter(window_seconds=60)
+            logger.info("ratelimit_backend", backend="memory")
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         if not self.settings.enabled:
@@ -122,11 +147,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         rpm = self.settings.requests_per_minute
         burst = self.settings.burst_size
 
-        allowed, remaining, retry_after = self._counter.check(
-            key=f"rl:{tenant_id}",
-            limit=rpm,
-            burst=burst,
-        )
+        allowed: bool
+        remaining: int
+        retry_after: int
+        if self._redis is not None:
+            allowed, remaining, retry_after = await self._redis.check(
+                key=f"rl:{tenant_id}",
+                limit=rpm,
+                burst=burst,
+            )
+        else:
+            assert self._counter is not None
+            allowed, remaining, retry_after = self._counter.check(
+                key=f"rl:{tenant_id}",
+                limit=rpm,
+                burst=burst,
+            )
 
         if not allowed:
             metrics.record_rate_limit_hit()

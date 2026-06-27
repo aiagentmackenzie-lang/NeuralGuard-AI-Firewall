@@ -111,6 +111,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             raise RuntimeError(
                 "Production startup refused: no API keys configured. Set NEURALGUARD_AUTH_API_KEYS."
             )
+        # Multi-worker rate limiting: the in-memory limiter is per-process, so
+        # with workers > 1 a tenant gets (limit + burst) * workers requests per
+        # window. Refuse to start unless the Redis backend is configured.
+        if (
+            config.rate_limit.enabled
+            and config.server.workers > 1
+            and config.rate_limit.backend != "redis"
+        ):
+            raise RuntimeError(
+                f"Production startup refused: rate_limit.backend={config.rate_limit.backend} "
+                f"with server.workers={config.server.workers} allows a tenant to exceed the "
+                "rate limit by a factor of the worker count. Set "
+                "NEURALGUARD_RATELIMIT_BACKEND=redis and NEURALGUARD_RATELIMIT_REDIS_URL."
+            )
+        if (
+            config.rate_limit.enabled
+            and config.rate_limit.backend == "redis"
+            and not config.rate_limit.redis_url
+        ):
+            raise RuntimeError(
+                "Production startup refused: rate_limit.backend=redis but no redis_url set. "
+                "Set NEURALGUARD_RATELIMIT_REDIS_URL."
+            )
         # TLS enforcement: refuse plain HTTP unless explicitly allowed (behind a
         # TLS-terminating reverse proxy that the operator takes responsibility for).
         if not config.server.allow_insecure_http:
@@ -136,6 +159,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await dispose_engine()
         except Exception:
             pass  # Best-effort cleanup
+
+    # Close the Redis rate-limiter connection if one was created.
+    redis_limiter = getattr(app.state, "redis_limiter", None)
+    if redis_limiter is not None:
+        await redis_limiter.aclose()
 
     structlog.get_logger("neuralguard").info("shutdown")
 
@@ -215,6 +243,18 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     # Order matters: outermost first. Body-size limit must run BEFORE the app
     # parses JSON, so it is added first (outermost). Auth runs before rate
     # limiting so the rate limiter can key on the authenticated tenant.
+    #
+    # The Redis rate-limiter client (if backend=redis) is constructed here and
+    # stored on app.state so the lifespan can close it cleanly on shutdown.
+    redis_limiter: Any = None
+    redis_client_for_mw: Any = None
+    if config.rate_limit.enabled and config.rate_limit.backend == "redis":
+        from neuralguard.middleware.ratelimit_redis import RedisRateLimiter
+
+        redis_limiter = RedisRateLimiter(config.rate_limit)
+        redis_client_for_mw = redis_limiter.client
+        app.state.redis_limiter = redis_limiter
+
     cors_origins = config.server.cors_origins
     # In production, if cors_origins is empty, use a restrictive default (no CORS)
     if config.environment == "production" and not cors_origins:
@@ -232,7 +272,11 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
         allow_methods=["POST", "GET"],
         allow_headers=["Authorization", "Content-Type", "X-API-Key"],
     )
-    app.add_middleware(RateLimitMiddleware, settings=config.rate_limit)
+    app.add_middleware(
+        RateLimitMiddleware,
+        settings=config.rate_limit,
+        redis_client=redis_client_for_mw,
+    )
     app.add_middleware(AuthMiddleware, settings=config.auth)
     app.add_middleware(BodySizeMiddleware, max_bytes=config.server.max_request_body_bytes)
 

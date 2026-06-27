@@ -251,7 +251,18 @@ class TenantSettings(BaseSettings):
 
 
 class RateLimitSettings(BaseSettings):
-    """Rate limiting configuration."""
+    """Rate limiting configuration.
+
+    Backend selection:
+    - ``memory``: per-process sliding window. Correct for single-worker deploys.
+      With ``workers > 1`` each worker keeps its own counter, so a tenant can
+      make up to ``(limit + burst) * workers`` requests per window. The
+      production lifespan refuses to start in this configuration — use
+      ``redis`` for multi-worker deploys.
+    - ``redis``: shared sliding-window counter backed by Redis (ZSET + Lua).
+      Correct across workers. Requires the ``[redis]`` extra and a reachable
+      Redis at ``redis_url``.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="NEURALGUARD_RATELIMIT_",
@@ -260,6 +271,14 @@ class RateLimitSettings(BaseSettings):
     )
 
     enabled: bool = Field(default=True, description="Enable rate limiting")
+    backend: Literal["memory", "redis"] = Field(
+        default="memory",
+        description="Rate-limit backend. 'redis' is required for multi-worker production.",
+    )
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis URL (redis://[:password@]host:port/db). Required when backend=redis.",
+    )
     requests_per_minute: int = Field(default=60, description="Default RPM per tenant")
     burst_size: int = Field(default=10, description="Burst allowance")
     cost_based: bool = Field(
