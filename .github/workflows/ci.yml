@@ -27,10 +27,10 @@ jobs:
         run: uv sync --extra dev --extra db
 
       - name: Ruff check
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ tests/ perf/
 
       - name: Ruff format check
-        run: uv run ruff format --check src/ tests/
+        run: uv run ruff format --check src/ tests/ perf/
 
       - name: Mypy type check
         run: uv run mypy src/neuralguard/
