@@ -46,6 +46,10 @@ class AuditEventORM(Base):
     threat_categories: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     scanner_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
+    # Tamper-evidence chain (P1-4). Per-worker chain; see logging.chain.
+    worker_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
 
     __table_args__ = (Index("ix_audit_tenant_timestamp", "tenant_id", "timestamp"),)
 

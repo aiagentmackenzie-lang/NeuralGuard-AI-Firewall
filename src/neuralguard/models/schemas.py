@@ -252,7 +252,14 @@ class HealthResponse(BaseModel):
 
 
 class AuditEvent(BaseModel):
-    """Structured audit event for logging and compliance."""
+    """Structured audit event for logging and compliance.
+
+    Tamper-evidence: every event carries ``worker_id`` (the chain it belongs
+    to), ``prev_hash`` (the previous event's ``event_hash`` in this worker's
+    chain, or ``None`` for the chain head), and ``event_hash`` (SHA-256 over a
+    canonical encoding of the event plus ``prev_hash``). See
+    ``neuralguard.logging.chain``.
+    """
 
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     request_id: str
@@ -265,3 +272,8 @@ class AuditEvent(BaseModel):
     total_latency_ms: float
     scanner_details: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    worker_id: str | None = Field(default=None, description="Chain id (per process).")
+    prev_hash: str | None = Field(
+        default=None, description="Previous event's event_hash, or None for the chain head."
+    )
+    event_hash: str | None = Field(default=None, description="SHA-256 chain hash of this event.")

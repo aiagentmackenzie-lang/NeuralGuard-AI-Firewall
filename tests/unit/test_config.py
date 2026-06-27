@@ -5,6 +5,7 @@ import pytest
 from neuralguard.config.settings import (
     ActionSettings,
     AuditSettings,
+    AuthSettings,
     NeuralGuardConfig,
     RateLimitSettings,
     ScannerSettings,
@@ -94,3 +95,38 @@ class TestNeuralGuardConfig:
         monkeypatch.setenv("NEURALGUARD_SCANNER_MAX_INPUT_LENGTH", "50000")
         c = NeuralGuardConfig()
         assert c.scanner.max_input_length == 50000
+
+
+class TestAuthSettingsEnvParsing:
+    """Regression: the key|tenant format must parse from env.
+
+    pydantic-settings 2.14 raises SettingsError for a list[str] field when
+    the env value is not JSON. NoDecode + the parse_api_keys before-validator
+    keeps the documented comma-separated 'key|tenant' format working.
+    """
+
+    def test_pipe_tenant_format_from_env(self, monkeypatch):
+        monkeypatch.setenv("NEURALGUARD_AUTH_API_KEYS", "strong-key-1|acme,strong-key-2|demo")
+        s = AuthSettings()
+        assert s.key_to_tenant() == {"strong-key-1": "acme", "strong-key-2": "demo"}
+
+    def test_bare_key_defaults_to_default_tenant(self, monkeypatch):
+        monkeypatch.setenv("NEURALGUARD_AUTH_API_KEYS", "strong-key-1")
+        s = AuthSettings()
+        assert s.key_to_tenant() == {"strong-key-1": "default"}
+
+    def test_in_code_list_still_works(self):
+        s = AuthSettings(api_keys=["k1|a", "k2"])
+        assert s.key_to_tenant() == {"k1": "a", "k2": "default"}
+
+
+class TestRateLimitSettingsBackend:
+    def test_defaults_to_memory(self):
+        assert RateLimitSettings().backend == "memory"
+
+    def test_redis_backend_from_env(self, monkeypatch):
+        monkeypatch.setenv("NEURALGUARD_RATELIMIT_BACKEND", "redis")
+        monkeypatch.setenv("NEURALGUARD_RATELIMIT_REDIS_URL", "redis://localhost:6379/0")
+        s = RateLimitSettings()
+        assert s.backend == "redis"
+        assert s.redis_url == "redis://localhost:6379/0"

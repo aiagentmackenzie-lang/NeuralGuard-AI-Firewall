@@ -17,11 +17,19 @@ services:
       - NEURALGUARD_AUDIT_BACKEND=${AUDIT_BACKEND:-jsonl}
       - NEURALGUARD_AUDIT_POSTGRES_URL=${AUDIT_POSTGRES_URL:-postgresql+asyncpg://neuralguard:${POSTGRES_PASSWORD}@postgres:5432/neuralguard}
       - NEURALGUARD_AUDIT_JSONL_PATH=/data/audit
+      - NEURALGUARD_RATELIMIT_ENABLED=${NEURALGUARD_RATELIMIT_ENABLED:-true}
+      - NEURALGUARD_RATELIMIT_BACKEND=${NEURALGUARD_RATELIMIT_BACKEND:-memory}
+      - NEURALGUARD_RATELIMIT_REDIS_URL=${NEURALGUARD_RATELIMIT_REDIS_URL:-redis://redis:6379/0}
+      - NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE=${NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE:-60}
+      - NEURALGUARD_RATELIMIT_BURST_SIZE=${NEURALGUARD_RATELIMIT_BURST_SIZE:-10}
     volumes:
       - audit_data:/data/audit
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 30s
@@ -59,6 +67,25 @@ services:
       resources:
         limits:
           memory: 512m
+
+  redis:
+    # Shared rate-limit backend for multi-worker production
+    # (NEURALGUARD_RATELIMIT_BACKEND=redis). Not required for single-worker;
+    # harmless to run alongside a memory-backend deploy. Internal to the
+    # compose network only — do not expose 6379 to the host.
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
 
 volumes:
   audit_data:
