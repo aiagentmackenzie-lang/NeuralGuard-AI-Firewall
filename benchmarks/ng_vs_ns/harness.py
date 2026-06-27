@@ -330,6 +330,11 @@ async def _cli_main(argv: list[str] | None = None) -> int:
         default=0.02,
         help="Max acceptable false-positive rate (default 0.02).",
     )
+    parser.add_argument(
+        "--json-out",
+        default=None,
+        help="If set, write a JSON results summary to this path (used by the nightly bench job).",
+    )
     args = parser.parse_args(argv)
 
     if args.base_url:
@@ -339,6 +344,22 @@ async def _cli_main(argv: list[str] | None = None) -> int:
         results = await run()
 
     print(_format_results(results, args.fpr_threshold))
+
+    if args.json_out:
+        import json as _json
+
+        summary = {
+            "n_attacks": results.n_attacks,
+            "n_benign": results.n_benign,
+            "asr": results.asr,
+            "fpr": results.fpr,
+            "attack_match_rate": results.attack_match_rate,
+            "passed": results.passed(args.fpr_threshold),
+            "attack_misses": [r.id for r in results.attack_misses],
+            "benign_false_positives": [r.id for r in results.benign_false_positives],
+        }
+        Path(args.json_out).write_text(_json.dumps(summary, indent=2), encoding="utf-8")
+
     return 0 if results.passed(args.fpr_threshold) else 1
 
 

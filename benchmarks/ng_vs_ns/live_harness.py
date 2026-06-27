@@ -325,8 +325,19 @@ async def run(
     attacker_model: str = DEFAULT_ATTACKER_MODEL,
     judge_model: str = DEFAULT_JUDGE_MODEL,
     jb_iterations: int = JB_ITERATIONS,
+    configs: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Generate attacks once, replay across all configs, return results dict."""
+    """Generate attacks once, replay across the selected configs, return results dict.
+
+    By default runs all three configs. Pass ``configs`` (e.g. ``["pattern_only"]``)
+    to run a subset — used by the nightly CI job, which can only run
+    ``pattern_only`` honestly (the ONNX model is gitignored, so the semantic /
+    judge configs require a local model and are not reproducible on a runner).
+    """
+    selected_configs = configs if configs is not None else CONFIGS
+    for c in selected_configs:
+        if c not in CONFIGS:
+            raise ValueError(f"unknown config {c!r}; expected one of {CONFIGS}")
     if not await _ollama_ok(attacker_model):
         raise RuntimeError(
             f"Ollama not reachable on :11434 or model {attacker_model!r} not present. "
@@ -344,7 +355,7 @@ async def run(
     benign = _load_corpus(BENIGN_CORPUS)
 
     results: list[ConfigResult] = []
-    for config in CONFIGS:
+    for config in selected_configs:
         print(f"[A2] evaluating config={config} ...")
         t0 = time.perf_counter()
         res = await eval_config(config, attacks, benign, judge_model=judge_model)
@@ -358,6 +369,7 @@ async def run(
         "attacker_model": attacker_model,
         "judge_model": judge_model,
         "jb_iterations": jb_iterations,
+        "configs_run": selected_configs,
         "n_attacks": len(attacks),
         "n_benign": len(benign),
         "configs": [asdict(r) for r in results],
@@ -415,6 +427,12 @@ async def _cli_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attacker", default=DEFAULT_ATTACKER_MODEL, help="Local Ollama attacker model.")
     parser.add_argument("--judge", default=DEFAULT_JUDGE_MODEL, help="Local Ollama NeuralGuard judge model.")
     parser.add_argument("--jb-iterations", type=int, default=JB_ITERATIONS, help="JailbreakForge mutation rounds per goal.")
+    parser.add_argument(
+        "--configs",
+        default=",".join(CONFIGS),
+        help=f"Comma-separated subset of configs to run: {', '.join(CONFIGS)}. "
+        "CI uses 'pattern_only' (the ONNX model is gitignored).",
+    )
     parser.add_argument("--save", default=str(RESULTS_DIR / "a2_results.json"), help="Path to write the JSON results.")
     args = parser.parse_args(argv)
 
@@ -422,6 +440,7 @@ async def _cli_main(argv: list[str] | None = None) -> int:
         attacker_model=args.attacker,
         judge_model=args.judge,
         jb_iterations=args.jb_iterations,
+        configs=[c.strip() for c in args.configs.split(",") if c.strip()],
     )
     print(_format_results(payload))
 

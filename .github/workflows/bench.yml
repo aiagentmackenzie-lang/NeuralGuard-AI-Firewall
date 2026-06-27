@@ -1,0 +1,114 @@
+name: Bench gate
+
+on:
+  schedule:
+    # Nightly at 03:45 UTC — off-peak for shared runners (after the 03:30 perf gate).
+    - cron: "45 3 * * *"
+  workflow_dispatch:
+    inputs:
+      attacker:
+        description: "Local Ollama attacker model for the A2 live job"
+        required: false
+        default: "mistral:7b"
+
+permissions:
+  contents: read
+
+jobs:
+  # ── A1: deterministic regression gate (the hard ASR/FPR gate) ───────────
+  bench-a1:
+    name: A1 deterministic regression gate (ASR=0, FPR<2%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra db
+
+      - name: Run A1 regression gate
+        # Fails (non-zero exit) if ASR > 0 or FPR >= 2% on the deterministic
+        # corpus. This is the per-PR gate re-run nightly — the hard ASR
+        # regression signal.
+        run: |
+          uv run python -m benchmarks.ng_vs_ns.harness --json-out /tmp/a1_summary.json
+          cat /tmp/a1_summary.json
+
+      - name: Upload A1 summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bench-a1-summary
+          path: /tmp/a1_summary.json
+
+  # ── A2: live NeuralStrike attacker (informational; pattern_only in CI) ──
+  # The ONNX semantic model is gitignored, so the semantic/judge configs
+  # cannot run honestly on a runner. This job runs the pattern_only config
+  # against a live local-attacker NeuralStrike; the full 3-config run is
+  # done locally with the model present (see benchmarks/ng_vs_ns/results/
+  # A2_RESULTS.md). continue-on-error: the 7B attacker is stochastic, so
+  # this job tracks ASR trends and uploads the JSON — it does NOT hard-fail
+  # the nightly (A1 is the hard gate).
+  bench-a2-live:
+    name: A2 live NeuralStrike (pattern_only, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      # NeuralStrike is a sibling repo, checked out alongside NeuralGuard.
+      - name: Checkout NeuralStrike
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: aiagentmackenzie-lang/NeuralStrike
+          path: neuralstrike-src
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev --extra db
+          uv pip install -e ./neuralstrike-src
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama and pull attacker model
+        env:
+          ATTACKER: ${{ github.event.inputs.attacker || 'mistral:7b' }}
+        run: |
+          ollama serve >/tmp/ollama.log 2>&1 &
+          for _ in $(seq 1 40); do
+            curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+          curl -fsS http://localhost:11434/api/tags >/dev/null || { cat /tmp/ollama.log; exit 1; }
+          ollama pull "${ATTACKER}"
+
+      - name: Run A2 live benchmark (pattern_only)
+        env:
+          ATTACKER: ${{ github.event.inputs.attacker || 'mistral:7b' }}
+        run: |
+          uv run python -m benchmarks.ng_vs_ns.live_harness \
+            --configs pattern_only \
+            --attacker "${ATTACKER}" \
+            --judge "${ATTACKER}" \
+            --jb-iterations 3 \
+            --save /tmp/a2_results.json
+          cat /tmp/a2_results.json
+
+      - name: Upload A2 results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bench-a2-results
+          path: /tmp/a2_results.json
