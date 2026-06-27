@@ -151,6 +151,32 @@ jobs:
           path: |
             sbom.json
             sbom.xml
+  # ── Boot smoke ──────────────────────────────────────────────────────────
+  # P0-1: actually start uvicorn against a production-shaped config and
+  # exercise every endpoint over HTTP with auth. Catches env-parsing and
+  # wiring regressions that the ASGI/pytest suite cannot (it already caught
+  # the api_keys env-parsing bug fixed alongside this job).
+  boot-smoke:
+    name: Boot smoke (uvicorn + HTTP)
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run boot smoke test
+        run: |
+          chmod +x scripts/smoke_test.sh
+          ./scripts/smoke_test.sh
+
   # ── Semantic smoke ────────────────────────────────────────────────────
   # The headline semantic/judge feature relies on gitignored ONNX model
   # artifacts, so the main test job (which doesn't install [semantic]) only

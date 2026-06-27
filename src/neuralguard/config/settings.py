@@ -10,10 +10,10 @@ Uses pydantic-settings for layered configuration:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class ServerSettings(BaseSettings):
@@ -174,7 +174,7 @@ class AuthSettings(BaseSettings):
     )
 
     enabled: bool = Field(default=False, description="Enable API-key authentication")
-    api_keys: list[str] = Field(
+    api_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="API keys. Bare key -> tenant 'default'; '<key>|<tenant>' binds a tenant.",
     )
