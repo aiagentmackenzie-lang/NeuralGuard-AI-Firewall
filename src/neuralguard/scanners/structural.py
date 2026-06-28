@@ -17,9 +17,12 @@ import re
 import time
 import unicodedata
 import zlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog as _structlog
+
+if TYPE_CHECKING:
+    from neuralguard.config.settings import ScannerSettings  # noqa: F401
 
 from neuralguard.models.schemas import (
     EvaluateRequest,
@@ -135,7 +138,7 @@ MARKDOWN_INJECTION_PATTERN = re.compile(
 )
 
 
-class StructuralScanner(BaseScanner):
+class StructuralScanner(BaseScanner["ScannerSettings"]):
     """Layer 1: Structural validation and sanitization."""
 
     layer = ScanLayer.STRUCTURAL

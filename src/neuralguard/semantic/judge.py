@@ -202,7 +202,7 @@ class JudgeVerdict:
 # ── Judge Scanner ───────────────────────────────────────────────────────────
 
 
-class JudgeScanner(BaseScanner):
+class JudgeScanner(BaseScanner["ScannerSettings"]):
     """Layer 4: Gated LLM-as-Judge scanner.
 
     Only fires when the hybrid composite score is in the ambiguous zone

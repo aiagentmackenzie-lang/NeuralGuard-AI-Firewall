@@ -79,7 +79,7 @@ _SEMANTIC_RULE_PREFIX = "SEM"
 ESCALATE_FLOOR = 0.60
 
 
-class SimilarityScanner(BaseScanner):
+class SimilarityScanner(BaseScanner["ScannerSettings"]):
     """Layer 3: Semantic similarity scanner.
 
     Compares prompt embeddings against a corpus of known attack vectors.

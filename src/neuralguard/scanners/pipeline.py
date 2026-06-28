@@ -53,16 +53,17 @@ class ScannerPipeline:
 
     def __init__(self, config: NeuralGuardConfig) -> None:
         self.config = config
-        self._scanners: dict[ScanLayer, BaseScanner] = {}
+        self._scanners: dict[ScanLayer, BaseScanner[Any]] = {}
         self._layer_order: list[ScanLayer] = [
             ScanLayer.STRUCTURAL,
             ScanLayer.PATTERN,
+            ScanLayer.AGENT_GUARDIAN,
             ScanLayer.SEMANTIC,
             ScanLayer.JUDGE,
         ]
         self._hybrid_engine: Any = None  # Lazy init
 
-    def register_scanner(self, scanner: BaseScanner) -> None:
+    def register_scanner(self, scanner: BaseScanner[Any]) -> None:
         """Register a scanner for its layer."""
         self._scanners[scanner.layer] = scanner
         logger.info("scanner_registered", layer=scanner.layer.value)
@@ -80,6 +81,8 @@ class ScannerPipeline:
 
         # Config-level defaults
         layers = [ScanLayer.STRUCTURAL, ScanLayer.PATTERN]
+        if self.config.agent_guardian.enabled:
+            layers.append(ScanLayer.AGENT_GUARDIAN)
         if self.config.scanner.semantic_enabled:
             layers.append(ScanLayer.SEMANTIC)
         if self.config.scanner.judge_enabled:

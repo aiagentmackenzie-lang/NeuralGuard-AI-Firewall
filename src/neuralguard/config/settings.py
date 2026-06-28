@@ -312,6 +312,65 @@ class RateLimitSettings(BaseSettings):
     )
 
 
+class AgentGuardianSettings(BaseSettings):
+    """Agent Guardian — multi-turn detection (Phase 3, Sprint B).
+
+    A stateful scanner that keeps a bounded per-session sliding window of
+    turns and detects cross-turn attacks a single-turn scanner cannot see:
+    delayed / garden-path injection, role drift / persona erosion, and
+    accumulation attacks. Deterministic + heuristic (patterns + state),
+    optionally augmented by the existing judge. No LLM call in B1.
+
+    Backend selection:
+    - ``memory``: per-process sliding window. Correct for single-worker
+      deploys. With ``workers > 1`` each worker keeps its own window, so a
+      session that lands on different workers is not correlated — the
+      production lifespan refuses to start with ``backend=memory`` in
+      multi-worker production (mirrors the rate limiter rule).
+    - ``redis``: shared sliding window backed by Redis (reuses the P1-1
+      pattern). Correct across workers. Requires the ``[redis]`` extra and a
+      reachable Redis at ``redis_url``. (B1 ships the in-memory backend; the
+      Redis backend is a B1+ follow-up — the interface is designed for it.)
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NEURALGUARD_AGENT_GUARDIAN_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable the Agent Guardian scanner")
+    session_window_turns: int = Field(
+        default=10,
+        description="Max turns retained per session in the sliding window.",
+    )
+    backend: Literal["memory", "redis"] = Field(
+        default="memory",
+        description="State backend. 'redis' is required for multi-worker production.",
+    )
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis URL for the redis backend. Required when backend=redis.",
+    )
+    # Detection thresholds (per session window)
+    role_drift_threshold: int = Field(
+        default=2,
+        description="Min persona-redefinition signals across the window to flag role drift.",
+    )
+    extraction_probe_threshold: int = Field(
+        default=3,
+        description="Min system-prompt-extraction probes across the window to flag accumulation.",
+    )
+    memory_injection_threshold: int = Field(
+        default=2,
+        description="Min persistent-memory-injection directives across the window to flag accumulation.",
+    )
+    max_sessions: int = Field(
+        default=10_000,
+        description="Max sessions tracked in-memory before LRU eviction. Bounds memory.",
+    )
+
+
 class NeuralGuardConfig(BaseSettings):
     """Top-level configuration aggregating all sub-settings."""
 
@@ -336,6 +395,7 @@ class NeuralGuardConfig(BaseSettings):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     tenant: TenantSettings = Field(default_factory=TenantSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
+    agent_guardian: AgentGuardianSettings = Field(default_factory=AgentGuardianSettings)
 
 
 def load_config(config_path: Path | None = None) -> NeuralGuardConfig:

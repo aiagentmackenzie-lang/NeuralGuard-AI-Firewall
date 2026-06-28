@@ -532,7 +532,7 @@ ALL_PATTERN_SETS: list[tuple[ThreatCategory, list[tuple[str, Severity, float, st
 ]
 
 
-class PatternScanner(BaseScanner):
+class PatternScanner(BaseScanner["ScannerSettings"]):
     """Layer 2: Pattern detection engine — regex/heuristic scanner.
 
     Scans input text against 50+ compiled regex patterns across

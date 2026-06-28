@@ -20,12 +20,15 @@ from neuralguard.actions import ActionDispatcher
 from neuralguard.api.readiness import check_readiness
 from neuralguard.metrics import metrics
 from neuralguard.models.schemas import (
+    AnalyzeTemplateRequest,
+    AnalyzeTemplateResponse,
     EvaluateRequest,
     EvaluateResponse,
     HealthResponse,
     ScanLayer,
     ScanOutputRequest,
     ScanOutputResponse,
+    TemplateSinkFinding,
     Verdict,
 )
 
@@ -282,6 +285,66 @@ async def scan_output(
         )
 
     return audit_response
+
+
+@router.post("/analyze/template", response_model=AnalyzeTemplateResponse)
+async def analyze_template(
+    body: AnalyzeTemplateRequest,
+    request: Request,
+) -> AnalyzeTemplateResponse | JSONResponse:
+    """Statically analyze a system-prompt template for injection sinks (B2).
+
+    Pure static analysis — no LLM call, no scanner pipeline, no state. Returns
+    a list of sinks (untrusted-variable interpolation, missing delimiter
+    fences, ambiguous instruction precedence, action-adjacent variables, raw
+    structured-data injection) with severity + remediation. Use this to shift
+    injection-sink detection left, before a template is deployed.
+    """
+    # Enforce tenant binding against the authenticated API key.
+    _check_tenant_binding(request, body.tenant_id)
+
+    start = time.perf_counter()
+    logger.info(
+        "analyze_template_request",
+        tenant=body.tenant_id,
+        template_len=len(body.template),
+    )
+
+    try:
+        from neuralguard.analysis import TemplateAnalyzer
+
+        analyzer = TemplateAnalyzer()
+        result = analyzer.analyze(body.template)
+    except Exception as exc:
+        return _internal_error(exc, "/v1/analyze/template")
+
+    total_ms = (time.perf_counter() - start) * 1000
+    sinks = [
+        TemplateSinkFinding(
+            rule_id=s.rule_id,
+            severity=s.severity,  # type: ignore[arg-type]
+            description=s.description,
+            remediation=s.remediation,
+            evidence=s.evidence,
+            location=s.location,
+        )
+        for s in result.sinks
+    ]
+    response = AnalyzeTemplateResponse(
+        tenant_id=body.tenant_id,
+        is_clean=result.is_clean,
+        sink_count=len(sinks),
+        sinks=sinks,
+        total_latency_ms=total_ms,
+    )
+    logger.info(
+        "analyze_template_response",
+        tenant=body.tenant_id,
+        is_clean=result.is_clean,
+        sink_count=len(sinks),
+        latency_ms=f"{total_ms:.2f}",
+    )
+    return response
 
 
 @router.get("/health", response_model=HealthResponse)

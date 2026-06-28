@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from neuralguard.models.schemas import (
     EvaluateRequest,
@@ -19,10 +19,12 @@ from neuralguard.models.schemas import (
 )
 
 if TYPE_CHECKING:
-    from neuralguard.config.settings import ScannerSettings
+    from pydantic_settings import BaseSettings
+
+SettingsT = TypeVar("SettingsT", bound="BaseSettings")
 
 
-class BaseScanner(ABC):
+class BaseScanner(ABC, Generic[SettingsT]):
     """Abstract base class for all NeuralGuard scanners.
 
     Contract:
@@ -34,7 +36,7 @@ class BaseScanner(ABC):
 
     layer: ScanLayer
 
-    def __init__(self, settings: ScannerSettings) -> None:
+    def __init__(self, settings: SettingsT) -> None:
         self.settings = settings
 
     @abstractmethod
