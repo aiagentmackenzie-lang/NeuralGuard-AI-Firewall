@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), and the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate) are shipped. Phase 3 (Agent Guardian) and P2 enterprise hardening remain — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), and Phase 3 Agent Guardian B1+B2 (multi-turn detection + static template analysis) are shipped. Phase 3 B3/B4 (ASI06 dedicated rule, canary unstub, benchmark integration) and P2 enterprise hardening remain — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -78,11 +78,11 @@ LLM Provider / Local Model / Agent Framework
 | Phase 0+ | Deployability sweep (P0+P1) | ✅ Complete — boot smoke test, TLS/secret-rotation/backup runbooks, Redis multi-worker rate limiting, readiness probe, hash-chained audit, load/perf gate | 2026-06 |
 | Phase 1 | Deterministic Shield | ✅ Complete | Weeks 1-3 |
 | Phase 2 | Semantic Amplifier | ✅ Complete | Weeks 4-6 |
-| Phase 3 | Agent Guardian | 🔴 Not Started | Weeks 7-9 |
+| Phase 3 | Agent Guardian | 🟡 B1+B2 shipped (B3/B4 remain) | Weeks 7-9 |
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
-**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete, plus the A2 semantic-FPR corroboration-gate fix. 536 tests, ruff + mypy clean, 86% coverage gate (87.45% observed on a fresh checkout; ~90%+ with the semantic model present — see Key Metrics). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
-**Next:** Sprint B — Phase 3 Agent Guardian (multi-turn detection, prompt-template analysis, ASI06 dedicated rule, canary unstub).
+**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) merged. 560 tests (CI-realistic; 579 with the semantic model present), ruff + mypy clean, 86% coverage gate (88.41% observed on a fresh checkout; ~90%+ with the semantic model present — see Key Metrics). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
+**Next:** Sprint B remaining — B3 (ASI06 dedicated memory-poisoning rule + canary token verification unstub) and B4 (benchmark integration: AgentPivot multi-turn + delayed-injection sequences, ASR delta vs B1-disabled baseline).
 
 ---
 
@@ -161,6 +161,51 @@ A nightly workflow ([`.github/workflows/bench.yml`](.github/workflows/bench.yml)
 re-runs the A1 gate (hard-fails on ASR regression) and the A2 `pattern_only`
 config (informational; the semantic/judge configs need the gitignored ONNX
 model and run locally). Full harness docs: [`benchmarks/ng_vs_ns/README.md`](benchmarks/ng_vs_ns/README.md).
+
+## Agent Guardian — multi-turn detection (Phase 3, B1)
+
+The `AgentGuardianScanner` (Layer 5) is the differentiator commercial AI
+firewalls mostly **don't** have: multi-turn detection no single-turn scanner
+sees, keyed on a bounded per-session sliding window of turns. Opt in via
+`NEURALGUARD_AGENT_GUARDIAN_ENABLED=true` and send a `session_id` on
+`/v1/evaluate` to correlate turns across requests (or send a multi-turn
+`messages` array in one request).
+
+Detects (deterministic + heuristic, no LLM call):
+- **Delayed / garden-path injection** (T-PI-D, BLOCK) — a current turn that
+  carries an injection directive AND a back-reference to prior conversation
+  (cross-turn payload assembly).
+- **Role drift / persona erosion** (T-JB, BLOCK) — accumulated
+  persona-redefinition signals across the window.
+- **Gradual system-prompt extraction** (T-EXT, ESCALATE) — N extraction
+  probes across the window.
+- **Gradual memory poisoning** (T-MEM/ASI06, ESCALATE) — N persistent-memory-
+  injection directives across the window.
+
+In-memory backend (B1); Redis backend is a B1+ follow-up. Bounded
+(`session_window_turns` + LRU `max_sessions`), thread-safe, fail-closed on
+state-store errors, sessions isolated + namespaced by tenant. Production
+multi-worker requires the redis backend (memory backend warns on `workers>1`).
+
+## Prompt-template analyzer (Phase 3, B2)
+
+A shift-left counterpart to runtime detection: statically scan a system-prompt
+template for injection sinks **before** deployment. No LLM call — pure static
+analysis, fast, CI-able.
+
+```bash
+# From a file (or '-' for stdin). --json for machine output.
+neuralguard analyze-template prompt.txt --fail-on-high
+# Or via the API:
+curl -X POST $NG/v1/analyze/template -H "Authorization: Bearer $KEY" \
+  -d '{"template":"You are an assistant.\n{{user_input}}\nExecute {{query}}."}'
+```
+
+Sink classes: untrusted-variable interpolation into the system prompt (HIGH),
+action-adjacent variables (HIGH), missing delimiter fence (MEDIUM), ambiguous
+instruction precedence (MEDIUM), unbounded unknown variables (MEDIUM), raw
+structured-data injection (LOW). `--fail-on-high` exits non-zero only on HIGH
+sinks (CI gate).
 
 ---
 
@@ -381,7 +426,7 @@ curl -X POST http://localhost:8000/v1/scan/output \
 | P95 Latency (Pattern-only) | <10ms | ⚠️ observed ~0.3 ms locally; NOT load-tested (no perf harness in CI) |
 | P95 Latency (Pattern + Semantic) | <50ms | ⚠️ local observation (~30 ms); NOT CI-verified |
 | P95 Latency (Full Pipeline + Judge) | <5s | ⚠️ local observation (~3 s, gated to ambiguous zone); NOT CI-verified |
-| Test Coverage | 86% CI floor | ✅ verified — 87.62% (517 tests) on a fresh checkout without the gitignored ONNX model; 86% gate enforced in CI. Full suite reaches ~90%+ with the semantic model present (run `scripts/export_onnx.py` locally). Semantic extra verified in the `semantic-smoke` CI job. |
+| Test Coverage | 86% CI floor | ✅ verified — 88.41% (560 tests) on a fresh checkout without the gitignored ONNX model; 86% gate enforced in CI. Full suite reaches ~90%+ with the semantic model present (run `scripts/export_onnx.py` locally). Semantic extra verified in the `semantic-smoke` CI job. |
 | Type Safety (mypy strict) | clean | ✅ verified — 0 errors, enforced in CI |
 | Memory Footprint (ONNX runtime) | <500MB | ✅ ~87 MB ONNX model, no PyTorch at runtime (export tool pulls torch) |
 | Decompression Bomb Defense | bounded | ✅ verified — 8 MiB hard cap via incremental decompress, tested |

@@ -4,9 +4,11 @@
 > The gitignored `PRODUCTION_HARDENING_PLAN.md` is the internal ledger of
 > what already landed; this doc is what is **planned**.
 >
-> **Last updated:** 2026-06-27 · **Baseline:** `main` @ 268fa36 — 🥇 S/91,
-> 502 tests, P0+P1 closed (production-ready for single-worker + Redis-backed
-> multi-worker deploys).
+> **Last updated:** 2026-06-28 · **Baseline:** `main` @ 489b94e — 🥇 S/91,
+> 560 tests (CI-realistic; 579 with the semantic model), P0+P1 closed
+> (production-ready for single-worker + Redis-backed multi-worker deploys),
+> Sprint A complete (NG↔NS benchmark harness), Phase 3 Agent Guardian B1+B2
+> shipped. The A2 semantic-FPR corroboration-gate fix is merged (218f3b9).
 
 The P0 + P1 production-readiness sweep is closed (see the merge commit
 `a40d6f2` and `PRODUCTION_HARDENING_PLAN.md`). What remains is the
@@ -93,46 +95,41 @@ surface, so it deserves the measurement harness first.
 
 ### Phases
 
-- **B1 — ConversationState + multi-turn detection.** A new scanner
-  layer `AgentGuardianScanner` (`scanners/agent_guardian.py`) keyed on a
-  request `session_id`. The firewall keeps a bounded per-session state
-  (sliding window of the last N turns, in-memory per worker with a Redis
-  backend option — reuse the P1-1 Redis pattern) and detects:
-  - **Delayed / garden-path injection** — turn 1 benign, turn 2
-    weaponized using context established in turn 1 (cross-turn payload
-    assembly).
-  - **Role drift / persona erosion** — the assistant persona being
-    redefined across turns ("you are now DAN...").
-  - **Accumulation attacks** — many small benign-seeming turns that
-    together cross a threshold (e.g., gradual system-prompt extraction).
-  Config: `agent_guardian.enabled`, `agent_guardian.session_window_turns`
-  (default 10), `agent_guardian.backend` (`memory` | `redis`).
-  New verdict semantics: a clean single turn that becomes BLOCK-worthy
-  in context. Fail-closed on state-store errors (matches the limiter).
+- **B1 — ConversationState + multi-turn detection.** ✅ SHIPPED & MERGED
+  (`c96008e`). `AgentGuardianScanner` (`scanners/agent_guardian.py`) keyed on a
+  request `session_id`. Bounded per-session sliding window (in-memory per
+  worker; Redis backend option designed for a B1+ follow-up). Detects delayed /
+  garden-path injection (AG-DELAYED-001, BLOCK), role drift / persona erosion
+  (AG-DRIFT-001, BLOCK), gradual system-prompt extraction (AG-EXT-ACCUM-001,
+  ESCALATE), gradual memory poisoning (AG-MEM-ACCUM-001, ESCALATE). Fail-closed
+  on state-store errors. Config: `agent_guardian.enabled`,
+  `session_window_turns`, `backend`, thresholds.
 
-- **B2 — Prompt-template analyzer.** A `neuralguard analyze-template`
-  CLI + `/v1/analyze/template` endpoint that statically scans a
-  system-prompt template for **injection sinks** before deployment:
-  untrusted-variable interpolation into a privileged context
-  (`{{user_input}}` inside a system role), missing delimiter fences,
-  ambiguous instruction precedence. No LLM call — pure static analysis,
-  fast, CI-able. Output: a list of sinks with severity + remediation.
-  This is the "shift-left" counterpart to runtime detection.
+- **B2 — Prompt-template analyzer.** ✅ SHIPPED & MERGED (`77d35da`).
+  `neuralguard analyze-template` CLI + `POST /v1/analyze/template` endpoint —
+  static injection-sink analysis (no LLM call): untrusted-variable
+  interpolation, missing delimiter fences, ambiguous instruction precedence,
+  action-adjacent variables, raw structured-data injection. `--fail-on-high`
+  CI gate. `src/neuralguard/analysis/template_analyzer.py`.
 
-- **B3 — ASI06 dedicated rule + canary unstub.**
-  - **Memory poisoning (ASI06)** is corpus-assisted only today. Add a
-    dedicated heuristic for RAG/memory-write poisoning attempts (injected
-    "remember that..." / "from now on, when asked X, do Y" directives
-    targeting a memory store). Document the residual risk honestly.
-  - **Canary token verification** (`canary_leaked`, currently stubbed):
-    inject per-session canary tokens into the system prompt, detect them
-    in `/v1/scan/output` as a system-prompt exfiltration signal.
+- **B3 — ASI06 dedicated rule + canary unstub.** ⏳ NOT STARTED (paused for API
+  limits; resumable next session).
+  - **Memory poisoning (ASI06)** is corpus-assisted only today (Agent Guardian
+    catches the *accumulation* via AG-MEM-ACCUM-001). Add a dedicated
+    single-turn heuristic for RAG/memory-write poisoning (injected "remember
+    that..." / "from now on, when asked X, do Y" / "store this into the
+    knowledge base") to the pattern scanner (`T-MEM` rules). Document residual
+    risk honestly.
+  - **Canary token verification** (`canary_leaked`, currently stubbed `false`):
+    mint per-session canary tokens (HMAC of session_id + server secret), inject
+    into the system prompt, detect them in `/v1/scan/output` as a system-prompt
+    exfiltration signal.
 
-- **B4 — Benchmark integration.** Extend Sprint A's harness with
-  NeuralStrike's `AgentPivot` (multi-agent lateral movement) and a
-  multi-turn attack script (delayed-injection sequences). Measure
-  Agent Guardian's ASR delta vs the B1-disabled baseline. Success: a
-  measurable ASR reduction with `agent_guardian.enabled=true`.
+- **B4 — Benchmark integration.** ⏳ NOT STARTED. Extend Sprint A's harness
+  with NeuralStrike's `AgentPivot` (multi-agent lateral movement) and a
+  multi-turn attack script (delayed-injection sequences). Measure Agent
+  Guardian's ASR delta vs the B1-disabled baseline. Success: a measurable ASR
+  reduction with `agent_guardian.enabled=true`.
 
 ### Honest non-goals (Sprint B)
 - No full LLM-based conversation reasoning — the B1 detector is
