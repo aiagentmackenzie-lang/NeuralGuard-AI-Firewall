@@ -1,11 +1,55 @@
-"""NeuralGuard CLI — command-line interface for server management."""
+"""NeuralGuard CLI — command-line interface for server + template analysis."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from neuralguard.main import main as serve_main
+
+
+def _cmd_analyze_template(args: argparse.Namespace) -> int:
+    """`neuralguard analyze-template <file|->` — static injection-sink analysis."""
+    from neuralguard.analysis import TemplateAnalyzer
+
+    if args.template == "-":
+        template = sys.stdin.read()
+    else:
+        from pathlib import Path
+
+        try:
+            template = Path(args.template).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"error: cannot read {args.template!r}: {exc}", file=sys.stderr)
+            return 2
+
+    if not template.strip():
+        print("error: template is empty", file=sys.stderr)
+        return 2
+
+    analyzer = TemplateAnalyzer()
+    result = analyzer.analyze(template)
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+        return 0 if result.is_clean else 1
+
+    # Human-readable text output.
+    if result.is_clean:
+        print(f"clean: no injection sinks found ({len(template)} chars).")
+        return 0
+
+    print(f"found {len(result.sinks)} injection sink(s):\n")
+    severity_order = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    for sink in sorted(result.sinks, key=lambda s: (severity_order.get(s.severity, 9), s.location)):
+        print(f"  [{sink.severity.upper():<6}] {sink.rule_id}  (line {sink.location})")
+        print(f"          {sink.description}")
+        print(f"          evidence: {sink.evidence}")
+        print(f"          fix: {sink.remediation}\n")
+    # Exit non-zero so CI gates can fail on sinks (e.g. high-severity only).
+    has_high = any(s.severity == "high" for s in result.sinks)
+    return 1 if (args.fail_on_high and has_high) else 0
 
 
 def main() -> None:
@@ -26,6 +70,27 @@ def main() -> None:
     # version
     subparsers.add_parser("version", help="Print version")
 
+    # analyze-template (B2)
+    at = subparsers.add_parser(
+        "analyze-template",
+        help="Statically analyze a system-prompt template for injection sinks.",
+    )
+    at.add_argument(
+        "template",
+        help="Path to the template file, or '-' to read from stdin.",
+    )
+    at.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of human-readable text.",
+    )
+    at.add_argument(
+        "--fail-on-high",
+        action="store_true",
+        help="Exit non-zero only if a HIGH-severity sink is found (for CI gates).",
+    )
+    at.set_defaults(func=_cmd_analyze_template)
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -33,6 +98,9 @@ def main() -> None:
 
         print(f"NeuralGuard v{__version__}")
         sys.exit(0)
+
+    if args.command == "analyze-template":
+        sys.exit(args.func(args))
 
     if args.command == "serve" or args.command is None:
         # Override config with CLI args

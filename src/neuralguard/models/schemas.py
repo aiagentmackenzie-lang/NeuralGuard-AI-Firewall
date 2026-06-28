@@ -167,6 +167,50 @@ class ScanOutputRequest(BaseModel):
         return v
 
 
+class TemplateSinkFinding(BaseModel):
+    """A static injection sink found in a prompt template (B2)."""
+
+    rule_id: str
+    severity: Literal["high", "medium", "low", "info"]
+    description: str
+    remediation: str
+    evidence: str
+    location: int = Field(ge=1, description="1-indexed line number of the sink")
+
+
+class AnalyzeTemplateRequest(BaseModel):
+    """Request to statically analyze a system-prompt template for injection sinks."""
+
+    template: str = Field(
+        description=(
+            "The system-prompt template to analyze. May contain placeholders "
+            "like {{var}}, ${var}, {var}, or <user_input>."
+        ),
+        min_length=1,
+        max_length=64_000,
+    )
+    tenant_id: str = Field(default="default", description="Tenant identifier")
+
+    @field_validator("template")
+    @classmethod
+    def template_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Template must not be empty or whitespace-only")
+        return v
+
+
+class AnalyzeTemplateResponse(BaseModel):
+    """Response from the template analyzer endpoint."""
+
+    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tenant_id: str
+    is_clean: bool
+    sink_count: int
+    sinks: list[TemplateSinkFinding] = Field(default_factory=list)
+    total_latency_ms: float
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 # ── Internal Models ────────────────────────────────────────────────────────
 
 
