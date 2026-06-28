@@ -127,7 +127,12 @@ class TestPipelineArbitration:
         # Use a pipeline with no registered scanners; _arbitrate is pure.
         pipeline = ScannerPipeline.__new__(ScannerPipeline)  # bypass __init__
         pipeline.config = type(
-            "C", (), {"scanner": config, "action": type("A", (), {"fail_closed": True})()}
+            "C",
+            (),
+            {
+                "scanner": config,
+                "action": type("A", (), {"fail_closed": True, "judge_resolves_escalate": False})(),
+            },
         )()
 
         cases = [

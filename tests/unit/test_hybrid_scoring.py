@@ -220,9 +220,56 @@ class TestHybridVerdictMapping:
         result = engine.score(results)
         assert result.verdict == Verdict.BLOCK
 
-    def test_medium_score_sanitizes(self, engine: HybridScoringEngine) -> None:
-        """Composite 0.60-0.84 -> SANITIZE."""
-        # Create a scenario where composite lands in sanitize range
+    def test_medium_score_sanitizes_with_corroboration(self, engine: HybridScoringEngine) -> None:
+        """Composite 0.60-0.84 with pattern corroboration -> SANITIZE."""
+        # Pattern + semantic: composite lands in sanitize range, pattern corroborates.
+        pattern_findings = [
+            _finding(layer=ScanLayer.PATTERN, confidence=0.50, verdict=Verdict.SANITIZE)
+        ]
+        semantic_findings = [
+            _finding(layer=ScanLayer.SEMANTIC, confidence=0.80, verdict=Verdict.ESCALATE)
+        ]
+        results = [
+            _scanner_result(ScanLayer.PATTERN, Verdict.SANITIZE, pattern_findings),
+            _scanner_result(ScanLayer.SEMANTIC, Verdict.ESCALATE, semantic_findings),
+        ]
+        result = engine.score(results)
+        # composite = 0.6*0.5 + 0.4*0.8 = 0.30 + 0.32 = 0.62 -> SANITIZE (corroborated)
+        assert result.verdict == Verdict.SANITIZE
+
+    def test_semantic_only_ambiguous_escalates_not_sanitize(
+        self, engine: HybridScoringEngine
+    ) -> None:
+        """A lone ambiguous semantic match (0.60-0.74) -> ESCALATE, not SANITIZE.
+
+        This is the A2 FPR fix: benign creative / translation prompts that match
+        the attack corpus at 0.60-0.74 must not have their content modified
+        (SANITIZE) on a single ambiguous signal. They ESCALATE so the judge can
+        resolve them without content mutation.
+        """
+        findings = [_finding(layer=ScanLayer.SEMANTIC, confidence=0.70, verdict=Verdict.ESCALATE)]
+        results = [_scanner_result(ScanLayer.SEMANTIC, Verdict.ESCALATE, findings)]
+        result = engine.score(results)
+        assert result.composite == 0.70
+        assert result.verdict == Verdict.ESCALATE
+
+    def test_semantic_only_high_similarity_sanitizes(self, engine: HybridScoringEngine) -> None:
+        """Semantic-only at/above the BLOCK floor (0.75) still SANITIZEs from the
+        hybrid engine; the SimilarityScanner also returns BLOCK, so Layer
+        Arbitration keeps the BLOCK. The hybrid verdict stays SANITIZE/ESCALATE
+        only below the block floor."""
+        findings = [_finding(layer=ScanLayer.SEMANTIC, confidence=0.76, verdict=Verdict.BLOCK)]
+        results = [_scanner_result(ScanLayer.SEMANTIC, Verdict.BLOCK, findings)]
+        result = engine.score(results)
+        # composite 0.76 < 0.85 block, but semantic_max 0.76 >= 0.75 floor -> SANITIZE
+        assert result.verdict == Verdict.SANITIZE
+
+    def test_corroboration_gate_disabled_restores_sanitize(self) -> None:
+        """With semantic_sanitize_requires_corroboration=False, a lone ambiguous
+        semantic match SANITIZEs again (pre-fix behavior)."""
+        config = NeuralGuardConfig()
+        config.action.semantic_sanitize_requires_corroboration = False
+        engine = HybridScoringEngine(config)
         findings = [_finding(layer=ScanLayer.SEMANTIC, confidence=0.70, verdict=Verdict.ESCALATE)]
         results = [_scanner_result(ScanLayer.SEMANTIC, Verdict.ESCALATE, findings)]
         result = engine.score(results)

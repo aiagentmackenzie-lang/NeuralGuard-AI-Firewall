@@ -185,3 +185,154 @@ class TestLayerArbitration:
 
         result = pipeline.execute(EvaluateRequest(prompt="test"))
         assert result.verdict == Verdict.BLOCK
+
+
+class TestJudgeResolvesEscalate:
+    """Judge resolution of the ambiguous ESCALATE zone (A2 FPR fix)."""
+
+    def test_clean_judge_allow_resolves_escalate_to_allow(self, config):
+        """A clean LLM-Judge ALLOW downgrades a hybrid ESCALATE to ALLOW (opt-in)."""
+        config.action.judge_resolves_escalate = True
+        config.scanner.semantic_enabled = True
+        config.scanner.judge_enabled = True
+        config.action.fail_closed = False
+        pipeline = ScannerPipeline(config)
+        pipeline.register_scanner(
+            MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.STRUCTURAL)
+        )
+        pipeline.register_scanner(
+            MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.PATTERN)
+        )
+        pipeline.register_scanner(
+            MockScanner(
+                config.scanner,
+                Verdict.ESCALATE,
+                findings=[
+                    Finding(
+                        category=ThreatCategory.PROMPT_INJECTION_DIRECT,
+                        severity=Severity.MEDIUM,
+                        verdict=Verdict.ESCALATE,
+                        confidence=0.68,
+                        layer=ScanLayer.SEMANTIC,
+                        rule_id="SEM-001",
+                        description="ambiguous semantic match",
+                    )
+                ],
+                layer=ScanLayer.SEMANTIC,
+            )
+        )
+        pipeline.register_scanner(MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.JUDGE))
+        result = pipeline.execute(EvaluateRequest(prompt="test"))
+        assert result.verdict == Verdict.ALLOW
+        assert "judge_resolve" in result.arbitration_reason
+
+    def test_errored_judge_does_not_resolve_escalate(self, config):
+        """A timed-out/errored judge does NOT resolve ESCALATE (pre-judge stands)."""
+        from neuralguard.models.schemas import ScannerResult
+
+        config.action.judge_resolves_escalate = True
+        config.scanner.semantic_enabled = True
+        config.scanner.judge_enabled = True
+        config.action.fail_closed = False
+        pipeline = ScannerPipeline(config)
+        pipeline.register_scanner(
+            MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.STRUCTURAL)
+        )
+        pipeline.register_scanner(
+            MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.PATTERN)
+        )
+        pipeline.register_scanner(
+            MockScanner(
+                config.scanner,
+                Verdict.ESCALATE,
+                findings=[
+                    Finding(
+                        category=ThreatCategory.PROMPT_INJECTION_DIRECT,
+                        severity=Severity.MEDIUM,
+                        verdict=Verdict.ESCALATE,
+                        confidence=0.68,
+                        layer=ScanLayer.SEMANTIC,
+                        rule_id="SEM-001",
+                        description="ambiguous semantic match",
+                    )
+                ],
+                layer=ScanLayer.SEMANTIC,
+            )
+        )
+        timeout_result = ScannerResult(
+            layer=ScanLayer.JUDGE,
+            verdict=Verdict.ALLOW,
+            findings=[],
+            latency_ms=1.0,
+            error="Judge timed out after 5s",
+        )
+        judge = MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.JUDGE)
+        judge.scan = lambda req, ctx=None: timeout_result
+        judge.safe_scan = lambda req, ctx=None: timeout_result
+        pipeline.register_scanner(judge)
+        result = pipeline.execute(EvaluateRequest(prompt="test"))
+        assert result.verdict == Verdict.ESCALATE
+
+    def test_judge_cannot_downgrade_sanitize(self, config):
+        """Judge ALLOW cannot downgrade SANITIZE - only ESCALATE."""
+        config.action.judge_resolves_escalate = True
+        pipeline = ScannerPipeline(config)
+        pipeline.register_scanner(
+            MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.STRUCTURAL)
+        )
+        pipeline.register_scanner(
+            MockScanner(
+                config.scanner,
+                Verdict.SANITIZE,
+                findings=[
+                    Finding(
+                        category=ThreatCategory.ENCODING_EVASION,
+                        severity=Severity.MEDIUM,
+                        verdict=Verdict.SANITIZE,
+                        confidence=0.8,
+                        layer=ScanLayer.PATTERN,
+                        rule_id="ENC-001",
+                        description="encoding evasion",
+                    )
+                ],
+                layer=ScanLayer.PATTERN,
+            )
+        )
+        pipeline.register_scanner(MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.JUDGE))
+        result = pipeline.execute(EvaluateRequest(prompt="test"))
+        assert result.verdict == Verdict.SANITIZE
+
+    def test_judge_resolves_disabled_keeps_escalate(self, config):
+        """With judge_resolves_escalate=False, ESCALATE stands on clean judge ALLOW."""
+        config.action.judge_resolves_escalate = False
+        config.scanner.semantic_enabled = True
+        config.scanner.judge_enabled = True
+        config.action.fail_closed = False
+        pipeline = ScannerPipeline(config)
+        pipeline.register_scanner(
+            MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.STRUCTURAL)
+        )
+        pipeline.register_scanner(
+            MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.PATTERN)
+        )
+        pipeline.register_scanner(
+            MockScanner(
+                config.scanner,
+                Verdict.ESCALATE,
+                findings=[
+                    Finding(
+                        category=ThreatCategory.PROMPT_INJECTION_DIRECT,
+                        severity=Severity.MEDIUM,
+                        verdict=Verdict.ESCALATE,
+                        confidence=0.68,
+                        layer=ScanLayer.SEMANTIC,
+                        rule_id="SEM-001",
+                        description="ambiguous semantic match",
+                    )
+                ],
+                layer=ScanLayer.SEMANTIC,
+            )
+        )
+        pipeline.register_scanner(MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.JUDGE))
+        result = pipeline.execute(EvaluateRequest(prompt="test"))
+        assert result.verdict == Verdict.ESCALATE

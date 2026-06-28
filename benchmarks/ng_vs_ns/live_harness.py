@@ -51,8 +51,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
-import statistics
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -60,6 +58,8 @@ from typing import Any
 
 from httpx import ASGITransport, AsyncClient
 
+# Reuse the A1 benign corpus for FPR so the two phases share ground truth.
+from benchmarks.ng_vs_ns.harness import BENIGN_CORPUS, _load_corpus, _verdict_from_response
 from neuralguard.config.settings import (
     AuditSettings,
     AuthSettings,
@@ -69,9 +69,6 @@ from neuralguard.config.settings import (
     ServerSettings,
 )
 from neuralguard.main import create_app
-
-# Reuse the A1 benign corpus for FPR so the two phases share ground truth.
-from benchmarks.ng_vs_ns.harness import BENIGN_CORPUS, _load_corpus, _verdict_from_response
 
 BENCH_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BENCH_DIR / "results"
@@ -186,7 +183,7 @@ async def generate_attacks(
     *, attacker_model: str, jb_iterations: int = JB_ITERATIONS
 ) -> list[GeneratedAttack]:
     """Generate the attack prompt set once, using NeuralStrike's live attacker."""
-    ns_settings, LLMManager, ContextPoison, JailbreakForge = _require_neuralstrike()
+    ns_settings, LLMManager, ContextPoison, JailbreakForge = _require_neuralstrike()  # noqa: N806
     ns_settings.attacker_model = attacker_model  # local Ollama attacker brain
 
     attacks: list[GeneratedAttack] = []
@@ -201,13 +198,11 @@ async def generate_attacks(
     )
     for goal in JAILBREAK_GOALS:
         prev = forge._seed_payload(goal)
-        attacks.append(
-            GeneratedAttack("JailbreakForge", prev, {"goal": goal, "iteration": 1})
-        )
+        attacks.append(GeneratedAttack("JailbreakForge", prev, {"goal": goal, "iteration": 1}))
         for i in range(2, jb_iterations + 1):
             try:
                 payload = (await forge.generate_mutation(prev, feedback)).strip()
-            except Exception as exc:  # noqa: BLE001 - attacker LLM errors shouldn't abort
+            except Exception as exc:
                 payload = ""
                 print(f"  [warn] JailbreakForge mutation failed for goal {goal!r} iter {i}: {exc}")
             if payload:
@@ -245,9 +240,9 @@ async def generate_attacks(
     for name, fn in cp_methods:
         try:
             await fn()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"  [warn] ContextPoison {name} failed: {exc}")
-    for name, prompt in zip([m for m, _ in cp_methods], capture.captured):
+    for name, prompt in zip([m for m, _ in cp_methods], capture.captured, strict=False):
         attacks.append(GeneratedAttack("ContextPoison", prompt, {"method": name}))
 
     return attacks
@@ -271,7 +266,7 @@ def _p95(values: list[float]) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
-    idx = max(0, min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1)))))
+    idx = max(0, min(len(ordered) - 1, round(0.95 * (len(ordered) - 1))))
     return ordered[idx]
 
 
@@ -345,12 +340,12 @@ async def run(
         )
     print(f"[A2] generating attacks with NeuralStrike attacker={attacker_model!r} ...")
     t0 = time.perf_counter()
-    attacks = await generate_attacks(
-        attacker_model=attacker_model, jb_iterations=jb_iterations
+    attacks = await generate_attacks(attacker_model=attacker_model, jb_iterations=jb_iterations)
+    print(
+        f"[A2] generated {len(attacks)} attacks in {time.perf_counter() - t0:.1f}s "
+        f"({sum(1 for a in attacks if a.module == 'JailbreakForge')} JailbreakForge, "
+        f"{sum(1 for a in attacks if a.module == 'ContextPoison')} ContextPoison)"
     )
-    print(f"[A2] generated {len(attacks)} attacks in {time.perf_counter() - t0:.1f}s "
-          f"({sum(1 for a in attacks if a.module == 'JailbreakForge')} JailbreakForge, "
-          f"{sum(1 for a in attacks if a.module == 'ContextPoison')} ContextPoison)")
 
     benign = _load_corpus(BENIGN_CORPUS)
 
@@ -387,17 +382,27 @@ def _monotonic_drop(results: list[ConfigResult]) -> bool:
 def _format_results(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("=== NeuralGuard ↔ NeuralStrike live benchmark (A2) ===")
-    lines.append(f"Attacker: {payload['attacker_model']!r} (local Ollama) | "
-                 f"Judge: {payload['judge_model']!r} | "
-                 f"attacks: {payload['n_attacks']} | benign: {payload['n_benign']}")
+    lines.append(
+        f"Attacker: {payload['attacker_model']!r} (local Ollama) | "
+        f"Judge: {payload['judge_model']!r} | "
+        f"attacks: {payload['n_attacks']} | benign: {payload['n_benign']}"
+    )
     lines.append("")
     lines.append(f"{'config':<26} {'ASR':>8} {'FPR':>8} {'p95(ms)':>10}")
     lines.append("-" * 56)
     for c in payload["configs"]:
-        lines.append(f"{c['config']:<26} {c['asr']:>7.2%} {c['fpr']:>7.2%} "
-                     f"{c['p95_latency_ms']:>10.1f}")
+        lines.append(
+            f"{c['config']:<26} {c['asr']:>7.2%} {c['fpr']:>7.2%} {c['p95_latency_ms']:>10.1f}"
+        )
     asrs = [c["asr"] for c in payload["configs"]]
-    drop = _monotonic_drop([ConfigResult(**{k: v for k, v in c.items() if k != "attack_verdicts" and k != "benign_verdicts"}) for c in payload["configs"]])  # noqa: E501
+    drop = _monotonic_drop(
+        [
+            ConfigResult(
+                **{k: v for k, v in c.items() if k != "attack_verdicts" and k != "benign_verdicts"}
+            )
+            for c in payload["configs"]
+        ]
+    )
     lines.append("")
     lines.append(f"Monotonic ASR drop across configs: {drop}  (ASR curve: {asrs})")
     # Per-module ASR at config 0 vs last
@@ -424,16 +429,29 @@ async def _cli_main(argv: list[str] | None = None) -> int:
         prog="python -m benchmarks.ng_vs_ns.live_harness",
         description="Live NeuralStrike vs NeuralGuard A2 benchmark (local Ollama).",
     )
-    parser.add_argument("--attacker", default=DEFAULT_ATTACKER_MODEL, help="Local Ollama attacker model.")
-    parser.add_argument("--judge", default=DEFAULT_JUDGE_MODEL, help="Local Ollama NeuralGuard judge model.")
-    parser.add_argument("--jb-iterations", type=int, default=JB_ITERATIONS, help="JailbreakForge mutation rounds per goal.")
+    parser.add_argument(
+        "--attacker", default=DEFAULT_ATTACKER_MODEL, help="Local Ollama attacker model."
+    )
+    parser.add_argument(
+        "--judge", default=DEFAULT_JUDGE_MODEL, help="Local Ollama NeuralGuard judge model."
+    )
+    parser.add_argument(
+        "--jb-iterations",
+        type=int,
+        default=JB_ITERATIONS,
+        help="JailbreakForge mutation rounds per goal.",
+    )
     parser.add_argument(
         "--configs",
         default=",".join(CONFIGS),
         help=f"Comma-separated subset of configs to run: {', '.join(CONFIGS)}. "
         "CI uses 'pattern_only' (the ONNX model is gitignored).",
     )
-    parser.add_argument("--save", default=str(RESULTS_DIR / "a2_results.json"), help="Path to write the JSON results.")
+    parser.add_argument(
+        "--save",
+        default=str(RESULTS_DIR / "a2_results.json"),
+        help="Path to write the JSON results.",
+    )
     args = parser.parse_args(argv)
 
     payload = await run(
