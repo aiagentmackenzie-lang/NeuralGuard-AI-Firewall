@@ -134,6 +134,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "Production startup refused: rate_limit.backend=redis but no redis_url set. "
                 "Set NEURALGUARD_RATELIMIT_REDIS_URL."
             )
+        # Agent Guardian backend sanity (Phase 3, Sprint B). The redis backend
+        # is a B1+ follow-up -- refuse a config that asks for it without a URL
+        # rather than silently degrading to per-request-only analysis.
+        if (
+            config.agent_guardian.enabled
+            and config.agent_guardian.backend == "redis"
+            and not config.agent_guardian.redis_url
+        ):
+            raise RuntimeError(
+                "Production startup refused: agent_guardian.backend=redis but no "
+                "redis_url set. Set NEURALGUARD_AGENT_GUARDIAN_REDIS_URL, or use "
+                "backend=memory (single-worker only)."
+            )
+        if (
+            config.agent_guardian.enabled
+            and config.agent_guardian.backend == "memory"
+            and config.server.workers > 1
+        ):
+            structlog.get_logger("neuralguard").warning(
+                "agent_guardian_memory_multi_worker",
+                msg="agent_guardian.backend=memory with workers>1: each worker keeps "
+                "its own session window, so a session split across workers is not "
+                "correlated (degraded multi-turn detection). Use backend=redis for "
+                "multi-worker production.",
+            )
         # TLS enforcement: refuse plain HTTP unless explicitly allowed (behind a
         # TLS-terminating reverse proxy that the operator takes responsibility for).
         if not config.server.allow_insecure_http:
@@ -202,6 +227,17 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     pipeline = ScannerPipeline(config)
     pipeline.register_scanner(StructuralScanner(config.scanner))
     pipeline.register_scanner(PatternScanner(config.scanner))
+
+    # Register the Agent Guardian scanner if enabled (Phase 3, Sprint B).
+    if config.agent_guardian.enabled:
+        from neuralguard.scanners.agent_guardian import AgentGuardianScanner
+
+        pipeline.register_scanner(AgentGuardianScanner(config.agent_guardian))
+        structlog.get_logger("neuralguard").info(
+            "agent_guardian_registered",
+            backend=config.agent_guardian.backend,
+            window_turns=config.agent_guardian.session_window_turns,
+        )
 
     # Register semantic scanner if enabled and dependencies available
     if config.scanner.semantic_enabled:

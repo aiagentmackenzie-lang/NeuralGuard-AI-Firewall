@@ -51,6 +51,7 @@ class ScanLayer(StrEnum):
     PATTERN = "pattern"
     SEMANTIC = "semantic"
     JUDGE = "judge"
+    AGENT_GUARDIAN = "agent_guardian"
 
 
 class Severity(StrEnum):
@@ -96,6 +97,13 @@ class EvaluateRequest(BaseModel):
     )
     prompt: str | None = Field(default=None, description="Single prompt string (simple mode)")
     tenant_id: str = Field(default="default", description="Tenant identifier")
+    session_id: str | None = Field(
+        default=None,
+        description="Conversation session ID for multi-turn Agent Guardian state. "
+        "When provided and agent_guardian is enabled, the scanner keeps a bounded "
+        "per-session sliding window of turns to detect delayed injection, role "
+        "drift, and accumulation attacks across turns. Sessions are isolated.",
+    )
     use_case: Literal["chat", "agent", "rag", "tool", "completion"] = Field(
         default="chat", description="Use case hint for scanner tuning"
     )
