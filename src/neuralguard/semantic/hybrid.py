@@ -169,8 +169,9 @@ class HybridScoringEngine:
             pattern_contrib = 0.0
             semantic_contrib = 0.0
 
-        # Calibrate verdict from composite score
-        verdict = self._composite_to_verdict(composite)
+        # Calibrate verdict from composite score (with per-layer context for
+        # the corroboration gate; see _composite_to_verdict).
+        verdict = self._composite_to_verdict(composite, pattern_max, semantic_max)
 
         # Build explanation
         reason = self._build_reason(
@@ -272,18 +273,43 @@ class HybridScoringEngine:
                 return True
         return False
 
-    def _composite_to_verdict(self, composite: float) -> Verdict:
+    def _composite_to_verdict(
+        self,
+        composite: float,
+        pattern_max: float = 0.0,
+        semantic_max: float = 0.0,
+    ) -> Verdict:
         """Map composite score to verdict using config thresholds.
 
         Uses ActionSettings thresholds for consistency with the API.
+
+        Corroboration gate (A2 FPR fix): when
+        ``semantic_sanitize_requires_corroboration`` is True, a lone ambiguous
+        semantic match (similarity below the semantic BLOCK floor) produces
+        ESCALATE, not SANITIZE. We do not modify content on a single ambiguous
+        signal. SANITIZE in the ambiguous zone requires either pattern
+        corroboration (``pattern_max > 0``) or semantic similarity at/above the
+        high-precision BLOCK floor (which the SimilarityScanner already returns
+        BLOCK for, so Layer Arbitration keeps the BLOCK). This drops the
+        semantic-layer FPR on benign creative / translation prompts that match
+        the attack corpus at 0.60-0.74 (A2 finding: BEN-007/013/020).
         """
         block_threshold = self.config.action.score_threshold_block  # 0.85
         sanitize_threshold = self.config.action.score_threshold_sanitize  # 0.60
         escalate_floor = 0.30  # Fixed — triggers LLM-as-Judge gate
+        semantic_block_floor = self.config.scanner.semantic_similarity_threshold  # 0.75
 
         if composite >= block_threshold:
             return Verdict.BLOCK
         if composite >= sanitize_threshold:
+            # Below the block threshold but above sanitize. Require a second
+            # signal to SANITIZE on semantic alone; otherwise ESCALATE so the
+            # judge can resolve it without modifying content.
+            if self.config.action.semantic_sanitize_requires_corroboration:
+                pattern_corroborated = pattern_max > 0.0
+                semantic_high_precision = semantic_max >= semantic_block_floor
+                if not (pattern_corroborated or semantic_high_precision):
+                    return Verdict.ESCALATE
             return Verdict.SANITIZE
         if composite >= escalate_floor:
             return Verdict.ESCALATE

@@ -152,6 +152,32 @@ class ActionSettings(BaseSettings):
     escalation_webhook_url: str | None = Field(
         default=None, description="Webhook URL for HITL escalation"
     )
+    semantic_sanitize_requires_corroboration: bool = Field(
+        default=True,
+        description="When True, the hybrid engine will NOT SANITIZE (modify content) on a lone "
+        "ambiguous semantic match (similarity below the semantic BLOCK floor). "
+        "A single ambiguous semantic signal produces ESCALATE (review / judge) "
+        "instead, and SANITIZE requires either pattern corroboration or semantic "
+        "similarity at/above the BLOCK floor. This eliminates the semantic-layer "
+        "FPR on benign creative/translation prompts (A2 finding). Set False to "
+        "restore the pre-fix behavior (semantic-alone can SANITIZE at composite "
+        ">= score_threshold_sanitize).",
+    )
+    judge_resolves_escalate: bool = Field(
+        default=False,
+        description="Opt-in: when True, a clean LLM-Judge ALLOW verdict resolves a hybrid "
+        "ESCALATE (ambiguous) verdict to ALLOW - the judge is the authoritative "
+        "resolver of the ambiguous zone, so its benign call downgrades ESCALATE. "
+        "The judge cannot downgrade SANITIZE/BLOCK/QUARANTINE (only ESCALATE). A "
+        "skipped, timed-out, or errored judge does NOT resolve (the pre-judge "
+        "ESCALATE stands). Tradeoff (measured in A2): with a weak/local judge this "
+        "DROPS the semantic-layer FPR on benign creative/translation prompts to "
+        "0% but ALSO lets through real attacks the semantic layer caught as "
+        "ESCALATE when the judge false-negatives them (7B mistral false-negatives "
+        "ContextPoison extract_system_prompt). Enable ONLY with a frontier judge "
+        "reliable enough to not false-negative on ambiguous attacks. Default False "
+        "keeps the safe behavior (judge can upgrade ESCALATE but not downgrade).",
+    )
 
 
 class AuthSettings(BaseSettings):

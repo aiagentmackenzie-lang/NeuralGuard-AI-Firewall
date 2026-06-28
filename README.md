@@ -81,8 +81,8 @@ LLM Provider / Local Model / Agent Framework
 | Phase 3 | Agent Guardian | 🔴 Not Started | Weeks 7-9 |
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
-**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete. 510 tests, ruff + mypy clean, 86% coverage gate (87.45% observed on a fresh checkout; ~90%+ with the semantic model present — see Key Metrics). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
-**Next:** Phase 3 — Agent Guardian (multi-turn detection, prompt template analysis).
+**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete, plus the A2 semantic-FPR corroboration-gate fix. 536 tests, ruff + mypy clean, 86% coverage gate (87.45% observed on a fresh checkout; ~90%+ with the semantic model present — see Key Metrics). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
+**Next:** Sprint B — Phase 3 Agent Guardian (multi-turn detection, prompt-template analysis, ASI06 dedicated rule, canary unstub).
 
 ---
 
@@ -120,18 +120,27 @@ replayed through three NeuralGuard pipeline configurations
 
 | Config | ASR | FPR | p95 latency |
 |:--|--:|--:|--:|
-| pattern_only | 50.00% | 0.00% | 2.4 ms |
-| pattern + semantic | 44.44% | 6.67% | 24.8 ms |
-| pattern + semantic + judge | 44.44% | 6.67% | 2388.8 ms |
+| pattern_only | 61.11% | 0.00% | 2.2 ms |
+| pattern + semantic | 44.44% | 6.67% | 30.1 ms |
+| pattern + semantic + judge | 44.44% | 6.67% | 47.0 ms |
 
-**Monotonic ASR drop across configs: TRUE** (each layer does not raise ASR).
+**Monotonic ASR drop across configs: TRUE** (0.61 → 0.44 → 0.44; each layer does not raise ASR).
 
 Findings (full detail in [`benchmarks/ng_vs_ns/results/A2_RESULTS.md`](benchmarks/ng_vs_ns/results/A2_RESULTS.md)):
-- The semantic layer drops ASR ~5.5pp but raises FPR to 6.67% (3 benign
-  translation/creative prompts `sanitize`'d at the default 0.75 threshold) —
-  a real production finding; threshold tuning tracked.
-- The judge adds ~2.4s p95 latency but no ASR benefit on this set (no
-  ambiguous-zone hits among survivors).
+- **Semantic-FPR corroboration gate (2026-06-28 fix):** the semantic layer
+  flags benign creative/translation prompts at 0.60–0.74 similarity. These
+  now `escalate` (review/judge) instead of `sanitize` (content modification)
+  — a lone ambiguous semantic signal no longer modifies benign content.
+  SANITIZE in the ambiguous zone now requires pattern corroboration or
+  semantic similarity at/above the 0.75 BLOCK floor. The semantic ASR gain is
+  preserved. The FPR-as-non-allow metric stays 6.67% (a defensible ESCALATE
+  review signal, not a false content mutation).
+- **Opt-in `judge_resolves_escalate`** (default false): a clean judge ALLOW
+  downgrades ESCALATE → ALLOW, dropping FPR to 0.00% on this benign corpus.
+  Opt-in because the 7B judge false-negatives `ContextPoison extract_system_prompt`
+  (raising ASR back to the pattern-only level). Enable only with a frontier judge.
+- The judge adds no ASR benefit on this set with the safe default (curve flat
+  0.44 → 0.44); first-call latency dominates p95.
 - `ContextPoison` context-exhaustion (lorem-ipsum DoS) is undetected by all
   layers — a future `T-DOS` rule gap.
 
@@ -368,11 +377,11 @@ curl -X POST http://localhost:8000/v1/scan/output \
 |---|---|---|
 | Detection Rate (Direct PI) | >95% | ✅ verified — 158 patterns (108 EN + 50 i18n), 13 redteam tests |
 | Detection Rate (Rephrased PI) | >80% | ⚠️ local observation only — semantic/judge, NOT CI-verified (ONNX model is gitignored; real-model tests skip in CI) |
-| False Positive Rate | <2% | ⚠️ local observation — clean prompt = ALLOW (0 findings); no benchmark suite |
+| False Positive Rate | <2% | ✅ verified — the A1 regression gate (CI) asserts FPR < 2% on a 45-prompt benign corpus (0.00% measured). A2 live: the semantic layer escalates 3 benign creative/translation prompts (6.67%, review signal — no content modification via the corroboration gate) |
 | P95 Latency (Pattern-only) | <10ms | ⚠️ observed ~0.3 ms locally; NOT load-tested (no perf harness in CI) |
 | P95 Latency (Pattern + Semantic) | <50ms | ⚠️ local observation (~30 ms); NOT CI-verified |
 | P95 Latency (Full Pipeline + Judge) | <5s | ⚠️ local observation (~3 s, gated to ambiguous zone); NOT CI-verified |
-| Test Coverage | 86% CI floor | ✅ verified — 87.39% (502 tests) on a fresh checkout without the gitignored ONNX model; 86% gate enforced in CI. Full suite reaches ~90%+ with the semantic model present (run `scripts/export_onnx.py` locally). Semantic extra verified in the `semantic-smoke` CI job. |
+| Test Coverage | 86% CI floor | ✅ verified — 87.62% (517 tests) on a fresh checkout without the gitignored ONNX model; 86% gate enforced in CI. Full suite reaches ~90%+ with the semantic model present (run `scripts/export_onnx.py` locally). Semantic extra verified in the `semantic-smoke` CI job. |
 | Type Safety (mypy strict) | clean | ✅ verified — 0 errors, enforced in CI |
 | Memory Footprint (ONNX runtime) | <500MB | ✅ ~87 MB ONNX model, no PyTorch at runtime (export tool pulls torch) |
 | Decompression Bomb Defense | bounded | ✅ verified — 8 MiB hard cap via incremental decompress, tested |

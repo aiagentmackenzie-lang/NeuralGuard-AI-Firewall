@@ -277,7 +277,12 @@ class JudgeScanner(BaseScanner):
 
         # Check gate — should we even invoke the judge?
         if not self.should_invoke(context):
-            return self._result(Verdict.ALLOW, [], start)
+            return self._result(
+                Verdict.ALLOW,
+                [],
+                start,
+                error="Judge skipped: gate not triggered",
+            )
 
         # Check circuit breaker
         if not self._circuit_breaker.allow_request():

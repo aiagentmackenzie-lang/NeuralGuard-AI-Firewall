@@ -236,6 +236,24 @@ class ScannerPipeline:
                 winning_layer = "hybrid"
                 max_priority = hybrid_priority
 
+        # Judge resolution of the ambiguous zone (A2 FPR fix). An ESCALATE
+        # verdict means "ambiguous, awaiting judge resolution." If the LLM
+        # Judge ran and cleanly returned ALLOW (benign), it is the authoritative
+        # resolver and downgrades ESCALATE -> ALLOW. The judge cannot downgrade
+        # SANITIZE/BLOCK/QUARANTINE/RATE_LIMIT (only ESCALATE). A skipped,
+        # timed-out, or errored judge does NOT resolve — its result carries an
+        # error string, so the pre-judge ESCALATE stands (fail-closed on judge
+        # uncertainty). This is what lets the judge drop the semantic-layer FPR
+        # on benign creative/translation prompts that ESCALATE on a lone
+        # ambiguous semantic match.
+        if self.config.action.judge_resolves_escalate and winning_verdict == Verdict.ESCALATE:
+            judge_results = [r for r in results if r.layer == ScanLayer.JUDGE]
+            clean_allow = [r for r in judge_results if r.verdict == Verdict.ALLOW and not r.error]
+            if judge_results and len(clean_allow) == len(judge_results):
+                winning_verdict = Verdict.ALLOW
+                winning_layer = "judge_resolve"
+                max_priority = _VERDICT_PRIORITY[Verdict.ALLOW]
+
         # Build arbitration reason
         verdicts_seen = [f"{r.layer.value}={r.verdict.value}" for r in results]
         hybrid_info = ""

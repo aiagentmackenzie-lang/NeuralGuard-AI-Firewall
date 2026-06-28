@@ -47,7 +47,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -220,7 +219,7 @@ async def _eval_case(client: AsyncClient, case: dict[str, Any]) -> CaseResult:
         body = {}
     actual = _verdict_from_response(resp.status_code, body)
     findings = body.get("findings") or []
-    error = body.get("error") if not isinstance(body.get("error"), str) else body.get("error")
+    error = body.get("error")
     expected = case["expected_verdict"]
     return CaseResult(
         id=case["id"],
@@ -235,9 +234,7 @@ async def _eval_case(client: AsyncClient, case: dict[str, Any]) -> CaseResult:
     )
 
 
-async def _eval_corpus(
-    client: AsyncClient, cases: list[dict[str, Any]]
-) -> list[CaseResult]:
+async def _eval_corpus(client: AsyncClient, cases: list[dict[str, Any]]) -> list[CaseResult]:
     return [await _eval_case(client, c) for c in cases]
 
 
@@ -275,34 +272,37 @@ async def run(
 def _format_results(results: BenchResults, fpr_threshold: float) -> str:
     lines: list[str] = []
     lines.append("=== NeuralGuard ↔ NeuralStrike benchmark (A1) ===")
-    lines.append(f"Attacks : {results.n_attacks}  | ASR = {results.asr:.2%}  | "
-                 f"exact-match = {results.attack_match_rate:.2%}")
-    lines.append(f"Benign  : {results.n_benign}  | FPR = {results.fpr:.2%}  "
-                 f"(threshold < {fpr_threshold:.2%})")
+    lines.append(
+        f"Attacks : {results.n_attacks}  | ASR = {results.asr:.2%}  | "
+        f"exact-match = {results.attack_match_rate:.2%}"
+    )
+    lines.append(
+        f"Benign  : {results.n_benign}  | FPR = {results.fpr:.2%}  "
+        f"(threshold < {fpr_threshold:.2%})"
+    )
     lines.append(f"PASS    : {results.passed(fpr_threshold)}")
 
     if results.attack_misses:
         lines.append("")
         lines.append("--- ASR regressions (attacks ALLOWED through) ---")
         for r in results.attack_misses:
-            lines.append(f"  {r.id}  actual={r.actual}  status={r.status_code}  "
-                         f"prompt={r.prompt[:70]!r}")
+            lines.append(
+                f"  {r.id}  actual={r.actual}  status={r.status_code}  prompt={r.prompt[:70]!r}"
+            )
 
     if results.attack_verdict_drifts:
         lines.append("")
         lines.append("--- Verdict drifts (caught, but verdict != expected) ---")
         for r in results.attack_verdict_drifts:
             fired = [f.get("rule_id") for f in r.findings if f.get("rule_id")]
-            lines.append(f"  {r.id}  expected={r.expected}  actual={r.actual}  "
-                         f"rules={fired}")
+            lines.append(f"  {r.id}  expected={r.expected}  actual={r.actual}  rules={fired}")
 
     if results.benign_false_positives:
         lines.append("")
         lines.append("--- Benign false positives ---")
         for r in results.benign_false_positives:
             fired = [f.get("rule_id") for f in r.findings if f.get("rule_id")]
-            lines.append(f"  {r.id}  actual={r.actual}  rules={fired}  "
-                         f"prompt={r.prompt[:70]!r}")
+            lines.append(f"  {r.id}  actual={r.actual}  rules={fired}  prompt={r.prompt[:70]!r}")
 
     return "\n".join(lines)
 
