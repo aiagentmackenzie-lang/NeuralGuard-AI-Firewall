@@ -81,6 +81,76 @@ def _cmd_canary_mint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_tenants(args: argparse.Namespace) -> int:
+    """`neuralguard tenants list|info <id>` — read-only effective per-tenant config."""
+    from neuralguard.config.settings import load_config
+
+    config = load_config()
+    if not config.tenant.enabled:
+        print(
+            "error: multi-tenant mode is disabled. Set NEURALGUARD_TENANT_ENABLED=true "
+            "and NEURALGUARD_TENANT_CONFIG_PATH.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from neuralguard.tenants import TenantConfigRegistry
+
+    # quiet=True keeps the CLI's stdout clean for machine-readable output
+    # (load-time INFO notices go to the server log stream, not CLI stdout).
+    registry = TenantConfigRegistry.from_settings(config.tenant, quiet=True)
+
+    if args.subcommand == "list":
+        tenants = registry.list_tenants()
+        if args.json:
+            print(json.dumps([t.to_effective_dict() for t in tenants], indent=2))
+            return 0
+        if not tenants:
+            print(f"no tenant config files found in {config.tenant.config_path}")
+            return 0
+        for t in tenants:
+            desc = f" — {t.description}" if t.description else ""
+            print(f"{t.tenant_id}{desc}")
+        return 0
+
+    # info <id>
+    cfg = registry.get(args.tenant_id)
+    if cfg is None:
+        print(
+            f"note: tenant {args.tenant_id!r} has no override file "
+            f"(global defaults apply).",
+            file=sys.stderr,
+        )
+        info = {
+            "tenant_id": args.tenant_id,
+            "configured": False,
+            "effective_requests_per_minute": config.rate_limit.requests_per_minute,
+            "effective_burst_size": config.rate_limit.burst_size,
+            "scanners": {"agent_guardian": None, "semantic": None, "judge": None},
+        }
+    else:
+        rpm_eff, burst_eff = cfg.effective_rate_limit(
+            config.rate_limit.requests_per_minute,
+            config.rate_limit.burst_size,
+        )
+        info = {
+            "tenant_id": cfg.tenant_id,
+            "description": cfg.description,
+            "configured": True,
+            "requests_per_minute": cfg.requests_per_minute,
+            "burst_size": cfg.burst_size,
+            "effective_requests_per_minute": rpm_eff,
+            "effective_burst_size": burst_eff,
+            "scanners": cfg.scanners.model_dump(),
+        }
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return 0
+    for k, v in info.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
 def main() -> None:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -135,6 +205,22 @@ def main() -> None:
     cm.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     cm.set_defaults(func=_cmd_canary_mint)
 
+    # tenants (C1)
+    tenants = subparsers.add_parser(
+        "tenants",
+        help="List tenants / show effective per-tenant config (read-only).",
+    )
+    tenants_sub = tenants.add_subparsers(dest="subcommand", required=True)
+    tenants_list = tenants_sub.add_parser("list", help="List configured tenants.")
+    tenants_list.add_argument("--json", action="store_true", help="Emit JSON.")
+    tenants_list.set_defaults(func=_cmd_tenants, subcommand="list")
+    tenants_info = tenants_sub.add_parser(
+        "info", help="Show effective config for one tenant (or the global defaults if unset)."
+    )
+    tenants_info.add_argument("tenant_id", help="Tenant id to inspect.")
+    tenants_info.add_argument("--json", action="store_true", help="Emit JSON.")
+    tenants_info.set_defaults(func=_cmd_tenants, subcommand="info")
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -147,6 +233,9 @@ def main() -> None:
         sys.exit(args.func(args))
 
     if args.command == "canary-mint":
+        sys.exit(args.func(args))
+
+    if args.command == "tenants":
         sys.exit(args.func(args))
 
     if args.command == "serve" or args.command is None:

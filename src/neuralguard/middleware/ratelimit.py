@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     from neuralguard.config.settings import RateLimitSettings
     from neuralguard.middleware.ratelimit_redis import RedisRateLimiter
+    from neuralguard.tenants.registry import TenantConfigRegistry
 
 logger = structlog.get_logger(__name__)
 
@@ -108,12 +109,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         app: Any,
         settings: RateLimitSettings,
         redis_client: Any | None = None,
+        tenant_registry: TenantConfigRegistry | None = None,
     ) -> None:
         super().__init__(app)
         self.settings = settings
         self._backend = settings.backend
         self._counter: SlidingWindowCounter | None = None
         self._redis: RedisRateLimiter | None = None
+        # Per-tenant override registry (Sprint C, C1). None when multi-tenant
+        # mode is disabled -> the middleware uses the global RPM/burst for
+        # every tenant (backward compatible).
+        self._tenant_registry = tenant_registry
         if settings.backend == "redis":
             if not settings.redis_url and redis_client is None:
                 raise ValueError(
@@ -146,6 +152,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Use tenant-specific limits (future: per-tenant config)
         rpm = self.settings.requests_per_minute
         burst = self.settings.burst_size
+
+        registry = self._tenant_registry
+        if registry is not None and registry.enabled:
+            # Resolve per-tenant overrides; None/unknown tenant -> global default
+            # (fail-open: a config miss never denies a request).
+            rpm, burst = registry.effective_rate_limit(tenant_id, rpm, burst)
 
         allowed: bool
         remaining: int

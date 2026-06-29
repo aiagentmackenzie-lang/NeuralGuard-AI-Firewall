@@ -33,6 +33,9 @@ from neuralguard.models.schemas import (
     ScanOutputResponse,
     Severity,
     TemplateSinkFinding,
+    TenantInfoResponse,
+    TenantListResponse,
+    TenantScannerOverridesView,
     ThreatCategory,
     Verdict,
 )
@@ -558,3 +561,156 @@ async def metrics_endpoint(request: Request) -> Response:
     m = request.app.state.metrics
     payload, content_type = m.expose()
     return Response(content=payload, media_type=content_type)
+
+
+# ── Per-tenant config (Sprint C, C1) ───────────────────────────────────────
+# Read-only effective-config surface. Auth-gated (not in public_endpoints).
+# Never exposes secrets — TenantConfig carries none. An unauthenticated or
+# wrong-tenant caller is rejected by AuthMiddleware + the tenant-binding
+# check below before any config is returned.
+
+
+def _resolve_effective_scanners(
+    config: NeuralGuardConfig,
+    overlay: TenantScannerOverridesView | None,
+) -> dict[str, bool]:
+    """Resolve the per-tenant scanner enable state against the global config.
+
+    Rule: a tenant may narrow (disable) an optional scanner but cannot widen
+    past global registration. Effective = ``base AND (overlay ?? True)`` —
+    ``overlay=None`` inherits (True), ``overlay=True`` keeps base (no widen),
+    ``overlay=False`` forces False. Structural + Pattern are always True.
+    """
+    base = {
+        "structural": True,
+        "pattern": True,
+        "agent_guardian": config.agent_guardian.enabled,
+        "semantic": config.scanner.semantic_enabled,
+        "judge": config.scanner.judge_enabled,
+    }
+    if overlay is None:
+        return base
+    for key, val in (
+        ("agent_guardian", overlay.agent_guardian),
+        ("semantic", overlay.semantic),
+        ("judge", overlay.judge),
+    ):
+        if val is not None:
+            base[key] = base[key] and val
+    return base
+
+
+@router.get("/tenants", response_model=TenantListResponse)
+async def list_tenants(
+    request: Request,
+    config: NeuralGuardConfig = Depends(get_config),
+) -> TenantListResponse:
+    """List all configured tenants with their effective config (read-only).
+
+    Auth-protected. Returns 404 if multi-tenant mode is disabled.
+    """
+    registry = getattr(request.app.state, "tenant_registry", None)
+    if registry is None or not registry.enabled:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "tenants_disabled",
+                "message": "Multi-tenant mode is disabled. Set NEURALGUARD_TENANT_ENABLED=true.",
+            },
+        )
+    items: list[TenantInfoResponse] = []
+    for cfg in registry.list_tenants():
+        items.append(_tenant_info_from_config(config, cfg))
+    return TenantListResponse(tenants=items, count=len(items))
+
+
+@router.get("/tenants/{tenant_id}", response_model=TenantInfoResponse)
+async def get_tenant(
+    tenant_id: str,
+    request: Request,
+    config: NeuralGuardConfig = Depends(get_config),
+) -> TenantInfoResponse:
+    """Return the effective config for one tenant (read-only, no secrets).
+
+    Auth-protected. A tenant with no override file returns ``configured=false``
+    with the global defaults resolved as the effective values — this is NOT a
+    404 (a config miss is fail-open, never a denial). The authenticated caller
+    must be bound to the same tenant (or be the default tenant) to read another
+    tenant's effective config.
+    """
+    registry = getattr(request.app.state, "tenant_registry", None)
+    if registry is None or not registry.enabled:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "tenants_disabled",
+                "message": "Multi-tenant mode is disabled. Set NEURALGUARD_TENANT_ENABLED=true.",
+            },
+        )
+    # Tenant-binding enforcement: an authenticated key bound to a tenant may
+    # only read its own effective config (the default tenant may read any).
+    auth_tenant = _auth_tenant(request)
+    if (
+        config.auth.enabled
+        and config.auth.enforce_tenant_from_key
+        and auth_tenant is not None
+        and auth_tenant.lower() != "default"
+        and auth_tenant.lower() != tenant_id.lower()
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "tenant_mismatch",
+                "message": "API key is not authorized for the requested tenant_id.",
+            },
+        )
+    cfg = registry.get(tenant_id)
+    return _tenant_info_from_config(config, cfg, tenant_id=tenant_id)
+
+
+def _tenant_info_from_config(
+    config: NeuralGuardConfig,
+    cfg: Any | None,
+    *,
+    tenant_id: str | None = None,
+) -> TenantInfoResponse:
+    """Resolve a TenantConfig (or a miss) into the public effective view."""
+    from neuralguard.tenants.config import TenantConfig
+
+    if cfg is None:
+        tid = tenant_id or config.tenant.default_tenant
+        overlay_view = TenantScannerOverridesView()
+        rpm_eff = config.rate_limit.requests_per_minute
+        burst_eff = config.rate_limit.burst_size
+        return TenantInfoResponse(
+            tenant_id=tid,
+            description=None,
+            configured=False,
+            requests_per_minute=None,
+            burst_size=None,
+            effective_requests_per_minute=rpm_eff,
+            effective_burst_size=burst_eff,
+            scanners=overlay_view,
+            effective_scanners=_resolve_effective_scanners(config, None),
+        )
+    assert isinstance(cfg, TenantConfig)
+    overlay_view = TenantScannerOverridesView(
+        agent_guardian=cfg.scanners.agent_guardian,
+        semantic=cfg.scanners.semantic,
+        judge=cfg.scanners.judge,
+    )
+    rpm_eff, burst_eff = cfg.effective_rate_limit(
+        config.rate_limit.requests_per_minute,
+        config.rate_limit.burst_size,
+    )
+    return TenantInfoResponse(
+        tenant_id=cfg.tenant_id,
+        description=cfg.description,
+        configured=True,
+        requests_per_minute=cfg.requests_per_minute,
+        burst_size=cfg.burst_size,
+        effective_requests_per_minute=rpm_eff,
+        effective_burst_size=burst_eff,
+        scanners=overlay_view,
+        effective_scanners=_resolve_effective_scanners(config, overlay_view),
+    )

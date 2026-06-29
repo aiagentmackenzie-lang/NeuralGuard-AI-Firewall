@@ -34,6 +34,7 @@ from neuralguard.models.schemas import (
 if TYPE_CHECKING:
     from neuralguard.config.settings import NeuralGuardConfig
     from neuralguard.scanners.base import BaseScanner
+    from neuralguard.tenants.registry import TenantConfigRegistry
 
 logger = structlog.get_logger(__name__)
 
@@ -62,6 +63,14 @@ class ScannerPipeline:
             ScanLayer.JUDGE,
         ]
         self._hybrid_engine: Any = None  # Lazy init
+        # Per-tenant override registry (Sprint C, C1). None when multi-tenant
+        # mode is disabled -> the pipeline falls back to global config only
+        # (backward compatible). Set via ``set_tenant_registry``.
+        self._tenant_registry: TenantConfigRegistry | None = None
+
+    def set_tenant_registry(self, registry: TenantConfigRegistry | None) -> None:
+        """Install the per-tenant override registry (called from main.py)."""
+        self._tenant_registry = registry
 
     def register_scanner(self, scanner: BaseScanner[Any]) -> None:
         """Register a scanner for its layer."""
@@ -74,12 +83,19 @@ class ScannerPipeline:
         logger.info("scanner_unregistered", layer=layer.value)
 
     def get_enabled_layers(self, request: EvaluateRequest | None = None) -> list[ScanLayer]:
-        """Determine which layers to run based on config and request overrides."""
-        # Request-level override
-        if request and request.scanners is not None:
-            return [l for l in self._layer_order if l in request.scanners]
+        """Determine which layers to run based on config, tenant overrides, and request.
 
-        # Config-level defaults
+        Precedence (most-specific wins, but the tenant config is a *ceiling*):
+        1. Resolve the globally-registered + config-enabled layers (baseline).
+        2. Apply the per-tenant scanner ceiling (Sprint C, C1): a tenant may
+           narrow the optional scanners (agent_guardian / semantic / judge)
+           but can never disable the mandatory Structural + Pattern layers,
+           and can never widen past what is globally registered.
+        3. Apply the client ``request.scanners`` override as a further
+           narrowing (intersection) — a client may opt OUT of layers but never
+           opt IN past the tenant + global ceiling.
+        """
+        # 1. Global config baseline.
         layers = [ScanLayer.STRUCTURAL, ScanLayer.PATTERN]
         if self.config.agent_guardian.enabled:
             layers.append(ScanLayer.AGENT_GUARDIAN)
@@ -87,6 +103,48 @@ class ScannerPipeline:
             layers.append(ScanLayer.SEMANTIC)
         if self.config.scanner.judge_enabled:
             layers.append(ScanLayer.JUDGE)
+
+        # 2. Per-tenant ceiling (only narrows the optional layers).
+        registry = self._tenant_registry
+        if registry is not None and registry.enabled and request is not None:
+            overlay = registry.effective_scanner_overlay(request.tenant_id)
+            if overlay is not None:
+                optional_map = {
+                    ScanLayer.AGENT_GUARDIAN: overlay.agent_guardian,
+                    ScanLayer.SEMANTIC: overlay.semantic,
+                    ScanLayer.JUDGE: overlay.judge,
+                }
+                narrowed: list[ScanLayer] = [ScanLayer.STRUCTURAL, ScanLayer.PATTERN]
+                for layer in layers:
+                    if layer in (ScanLayer.STRUCTURAL, ScanLayer.PATTERN):
+                        continue
+                    flag = optional_map.get(layer)
+                    # flag is None -> inherit global (keep); True/False -> enforce.
+                    if flag is False:
+                        logger.info(
+                            "tenant_scanner_disabled",
+                            tenant=request.tenant_id,
+                            layer=layer.value,
+                        )
+                        continue
+                    if flag is True and layer not in layers:
+                        # Tenant wants a scanner the global config didn't enable
+                        # / register. We cannot conjure an unregistered scanner;
+                        # keep it off and log (honest, fail-safe).
+                        logger.info(
+                            "tenant_scanner_unavailable",
+                            tenant=request.tenant_id,
+                            layer=layer.value,
+                            msg="tenant enabled a scanner not registered globally",
+                        )
+                        continue
+                    narrowed.append(layer)
+                layers = narrowed
+
+        # 3. Client request override — intersection only (narrow, never widen).
+        if request and request.scanners is not None:
+            layers = [l for l in self._layer_order if l in request.scanners and l in layers]
+
         return layers
 
     @property

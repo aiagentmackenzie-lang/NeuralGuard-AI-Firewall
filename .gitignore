@@ -51,3 +51,10 @@ models/embedding-onnx/vocab.txt
 # Pre-computed attack vectors (regenerated from datasets)
 models/attack_vectors.npy
 models/attack_metadata.json
+# Per-tenant override files (Sprint C, C1). The sample example.yaml is
+# tracked as a reference; real tenant files must NOT be committed (they may
+# carry tenant identifiers / quota policy an operator does not want public).
+tenants/*.yaml
+tenants/*.yml
+tenants/*.json
+!tenants/example.yaml

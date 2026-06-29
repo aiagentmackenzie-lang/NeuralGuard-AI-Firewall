@@ -343,6 +343,49 @@ class HealthResponse(BaseModel):
     uptime_seconds: float
 
 
+# ── Tenant Models (Sprint C, C1) ──────────────────────────────────────────
+
+
+class TenantScannerOverridesView(BaseModel):
+    """Public view of a tenant's scanner overrides (None = inherit global)."""
+
+    agent_guardian: bool | None = None
+    semantic: bool | None = None
+    judge: bool | None = None
+
+
+class TenantInfoResponse(BaseModel):
+    """Effective per-tenant configuration (read-only, no secrets).
+
+    Returned by ``GET /v1/tenants/{tenant_id}`` and surfaced in the
+    ``neuralguard tenants info`` CLI. The ``effective_*`` fields resolve the
+    ``None``-inherits-global overlay against the live global config so an
+    operator can see exactly what applies to a tenant without doing the
+    inheritance math themselves.
+    """
+
+    tenant_id: str
+    description: str | None = None
+    configured: bool = Field(
+        description="False when the tenant has no override file (global defaults apply)."
+    )
+    requests_per_minute: int | None = None
+    burst_size: int | None = None
+    effective_requests_per_minute: int
+    effective_burst_size: int
+    scanners: TenantScannerOverridesView
+    effective_scanners: dict[str, bool] = Field(
+        description="Resolved per-tenant scanner enable state (layer -> bool)."
+    )
+
+
+class TenantListResponse(BaseModel):
+    """List of configured tenants (read-only)."""
+
+    tenants: list[TenantInfoResponse]
+    count: int
+
+
 # ── Audit Models ───────────────────────────────────────────────────────────
 
 

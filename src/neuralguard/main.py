@@ -98,6 +98,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "db_init_failed", error=str(exc), msg="PostgreSQL init failed; JSONL fallback"
             )
 
+    # ── Per-tenant registry hot-reload (Sprint C, C1) ──
+    # The registry was constructed in create_app; start its background poller
+    # now that the event loop is running. Best-effort: a failure to start the
+    # poller is non-fatal (the registry still serves its initial load).
+    tenant_registry = getattr(app.state, "tenant_registry", None)
+    if tenant_registry is not None:
+        try:
+            tenant_registry.start_reload_task()
+            structlog.get_logger("neuralguard").info(
+                "tenants_reload_started",
+                interval=tenant_registry.reload_interval_seconds,
+            )
+        except RuntimeError as exc:
+            structlog.get_logger("neuralguard").warning(
+                "tenants_reload_start_failed", error=str(exc)
+            )
+
     # ── Production security fail-fast ──
     # Refuse to serve in production unless authentication is configured with at
     # least one API key. This prevents accidental open deployments.
@@ -176,6 +193,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "32 characters — the canary would be guessable. Set a stronger "
                     "NEURALGUARD_CANARY_SECRET, or disable canary."
                 )
+        # Per-tenant config (Sprint C, C1). If tenant mode is on and a YAML
+        # tenant file is present, PyYAML must be installed — otherwise the
+        # registry silently skips every YAML tenant (silent partial failure
+        # in production is worse than a loud refusal). Operators can either
+        # `pip install neuralguard[tenants]` or use .json tenant files.
+        if config.tenant.enabled:
+            tenant_path = config.tenant.config_path
+            if tenant_path.exists() and tenant_path.is_dir():
+                has_yaml = any(
+                    p.suffix.lower() in (".yaml", ".yml")
+                    for p in tenant_path.iterdir()
+                    if p.is_file()
+                )
+                if has_yaml:
+                    try:
+                        import yaml  # noqa: F401
+                    except ImportError as exc:
+                        raise RuntimeError(
+                            "Production startup refused: tenant mode is enabled with "
+                            "YAML tenant files but PyYAML is not installed. Install "
+                            "neuralguard[tenants], or use .json tenant files."
+                        ) from exc
         # TLS enforcement: refuse plain HTTP unless explicitly allowed (behind a
         # TLS-terminating reverse proxy that the operator takes responsibility for).
         if not config.server.allow_insecure_http:
@@ -194,6 +233,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     # ── Shutdown ──
+    # Stop the per-tenant hot-reload poller first (Sprint C, C1).
+    tenant_registry = getattr(app.state, "tenant_registry", None)
+    if tenant_registry is not None:
+        await tenant_registry.stop_reload_task()
+
     if config.audit.backend == "postgres" and config.audit.postgres_url:
         try:
             from neuralguard.db.engine import dispose_engine
@@ -288,6 +332,25 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
 
     app.state.pipeline = pipeline
 
+    # ── Initialize the per-tenant config registry (Sprint C, C1) ──
+    # Only constructed when enabled; its absence on app.state means multi-tenant
+    # mode is off and the rate-limit middleware + pipeline fall back to global
+    # config (backward compatible). The registry loads tenants/*.yaml|json once
+    # here; the lifespan starts the background hot-reload poller.
+    if config.tenant.enabled:
+        from neuralguard.tenants import TenantConfigRegistry
+
+        tenant_registry = TenantConfigRegistry.from_settings(config.tenant)
+        app.state.tenant_registry = tenant_registry
+        pipeline.set_tenant_registry(tenant_registry)
+        structlog.get_logger("neuralguard").info(
+            "tenant_registry_registered",
+            tenants=len(tenant_registry.list_tenants()),
+            reload_interval=tenant_registry.reload_interval_seconds,
+        )
+    else:
+        app.state.tenant_registry = None
+
     # ── Initialize the canary token manager (Phase 3, B3) ──
     # Only constructed when enabled; its absence on app.state means the feature
     # is off (routes check for None). The secret is not logged here.
@@ -343,6 +406,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
         RateLimitMiddleware,
         settings=config.rate_limit,
         redis_client=redis_client_for_mw,
+        tenant_registry=app.state.tenant_registry,
     )
     app.add_middleware(AuthMiddleware, settings=config.auth)
     app.add_middleware(BodySizeMiddleware, max_bytes=config.server.max_request_body_bytes)

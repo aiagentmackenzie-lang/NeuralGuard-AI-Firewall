@@ -1,0 +1,28 @@
+# Example NeuralGuard per-tenant override file (Sprint C, C1 / ROADMAP P1-2).
+#
+# Filename stem MUST equal `tenant_id` (this file is `example.yaml` only for
+# illustration — rename to e.g. `acme.yaml` with `tenant_id: acme`).
+# Supported formats: .yaml / .yml (needs `pip install neuralguard[tenants]`)
+#                     .json (no extra required).
+#
+# Every override field is optional and defaults to None = inherit the global
+# config. An empty/partial file degrades to the global default, never to an
+# unsafe zero. Structural + Pattern scanners are mandatory and CANNOT be
+# disabled here (they are not modelled in `scanners` for that reason).
+
+tenant_id: example
+description: "Sample tenant — copy and rename to onboard a real tenant."
+
+# Rate-limit overrides. None = inherit NEURALGUARD_RATELIMIT_*.
+# A tenant may have a HIGHER quota than the global default (enterprise tiers).
+requests_per_minute: 120  # null to inherit global
+burst_size: 20            # null to inherit global
+
+# Optional-scanner overrides (tri-state: null=inherit, true=enable, false=disable).
+# `true` only takes effect if the scanner is globally registered/enabled —
+# a tenant cannot conjure an unregistered scanner. `false` lets a tenant
+# narrow its own defense surface (logged for audit).
+scanners:
+  agent_guardian: null   # inherit global NEURALGUARD_AGENT_GUARDIAN_ENABLED
+  semantic: false        # this tenant opts out of the semantic layer
+  judge: null            # inherit global NEURALGUARD_SCANNER_JUDGE_ENABLED
