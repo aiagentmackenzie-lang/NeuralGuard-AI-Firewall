@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), and Phase 3 Agent Guardian B1+B2+B3 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification) are shipped. Phase 3 B4 (multi-turn benchmark integration) and P2 enterprise hardening remain — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), and Phase 3 Agent Guardian B1+B2+B3+B4 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification + multi-turn benchmark integration with AgentPivot coverage + B4-detected scanner gap closure) are shipped. **697 tests** (CI-realistic), ruff + mypy clean, 86% coverage gate (88%+ observed). P2 enterprise hardening remains — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -78,11 +78,11 @@ LLM Provider / Local Model / Agent Framework
 | Phase 0+ | Deployability sweep (P0+P1) | ✅ Complete — boot smoke test, TLS/secret-rotation/backup runbooks, Redis multi-worker rate limiting, readiness probe, hash-chained audit, load/perf gate | 2026-06 |
 | Phase 1 | Deterministic Shield | ✅ Complete | Weeks 1-3 |
 | Phase 2 | Semantic Amplifier | ✅ Complete | Weeks 4-6 |
-| Phase 3 | Agent Guardian | 🟡 B1+B2+B3 shipped (B4 remains) | Weeks 7-9 |
+| Phase 3 | Agent Guardian | ✅ B1+B2+B3+B4 shipped | Weeks 7-9 |
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
-**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) + B3 (ASI06 dedicated T-MEM rules MEM-001..004 + HMAC canary verification unstubbed — `POST /v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, `neuralguard canary-mint` CLI) merged. 658 tests (CI-realistic; runs the full suite), ruff + mypy clean, 86% coverage gate (88%+ observed on a fresh checkout). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
-**Next:** Sprint B remaining — B4 multi-turn benchmark integration **SHIPPED on branch** `sprint-b/b4-multiturn-harness` (curated multi-turn sequences + live `AgentPivot.exploit_delegation`; deterministic CI gate + live gate; surfaced two real scanner coverage gaps documented in `benchmarks/ng_vs_ns/results/known_gaps.md` for follow-up). Awaiting merge to `main`.
+**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) + B3 (ASI06 dedicated T-MEM rules MEM-001..004 + HMAC canary verification unstubbed — `POST /v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, `neuralguard canary-mint` CLI) + B4 (multi-turn benchmark integration — curated multi-turn sequences + live `AgentPivot.exploit_delegation` + deterministic CI gate + live gate) merged. **697 tests** (CI-realistic; runs the full suite; +36 from the B4 gap-closure follow-up: +8 MEM-002 user-as-subject + +21 JB-013 + +7 AG `_MEMORY_INJECTION` / `_ROLE_DRIFT` mirror tests), ruff + mypy clean, 86% coverage gate (88%+ observed on a fresh checkout). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
+**Next:** **P2 enterprise hardening** is now the open track (per-tenant config P1-2, JWT/OIDC + rotation API P2-4, K8s artifacts + HPA P2-6, cosign SBOM/image signing P2-5, restore 90% CI coverage gate P2, SIEM alert routing P2-7). The two scanner coverage gaps surfaced by the B4 harness (MEM-002 user-as-subject phrasings + JB "AI without safety guidelines" framing) are closed in branch `sprint-b/b4-gap-closure` (TBD merge).
 
 ---
 
@@ -248,8 +248,9 @@ sequences against both configs in-process and asserts (hard gate) that
 Agent Guardian does not regress seqASR or produce false positives on
 benign multi-turn. Per-sequence detection is reported for diagnostic
 purposes — see [`benchmarks/ng_vs_ns/results/known_gaps.md`](benchmarks/ng_vs_ns/results/known_gaps.md)
-for the scanner-coverage findings the harness surfaced (real regex
-follow-ups, separate PRs).
+for the scanner-coverage findings the harness originally surfaced
+(MEM-002 user-as-subject phrasings + JB "AI without safety guidelines"
+framing; both closed in branch `sprint-b/b4-gap-closure`).
 
 **Same-author caveat applies** — attacker (NeuralStrike) and defender
 (NeuralGuard) are by the same author; this measures defense-in-depth,
