@@ -82,7 +82,7 @@ LLM Provider / Local Model / Agent Framework
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
 **Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) + B3 (ASI06 dedicated T-MEM rules MEM-001..004 + HMAC canary verification unstubbed — `POST /v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, `neuralguard canary-mint` CLI) merged. 658 tests (CI-realistic; runs the full suite), ruff + mypy clean, 86% coverage gate (88%+ observed on a fresh checkout). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
-**Next:** Sprint B remaining — B4 (benchmark integration: AgentPivot multi-turn + delayed-injection sequences, ASR delta vs B1-disabled baseline).
+**Next:** Sprint B remaining — B4 multi-turn benchmark integration **SHIPPED on branch** `sprint-b/b4-multiturn-harness` (curated multi-turn sequences + live `AgentPivot.exploit_delegation`; deterministic CI gate + live gate; surfaced two real scanner coverage gaps documented in `benchmarks/ng_vs_ns/results/known_gaps.md` for follow-up). Awaiting merge to `main`.
 
 ---
 
@@ -220,6 +220,41 @@ full `ScanOutputResponse` body (`canary_leaked` + `redacted_output` +
 forensics-grade watermarks. Bounded labels per session (≤8) is a
 defensive cap, not a security property. Pair with token rotation +
 session-scoped secrets in a real deployment.
+
+## Multi-turn benchmark integration (Phase 3, B4)
+
+Extends Sprint A's harness with **multi-turn delayed-injection
+sequences** targeting Agent Guardian directly, plus **NeuralStrike's
+`AgentPivot.exploit_delegation(agent_from, agent_to, malicious_instruction)`**
+attack module. Two defender configs: everything-but-Agent-Guardian
+(`baseline_no_guardian`) vs with-Agent-Guardian
+(`with_agent_guardian`). Headline delta = `seqASR_baseline − seqASR_with_guardian`.
+
+```bash
+# Deterministic (no model dependency) — CI-able
+uv run pytest tests/benchmarks/test_b4_multiturn.py -v -s
+# Live + local Ollama + NeuralStrike editable
+uv pip install -e ../NeuralStrike
+uv sync --extra dev --extra db --extra semantic
+ollama pull mistral:7b
+uv run python -m benchmarks.ng_vs_ns.multiturn_harness \
+    --save benchmarks/ng_vs_ns/results/b4_results.json
+```
+
+The deterministic gate (CI-able) replays 5 curated attack sequences
+(delayed injection, role drift, gradual extraction, gradual memory
+poisoning, AgentPivot delegation) + 3 curated benign multi-turn
+sequences against both configs in-process and asserts (hard gate) that
+Agent Guardian does not regress seqASR or produce false positives on
+benign multi-turn. Per-sequence detection is reported for diagnostic
+purposes — see [`benchmarks/ng_vs_ns/results/known_gaps.md`](benchmarks/ng_vs_ns/results/known_gaps.md)
+for the scanner-coverage findings the harness surfaced (real regex
+follow-ups, separate PRs).
+
+**Same-author caveat applies** — attacker (NeuralStrike) and defender
+(NeuralGuard) are by the same author; this measures defense-in-depth,
+not neutral independence. 7B local Ollama attacker is a lower bound on
+a frontier attacker's surface.
 
 ## Prompt-template analyzer (Phase 3, B2)
 
