@@ -75,6 +75,22 @@ _ROLE_DRIFT = [
         r"(?i)\byou\s+are\s+now\b|\bact\s+as\s+(?:if\s+you\s+are|a|an|the)\b"
         r"|\bpretend\s+(?:you\s+are|to\s+be)\b|\bassume\s+the\s+(?:role|identity|persona)\s+of\b"
         r"|\bfrom\s+now\s+on\s+you\s+are\b|\broleplay\s+as\b"
+        # JB-013 mirror: safety-removal persona redef also counts as role drift
+        # so a single such turn contributes to the cumulative counter for
+        # AG-DRIFT-001 (default threshold = 2). The full JB-013 regex lives
+        # in pattern.py for single-turn detection; this is the focused subset
+        # that is unambiguously a role-drift signal.
+        r"|\byou(?:'re|\s+are|\s+should\s+be|\s+have(?:\s+become)?)?\s+(?:now\s+|going\s+to\s+be\s+|to\s+be\s+|an?\s+)?(?:an?\s+)?(?:ai|assistant|model|llm|chatbot|bot)\s+"
+        r"(?:without\s+(?:any\s+|all\s+|the\s+)?(?:safety|ethical|moral|content)?\s*(?:guidelines?|rules?|filters?|guardrails?|restrictions?|constraints?|training|protocols?|policies|safeguards?|oversight|moderation|limits?|boundaries?)"
+        r"|with\s+no\s+(?:any\s+|all\s+|the\s+)?(?:safety|ethical|moral|content)?\s*(?:guidelines?|rules?|filters?|guardrails?|restrictions?|constraints?|training|protocols?|policies|safeguards?|oversight|moderation|limits?|boundaries?)"
+        r"|(?:that\s+(?:has\s+no|is\s+unrestricted|is\s+unfiltered|is\s+uncensored|lacks)))"
+        r"|(?:you(?:'re|\s+are|\s+should\s+be|\s+have(?:\s+become)?)?\s+(?:now\s+|going\s+to\s+be\s+|to\s+be\s+|an?\s+)?(?:an?\s+)?"
+        r"|(?:pretend|imagine|assume|suppose)\s+(?:you\s+are|to\s+be|that\s+you\s+are)\s+(?:an?\s+)?"
+        r"|(?:act|behave|operate)\s+as\s+(?:an?\s+)?"
+        r")(?:unrestricted|unfiltered|uncensored|unaligned|unethical|unjailed|unmoderated|unregulated)\s+(?:ai|assistant|model|llm|chatbot|bot|language\s+model)"
+        r"|\bfrom\s+now\s+on\b[,.]?\s+(?:you\s+)?(?:operate|function|answer|respond|reply|act|behave)\s+"
+        r"(?:without\s+(?:any\s+|all\s+|the\s+)?(?:safety|ethical|moral|content)\s+(?:restrictions?|constraints?|guidelines?|filters?|rules?|guardrails?|limits?|moderation|oversight)"
+        r"|with\s+no\s+(?:safety|ethical|moral|content)\s+(?:restrictions?|constraints?|guidelines?|filters?|rules?|guardrails?|limits?|moderation|oversight))"
     ),
 ]
 
@@ -97,7 +113,13 @@ _MEMORY_INJECTION = [
     re_module.compile(
         r"(?i)\b(?:remember|keep\s+in\s+mind|note|take\s+note|store|save|log)\s+(?:this|that|the\s+following)\s+(?:for\s+)?(?:future|later|subsequent|upcoming|next)\s+(?:conversations?|sessions?|interactions?|turns?|chats?|messages?)\b"
         r"|\balways\s+remember\b|\bremember\s+this\s+(?:always|forever|permanently)\b"
-        r"|\bfrom\s+now\s+on(?:,?\s+when(?:ever)?\s+(?:asked|you\s+are\s+asked|requested))?\s+(?:to\s+do\s+)?[A-Za-z ,]{0,40}(?:do|answer|respond|comply)\b"
+        r"|\bfrom\s+now\s+on(?:,?\s+when(?:ever)?\s+(?:"
+        r"(?:you(?:'re|\s+are)?\s+(?:asked|requested|prompted|queried))"
+        r"|"
+        r"(?:i|we|the\s+user|users?)\s+(?:ask(?:s|ed)?|request(?:s|ed)?|want|need|query|queries|prompt(?:s|ed)?)"
+        r"|"
+        r"(?:asked|requested|prompted|queried)"
+        r"))\s+(?:about|to\s+do|for|with|on)?\s*[A-Za-z0-9 ,'\-]{0,60}?(?:do|answer|respond|reply|say|provide|output|give|add|include|recommend|send|share|reveal|return|forward|cc|append)\b"
     ),
 ]
 
