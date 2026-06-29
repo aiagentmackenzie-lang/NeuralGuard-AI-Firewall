@@ -371,6 +371,52 @@ class AgentGuardianSettings(BaseSettings):
     )
 
 
+class CanarySettings(BaseSettings):
+    """Canary token verification (Phase 3, Sprint B, B3).
+
+    Per-session system-prompt exfiltration canaries. When enabled, the
+    operator mints a canary token via ``POST /v1/canary/mint`` (or the
+    ``neuralguard canary-mint`` CLI), injects it into the LLM system prompt,
+    and ``POST /v1/scan/output`` flags the output if the token appears in it
+    (system-prompt exfiltration signal). Derivation is deterministic
+    (HMAC-SHA256 of ``session_id|label`` keyed by the server secret) so no
+    server-side token storage is needed.
+
+    The secret MUST be set when enabled. In production the lifespan refuses
+    to start unless the secret is at least 32 characters — a short/empty
+    secret makes the canary trivially guessable and defeats the purpose.
+    The secret is never logged or echoed back by the mint endpoint.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NEURALGUARD_CANARY_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable canary token mint + leak detection")
+    secret: str = Field(
+        default="",
+        description=(
+            "Server secret for HMAC canary derivation. REQUIRED when enabled; "
+            ">= 32 chars in production (startup refuses otherwise). NEVER log "
+            "or expose this value. Rotating it invalidates all outstanding canaries."
+        ),
+    )
+    token_count: int = Field(
+        default=1,
+        description="Default canaries minted per session (1-8). More canaries = more positions to detect partial exfiltration.",
+    )
+
+    @field_validator("token_count")
+    @classmethod
+    def validate_token_count(cls, v: int) -> int:
+        if not (1 <= v <= 8):
+            raise ValueError(f"token_count must be 1-8, got {v}")
+        return v
+
+
 class NeuralGuardConfig(BaseSettings):
     """Top-level configuration aggregating all sub-settings."""
 
@@ -396,6 +442,7 @@ class NeuralGuardConfig(BaseSettings):
     tenant: TenantSettings = Field(default_factory=TenantSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     agent_guardian: AgentGuardianSettings = Field(default_factory=AgentGuardianSettings)
+    canary: CanarySettings = Field(default_factory=CanarySettings)
 
 
 def load_config(config_path: Path | None = None) -> NeuralGuardConfig:

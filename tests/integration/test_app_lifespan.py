@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from neuralguard.config.settings import NeuralGuardConfig
+from neuralguard.config.settings import (
+    AuthSettings,
+    CanarySettings,
+    NeuralGuardConfig,
+    ServerSettings,
+)
 from neuralguard.main import create_app
 
 
@@ -125,3 +130,54 @@ class TestLifespan:
             data = resp.json()
             assert data["name"] == "NeuralGuard"
             assert "owasp_coverage" in data
+
+
+# ── Canary production fail-fast (Phase 3, B3) ──────────────────────────────
+
+
+class TestCanaryProductionGates:
+    """Production must refuse to start when canary is enabled but the secret is
+    missing or too short (a weak/empty secret makes the canary guessable)."""
+
+    async def test_canary_enabled_no_secret_refused(self):
+        config = NeuralGuardConfig(
+            environment="production",
+            auth=AuthSettings(enabled=True, api_keys=["k|acme"]),
+            server=ServerSettings(allow_insecure_http=True, workers=1),
+            canary=CanarySettings(enabled=True, secret=""),
+        )
+        app = create_app(config)
+        with pytest.raises(RuntimeError, match=r"canary\.enabled=true"):
+            async with app.router.lifespan_context(app):
+                pass
+
+    async def test_canary_short_secret_refused(self):
+        config = NeuralGuardConfig(
+            environment="production",
+            auth=AuthSettings(enabled=True, api_keys=["k|acme"]),
+            server=ServerSettings(allow_insecure_http=True, workers=1),
+            canary=CanarySettings(enabled=True, secret="short"),
+        )
+        app = create_app(config)
+        with pytest.raises(RuntimeError, match=r"shorter than 32"):
+            async with app.router.lifespan_context(app):
+                pass
+
+    async def test_canary_strong_secret_allowed(self):
+        config = NeuralGuardConfig(
+            environment="production",
+            auth=AuthSettings(enabled=True, api_keys=["k|acme"]),
+            server=ServerSettings(allow_insecure_http=True, workers=1),
+            canary=CanarySettings(enabled=True, secret="x" * 40),
+        )
+        app = create_app(config)
+        async with app.router.lifespan_context(app):
+            pass  # should not raise
+        # The manager is constructed on app state when enabled.
+        assert app.state.canary_manager is not None
+        assert app.state.canary_manager.enabled is True
+
+    def test_canary_disabled_no_manager_on_state(self):
+        config = NeuralGuardConfig(environment="development")
+        app = create_app(config)
+        assert app.state.canary_manager is None

@@ -1,6 +1,6 @@
 """Pattern detection engine — Layer 2.
 
-50+ compiled regex patterns across 8 threat categories:
+50+ compiled regex patterns across 9 threat categories:
   T-PI-D  — Direct Prompt Injection
   T-PI-I  — Indirect Prompt Injection
   T-JB    — Jailbreak & Role Hijacking
@@ -9,6 +9,7 @@
   T-ENC   — Encoding Evasion (supplementary to structural)
   T-DOS   — Reasoning DoS / Cost Abuse
   T-EXT   — System Prompt Extraction
+  T-MEM   — Memory / RAG Poisoning (OWASP ASI06, single-turn heuristic)
 
 Design principles:
   - Every regex compiled with 50ms timeout (ReDoS safety)
@@ -319,6 +320,56 @@ EXT_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# T-MEM: Memory / RAG Poisoning (Rule IDs: MEM-001 to MEM-004)
+# OWASP Agentic Top 10 2026 — ASI06 (Memory Poisoning).
+# Single-turn heuristics for directives that poison a persistent
+# memory / RAG / knowledge store from one user turn. Agent Guardian
+# (Layer 5) catches the *accumulation* across turns (AG-MEM-ACCUM-001);
+# these rules catch the single-turn write/conditional-trigger directives
+# that a multi-turn accumulation attack is built from. Distinct from
+# JB-010 (benign-turn poisoning, framed as a jailbreak tactic): T-MEM
+# targets the memory-store write surface specifically.
+# Residual FPR risk: MEDIUM-severity rules (SANITIZE, i.e. review/modify)
+# can match benign persistent-preference statements ("from now on, when
+# asked for a summary, respond in bullets"). This is intentional — a
+# memory store should not accept unprompted persistent-behavior changes
+# from a user turn without review — and documented as residual risk in
+# docs/ROADMAP.md and README.md.
+# ═══════════════════════════════════════════════════════════════════════════
+
+MEM_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
+    (
+        "MEM-001",
+        Severity.HIGH,
+        0.84,
+        "Persistent memory/RAG store write directive — 'store this into your memory / save to the knowledge base / write to the vector database'",
+        r"(?i)\b(?:store|save|write|insert|persist|add|put)\s+(?:the\s+following|this|that|it|\w[\w ]{0,30}?)\s+(?:into|to|in)\s+(?:your\s+|the\s+|a\s+)?(?:long[- ]?term\s+memory|persistent\s+memory|memory\s+store|external\s+memory|knowledge\s+base|knowledge\s+store|rag(?:\s+store)?|vector\s+(?:db|database)|context\s+store|core\s+instructions?)\b",
+    ),
+    (
+        "MEM-002",
+        Severity.MEDIUM,
+        0.80,
+        "Conditional future-behavior injection (ASI06) — 'from now on, when asked X, do Y' (persistent triggered behavior)",
+        r"(?i)\bfrom\s+now\s+on\b[,.]?\s+when(?:ever)?\s+(?:you(?:'re|\s+are)?\s+(?:asked|requested|prompted|queried)|asked|requested)\s+(?:about|to\s+do|for|with)?\s*[A-Za-z0-9 ,']{0,40}?(?:do|answer|respond|reply|say|provide|output|give)\b",
+    ),
+    (
+        "MEM-003",
+        Severity.MEDIUM,
+        0.76,
+        "Persistent belief/fact poisoning — 'always treat X as Y / from now on treat ... as / permanently assume that'",
+        r"(?i)\b(?:always|from\s+now\s+on[,.]?|permanently)\s+(?:treat|consider|regard)\s+.{1,60}?\s+as\s+.{1,40}?\b|\bpermanently\s+assume\s+that\b|\bassume\s+from\s+now\s+on\s+that\b",
+    ),
+    (
+        "MEM-004",
+        Severity.MEDIUM,
+        0.74,
+        "Persistent self-rule injection — 'permanently adopt this rule / make this a permanent rule / add this to your permanent rules'",
+        r"(?i)\b(?:permanently\s+adopt(?:\s+the\s+rule)?|make\s+this\s+(?:a\s+)?permanent\s+rule|add\s+this\s+(?:to\s+your\s+)?(?:permanent|core|system)\s+rules?|write\s+this\s+rule\s+into\s+your\s+(?:core|system|base)\s+instructions?)\b",
+    ),
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # T-EXF: Data Exfiltration & PII (Rule IDs: EXF-001 to EXF-010)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -525,6 +576,7 @@ ALL_PATTERN_SETS: list[tuple[ThreatCategory, list[tuple[str, Severity, float, st
     (ThreatCategory.PROMPT_INJECTION_INDIRECT, PI_I_PATTERNS),
     (ThreatCategory.JAILBREAK, JB_PATTERNS),
     (ThreatCategory.SYSTEM_PROMPT_EXTRACTION, EXT_PATTERNS),
+    (ThreatCategory.MEMORY_POISONING, MEM_PATTERNS),
     (ThreatCategory.DATA_EXFILTRATION, EXF_PATTERNS),
     (ThreatCategory.TOOL_MISUSE, TOOL_PATTERNS),
     (ThreatCategory.DOS_ABUSE, DOS_PATTERNS),
@@ -761,6 +813,10 @@ class PatternScanner(BaseScanner["ScannerSettings"]):
             "EXT-004": "Block delimiter probing",
             "EXT-005": "Sanitize special token injection",
             "EXT-006": "Block canary/token probing",
+            "MEM-001": "Block persistent memory/RAG store write directives; do not persist untrusted user turns into long-term memory",
+            "MEM-002": "Sanitize conditional future-behavior injection; do not adopt triggered persistent behaviors from a single user turn",
+            "MEM-003": "Sanitize persistent belief/fact poisoning; do not write injected facts into the belief/memory store",
+            "MEM-004": "Sanitize persistent self-rule injection; reject unprompted additions to core/system rules",
             "EXF-001": "Redact email addresses",
             "EXF-002": "Redact phone numbers",
             "EXF-003": "Block SSN disclosure",

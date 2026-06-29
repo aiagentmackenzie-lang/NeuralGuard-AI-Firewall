@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), and Phase 3 Agent Guardian B1+B2 (multi-turn detection + static template analysis) are shipped. Phase 3 B3/B4 (ASI06 dedicated rule, canary unstub, benchmark integration) and P2 enterprise hardening remain — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), and Phase 3 Agent Guardian B1+B2+B3 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification) are shipped. Phase 3 B4 (multi-turn benchmark integration) and P2 enterprise hardening remain — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -78,11 +78,11 @@ LLM Provider / Local Model / Agent Framework
 | Phase 0+ | Deployability sweep (P0+P1) | ✅ Complete — boot smoke test, TLS/secret-rotation/backup runbooks, Redis multi-worker rate limiting, readiness probe, hash-chained audit, load/perf gate | 2026-06 |
 | Phase 1 | Deterministic Shield | ✅ Complete | Weeks 1-3 |
 | Phase 2 | Semantic Amplifier | ✅ Complete | Weeks 4-6 |
-| Phase 3 | Agent Guardian | 🟡 B1+B2 shipped (B3/B4 remain) | Weeks 7-9 |
+| Phase 3 | Agent Guardian | 🟡 B1+B2+B3 shipped (B4 remains) | Weeks 7-9 |
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
-**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) merged. 560 tests (CI-realistic; 579 with the semantic model present), ruff + mypy clean, 86% coverage gate (88.41% observed on a fresh checkout; ~90%+ with the semantic model present — see Key Metrics). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
-**Next:** Sprint B remaining — B3 (ASI06 dedicated memory-poisoning rule + canary token verification unstub) and B4 (benchmark integration: AgentPivot multi-turn + delayed-injection sequences, ASR delta vs B1-disabled baseline).
+**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) + B3 (ASI06 dedicated T-MEM rules MEM-001..004 + HMAC canary verification unstubbed — `POST /v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, `neuralguard canary-mint` CLI) merged. 658 tests (CI-realistic; runs the full suite), ruff + mypy clean, 86% coverage gate (88%+ observed on a fresh checkout). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
+**Next:** Sprint B remaining — B4 (benchmark integration: AgentPivot multi-turn + delayed-injection sequences, ASR delta vs B1-disabled baseline).
 
 ---
 
@@ -186,6 +186,40 @@ In-memory backend (B1); Redis backend is a B1+ follow-up. Bounded
 (`session_window_turns` + LRU `max_sessions`), thread-safe, fail-closed on
 state-store errors, sessions isolated + namespaced by tenant. Production
 multi-worker requires the redis backend (memory backend warns on `workers>1`).
+
+## Canary token verification (Phase 3, B3)
+
+A defense against **system-prompt exfiltration**: mint per-session canary
+tokens via deterministic HMAC-SHA256 of `session_id|label`, inject them
+into your system prompt (or refuse to send a request with an exfiltrated
+canary). Tokens are 80-bit, base32-encoded, `NGCANARY-...` prefixed. The
+same token is re-derived on `/v1/scan/output`, so there is **no server-side
+token store** — session_id is the join key.
+
+```bash
+# Mint up to 8 canaries for a session (labels A..H)
+neuralguard canary-mint sess-42 --count 4 --json
+# Detect on /v1/scan/output — `canary_leaked` is now a real signal:
+curl -X POST $NG/v1/scan/output -H "Authorization: Bearer $KEY" \
+  -d '{"session_id":"sess-42","output":"...leaked canary text...","tenant_id":"demo"}'
+```
+
+**Configuration:** opt in with `NEURALGUARD_CANARY_ENABLED=true`. In
+production the canary refuses to start without `NEURALGUARD_CANARY_SECRET`
+≥ 32 chars (configurable via the env knob). Per-session label count is
+bounded to 1..8 (`NEURALGUARD_CANARY_TOKEN_COUNT`). Failure modes:
+`check_leak` returns None when disabled / misconfigured / empty session
+(aditive signal, never raises); mint raises on disabled/misconfigured
+(fail-closed). On a leak, `/v1/scan/output` surfaces a `CANARY-LEAK-001`
+finding under `SYSTEM_PROMPT_EXTRACTION` (HIGH, BLOCK) and forces the
+verdict to BLOCK before the dispatcher — non-200 responses now carry the
+full `ScanOutputResponse` body (`canary_leaked` + `redacted_output` +
+`findings`) at the action status code.
+
+**Honest limits:** deterministic HMACs are detection signals, not
+forensics-grade watermarks. Bounded labels per session (≤8) is a
+defensive cap, not a security property. Pair with token rotation +
+session-scoped secrets in a real deployment.
 
 ## Prompt-template analyzer (Phase 3, B2)
 
@@ -312,13 +346,16 @@ endpoint over HTTP with auth) + a nightly `perf` gate (p95 latency +
 fail-closed-under-load) + SBOM (CycloneDX) + pip-audit.
 
 **OWASP coverage honesty.** `/v1/info` splits coverage into `dedicated_rules`
-(LLM01/02/05/07/10, ASI01/02/06) vs `corpus_assisted_only` (ASI04 Supply
-Chain, ASI10 Rogue Agents) — the latter have no dedicated detection rules,
-only incidental corpus vectors. Do not rely on corpus-assisted coverage as a
+(LLM01/02/05/07/10, ASI01/02/06 — the ASI06 surface is now covered by both
+the multi-turn AgentGuardianScanner accumulation rule **and** the dedicated
+T-MEM MEM-001..004 rules) vs `corpus_assisted_only` (ASI04 Supply Chain,
+ASI10 Rogue Agents) — the latter have no dedicated detection rules, only
+incidental corpus vectors. Do not rely on corpus-assisted coverage as a
 control.
 
-**Canary token verification** is stubbed (`canary_leaked=false`) and planned
-for Phase 3.
+**Canary token verification** is shipped (Phase 3, B3) — HMAC-SHA256 canaries
+on `session_id`, `POST /v1/canary/mint`, unstubbed `canary_leaked` in
+`/v1/scan/output`. See the **Canary token verification** section above.
 
 ## API Examples
 
@@ -430,11 +467,11 @@ curl -X POST http://localhost:8000/v1/scan/output \
 | Type Safety (mypy strict) | clean | ✅ verified — 0 errors, enforced in CI |
 | Memory Footprint (ONNX runtime) | <500MB | ✅ ~87 MB ONNX model, no PyTorch at runtime (export tool pulls torch) |
 | Decompression Bomb Defense | bounded | ✅ verified — 8 MiB hard cap via incremental decompress, tested |
-| Corpus Size | 1,000+ vectors | ✅ verified — 1,401 vectors across 8 categories |
+| Corpus Size | 1,000+ vectors | ✅ verified — 1,401 vectors across 9 categories (8 → 9; `MEMORY_POISONING` added for the B3 dedicated T-MEM rules) |
 | Auth / Tenant Isolation | enforced | ✅ verified — API-key auth, tenant binding, no header spoofing, tested |
 | Observability | metrics | ✅ verified — /v1/metrics Prometheus endpoint |
 | Rate Limit (multi-worker) | per-tenant, cluster-wide | ✅ Redis-backed sliding window (atomic Lua); production refuses workers>1 without it |
-| Canary token verification | works | ❌ NOT yet — stubbed (`canary_leaked=false`), Phase 3 |
+| Canary token verification | works | ✅ verified — `CanaryManager` HMAC-SHA256, `/v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, prod fail-fast on missing/short secret, `--fail-on-high` test surface |
 
 > ✅ = verified by an automated test or CI gate. ⚠️ = local observation, not yet enforced in CI. ❌ = not implemented.
 
@@ -454,4 +491,4 @@ MIT — See [LICENSE](LICENSE)
 ---
 
 **Maintained by:** Raphael Main  
-**Last Updated:** 2026-06-19
+**Last Updated:** 2026-06-29
