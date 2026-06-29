@@ -19,6 +19,58 @@ class TestCliVersion:
         assert "NeuralGuard v0.1.0" in captured.out
 
 
+class TestCliCanaryMint:
+    def test_canary_mint_disabled_exits_2(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "sys.argv", ["neuralguard", "canary-mint", "sess-1"]
+        )
+        from neuralguard.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "disabled" in err.lower()
+
+    def test_canary_mint_enabled_prints_token(self, monkeypatch, capsys, tmp_path):
+        env = {
+            "NEURALGUARD_CANARY_ENABLED": "true",
+            "NEURALGUARD_CANARY_SECRET": "x" * 40,
+        }
+        monkeypatch.setattr(os, "environ", env)
+        monkeypatch.setattr(
+            "sys.argv", ["neuralguard", "canary-mint", "sess-1"]
+        )
+        from neuralguard.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        out = capsys.readouterr().out.strip()
+        assert out.startswith("NGCANARY-")
+
+    def test_canary_mint_json_count(self, monkeypatch, capsys):
+        env = {
+            "NEURALGUARD_CANARY_ENABLED": "true",
+            "NEURALGUARD_CANARY_SECRET": "x" * 40,
+        }
+        monkeypatch.setattr(os, "environ", env)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["neuralguard", "canary-mint", "sess-1", "--count", "3", "--json"],
+        )
+        import json
+
+        from neuralguard.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["session_id"] == "sess-1"
+        assert len(data["tokens"]) == 3
+
+
 class TestCliServe:
     def test_serve_no_args_runs(self, monkeypatch, capsys):
         called = {}

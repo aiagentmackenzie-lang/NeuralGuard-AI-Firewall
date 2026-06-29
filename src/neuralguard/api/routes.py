@@ -22,13 +22,18 @@ from neuralguard.metrics import metrics
 from neuralguard.models.schemas import (
     AnalyzeTemplateRequest,
     AnalyzeTemplateResponse,
+    CanaryMintRequest,
+    CanaryMintResponse,
     EvaluateRequest,
     EvaluateResponse,
+    Finding,
     HealthResponse,
     ScanLayer,
     ScanOutputRequest,
     ScanOutputResponse,
+    Severity,
     TemplateSinkFinding,
+    ThreatCategory,
     Verdict,
 )
 
@@ -62,6 +67,16 @@ def get_config(request: Request) -> NeuralGuardConfig:
 
 def get_audit_logger(request: Request) -> AuditLogger:
     return cast("AuditLogger", request.app.state.audit_logger)
+
+
+def get_canary_manager(request: Request) -> Any:
+    """Return the CanaryManager installed on app state, or None if disabled.
+
+    The manager is constructed in ``create_app`` only when canary is enabled,
+    so its absence means the feature is off. ``Any`` keeps the import out of
+    the request hot path (the canary module is loaded lazily by main.py).
+    """
+    return getattr(request.app.state, "canary_manager", None)
 
 
 def _auth_tenant(request: Request) -> str | None:
@@ -252,15 +267,58 @@ async def scan_output(
         metrics.observe_scanner(r.layer.value, r.latency_ms / 1000.0)
     metrics.record_verdict(arbitration.verdict.value)
 
+    # Canary detection (B3) — per-session system-prompt exfiltration signal.
+    # The manager is installed on app state only when canary is enabled; its
+    # absence means the feature is off. ``check_leak`` is safe-by-default
+    # (returns None on misconfiguration) so it never breaks the output scan.
+    # Runs BEFORE the action dispatcher so a leaked canary (verdict=BLOCK)
+    # drives the dispatched response (403), not just the audit body.
+    canary_leaked = False
+    canary_manager = getattr(request.app.state, "canary_manager", None)
+    leaked_token: str | None = None
+    if canary_manager is not None and body.session_id:
+        try:
+            leaked_token = canary_manager.check_leak(body.session_id, body.output)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("canary_check_failed", error=repr(exc))
+            leaked_token = None
+    if leaked_token:
+        canary_leaked = True
+        # A leaked canary is a hard system-prompt-exfiltration signal: force
+        # BLOCK and attach a finding so the audit trail + response carry it.
+        arbitration.findings.append(
+            Finding(
+                category=ThreatCategory.SYSTEM_PROMPT_EXTRACTION,
+                severity=Severity.HIGH,
+                verdict=Verdict.BLOCK,
+                confidence=0.95,
+                layer=ScanLayer.PATTERN,
+                rule_id="CANARY-LEAK-001",
+                description=(
+                    "Canary token leaked in LLM output — the system prompt "
+                    "has been exfiltrated (the model repeated a canary that was "
+                    "only present in the confidential system prompt)."
+                ),
+                mitigation=(
+                    "Block the output; rotate the canary secret; investigate "
+                    "the exfiltration path (likely a prompt-injection / extraction "
+                    "attack on this session)."
+                ),
+                evidence=f"[REDACTED:canary:{leaked_token[:9]}...]",
+            )
+        )
+        arbitration.verdict = Verdict.BLOCK
+        arbitration.arbitration_reason = (
+            (arbitration.arbitration_reason or "") + " | canary token leaked in output"
+        )
+        metrics.record_verdict(Verdict.BLOCK.value)
+
     # Dispatch response action (output scan uses action framework)
     dispatcher = ActionDispatcher(config)
     try:
         action_result = dispatcher.execute(arbitration, body)
     except Exception as exc:
         return _internal_error(exc, "/v1/scan/output")
-
-    # Canary detection (Phase 3 — not yet implemented; tracked as P2-1)
-    canary_leaked = False
 
     total_ms = (time.perf_counter() - start) * 1000
     metrics.observe_pipeline(total_ms / 1000.0)
@@ -278,9 +336,13 @@ async def scan_output(
     audit.log_output_scan(body, audit_response)
 
     if action_result.status_code != 200:
+        # Return the full ScanOutputResponse shape (carries canary_leaked,
+        # redacted_output, findings) at the action's status code, so the
+        # operator gets the exfiltration / redaction signal even on a block.
+        # The generic action body is dropped in favour of the audit response.
         return JSONResponse(
             status_code=action_result.status_code,
-            content=action_result.body,
+            content=audit_response.model_dump(mode="json"),
             headers=action_result.headers,
         )
 
@@ -345,6 +407,65 @@ async def analyze_template(
         latency_ms=f"{total_ms:.2f}",
     )
     return response
+
+
+@router.post("/canary/mint", response_model=CanaryMintResponse)
+async def mint_canary(
+    body: CanaryMintRequest,
+    request: Request,
+) -> CanaryMintResponse | JSONResponse:
+    """Mint per-session canary token(s) for system-prompt exfiltration detection (B3).
+
+    Inject the returned token(s) into the LLM system prompt before serving
+    the turn. If a token later appears in the model output, the
+    ``/v1/scan/output`` endpoint flags it as a system-prompt exfiltration
+    signal (verdict=block, ``canary_leaked=true``).
+
+    Derivation is deterministic (HMAC-SHA256 of ``session_id|label`` keyed by
+    the server secret), so you do not need to store the token between this
+    call and the output scan — only the ``session_id`` is the join key.
+
+    Returns 503 when the canary feature is disabled or misconfigured, so a
+    client cannot silently fall back to a no-canary flow in production.
+    """
+    _check_tenant_binding(request, body.tenant_id)
+
+    start = time.perf_counter()
+    manager = get_canary_manager(request)
+    if manager is None or not manager.enabled:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "canary_disabled",
+                "message": "Canary feature is disabled. Set NEURALGUARD_CANARY_ENABLED=true and a secret.",
+            },
+        )
+    try:
+        tokens = manager.mint(body.session_id, body.count)
+    except Exception as exc:  # misconfigured secret / validation
+        logger.error("canary_mint_failed", error=repr(exc))
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "canary_misconfigured",
+                "message": "Canary feature is enabled but misconfigured. Set a valid NEURALGUARD_CANARY_SECRET.",
+            },
+        )
+
+    total_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "canary_mint_response",
+        tenant=body.tenant_id,
+        session=body.session_id,
+        token_count=len(tokens),
+        latency_ms=f"{total_ms:.2f}",
+    )
+    return CanaryMintResponse(
+        tenant_id=body.tenant_id,
+        session_id=body.session_id,
+        tokens=tokens,
+        total_latency_ms=total_ms,
+    )
 
 
 @router.get("/health", response_model=HealthResponse)

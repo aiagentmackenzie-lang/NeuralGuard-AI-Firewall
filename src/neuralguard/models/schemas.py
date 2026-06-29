@@ -211,6 +211,49 @@ class AnalyzeTemplateResponse(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class CanaryMintRequest(BaseModel):
+    """Request to mint per-session canary token(s) (B3).
+
+    The returned token(s) are injected into the LLM system prompt by the
+    operator. If a token later appears in the model output, ``/v1/scan/output``
+    flags it as a system-prompt exfiltration signal.
+    """
+
+    session_id: str = Field(description="Session to bind the canary token(s) to.")
+    tenant_id: str = Field(default="default", description="Tenant identifier")
+    count: int | None = Field(
+        default=None,
+        description="Number of distinct canaries to mint (1-8). Defaults to the configured token_count.",
+    )
+
+    @field_validator("session_id")
+    @classmethod
+    def session_id_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("session_id must not be empty")
+        return v.strip()
+
+    @field_validator("count")
+    @classmethod
+    def validate_count(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        if not (1 <= v <= 8):
+            raise ValueError("count must be 1-8")
+        return v
+
+
+class CanaryMintResponse(BaseModel):
+    """Response from the canary mint endpoint."""
+
+    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tenant_id: str
+    session_id: str
+    tokens: list[str] = Field(description="Canary token(s) to inject into the system prompt.")
+    total_latency_ms: float
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 # ── Internal Models ────────────────────────────────────────────────────────
 
 

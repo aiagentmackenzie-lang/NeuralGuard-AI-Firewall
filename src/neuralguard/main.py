@@ -159,6 +159,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "correlated (degraded multi-turn detection). Use backend=redis for "
                 "multi-worker production.",
             )
+        # Canary token verification (Phase 3, Sprint B, B3). Refuse to serve in
+        # production if the feature is enabled but the secret is missing or too
+        # short — a weak/empty secret makes the canary trivially guessable, so
+        # the exfiltration signal is worthless.
+        if config.canary.enabled:
+            if not config.canary.secret:
+                raise RuntimeError(
+                    "Production startup refused: canary.enabled=true but "
+                    "NEURALGUARD_CANARY_SECRET is not set. Set a strong secret "
+                    "(>= 32 chars), or disable canary."
+                )
+            if len(config.canary.secret) < 32:
+                raise RuntimeError(
+                    "Production startup refused: canary secret is shorter than "
+                    "32 characters — the canary would be guessable. Set a stronger "
+                    "NEURALGUARD_CANARY_SECRET, or disable canary."
+                )
         # TLS enforcement: refuse plain HTTP unless explicitly allowed (behind a
         # TLS-terminating reverse proxy that the operator takes responsibility for).
         if not config.server.allow_insecure_http:
@@ -270,6 +287,20 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             )
 
     app.state.pipeline = pipeline
+
+    # ── Initialize the canary token manager (Phase 3, B3) ──
+    # Only constructed when enabled; its absence on app.state means the feature
+    # is off (routes check for None). The secret is not logged here.
+    if config.canary.enabled:
+        from neuralguard.canary import CanaryManager
+
+        app.state.canary_manager = CanaryManager(config.canary)
+        structlog.get_logger("neuralguard").info(
+            "canary_manager_registered",
+            token_count=config.canary.token_count,
+        )
+    else:
+        app.state.canary_manager = None
 
     # ── Initialize audit logger ──
     audit_logger = AuditLogger(config.audit)

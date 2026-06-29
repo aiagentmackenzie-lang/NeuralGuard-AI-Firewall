@@ -4,11 +4,15 @@
 > The gitignored `PRODUCTION_HARDENING_PLAN.md` is the internal ledger of
 > what already landed; this doc is what is **planned**.
 >
-> **Last updated:** 2026-06-28 · **Baseline:** `main` @ 489b94e — 🥇 S/91,
-> 560 tests (CI-realistic; 579 with the semantic model), P0+P1 closed
+> **Last updated:** 2026-06-29 · **Baseline:** `main` @ 72b2ff3 → merge-incoming
+> `sprint-b/b3-canary-tmem` (tip) — 🥇 S/91, 658 tests (CI-realistic;
+> 579 → 658 with the semantic model + B3 additions), P0+P1 closed
 > (production-ready for single-worker + Redis-backed multi-worker deploys),
-> Sprint A complete (NG↔NS benchmark harness), Phase 3 Agent Guardian B1+B2
-> shipped. The A2 semantic-FPR corroboration-gate fix is merged (218f3b9).
+> Sprint A complete (NG↔NS benchmark harness), Phase 3 Agent Guardian
+> B1+B2+B3 shipped (B3 = ASI06 dedicated T-MEM rules + canary token
+> verification, awaiting merge into main). B4 (multi-turn benchmark
+> integration) is the remaining Sprint B phase. The A2 semantic-FPR
+> corroboration-gate fix is merged (218f3b9).
 
 The P0 + P1 production-readiness sweep is closed (see the merge commit
 `a40d6f2` and `PRODUCTION_HARDENING_PLAN.md`). What remains is the
@@ -112,24 +116,69 @@ surface, so it deserves the measurement harness first.
   action-adjacent variables, raw structured-data injection. `--fail-on-high`
   CI gate. `src/neuralguard/analysis/template_analyzer.py`.
 
-- **B3 — ASI06 dedicated rule + canary unstub.** ⏳ NOT STARTED (paused for API
-  limits; resumable next session).
-  - **Memory poisoning (ASI06)** is corpus-assisted only today (Agent Guardian
-    catches the *accumulation* via AG-MEM-ACCUM-001). Add a dedicated
-    single-turn heuristic for RAG/memory-write poisoning (injected "remember
-    that..." / "from now on, when asked X, do Y" / "store this into the
-    knowledge base") to the pattern scanner (`T-MEM` rules). Document residual
-    risk honestly.
-  - **Canary token verification** (`canary_leaked`, currently stubbed `false`):
-    mint per-session canary tokens (HMAC of session_id + server secret), inject
-    into the system prompt, detect them in `/v1/scan/output` as a system-prompt
-    exfiltration signal.
+- **B3 — ASI06 dedicated rule + canary unstub.** ✅ SHIPPED on branch
+  `sprint-b/b3-canary-tmem` tip, awaiting merge into main (next session
+  merge gate).
+  - **Memory poisoning (ASI06) — dedicated single-turn T-MEM rules**
+    (`scanners/pattern.py`, MEM-001..004): MEM-001 HIGH→BLOCK catches explicit
+    memory/RAG store writes ("store this into your long-term memory", "save
+    to the knowledge base", "write to the vector database", RAG / context-
+    store / core-instructions). MEM-002/003/004 MEDIUM→SANITIZE catch
+    conditional future-behavior, persistent belief poisoning, and persistent
+    self-rule directives ("from now on, when asked X, do Y"; "always treat X
+    as Y"; "permanently adopt the rule"). The Agent Guardian scanner (B1) still
+    catches the *cross-turn accumulation* via AG-MEM-ACCUM-001 — T-MEM adds
+    the dedicated single-turn surface. Distinct from JB-010 (jailbreak-framed
+    benign-turn poisoning), which remains in the JB category.
+  - **Pattern count:** 50+ → 54+ across 9 categories (was 8; the `MEMORY_POISONING`
+    category now stands on its own alongside ROLEPLAY, EXFILTRATION, etc.).
+  - **Residual FPR (documented honestly):** MEM-002/003 match benign persistent-
+    preference statements ("from now on, when asked for a summary, respond in
+    bullets"). Intentional, bounded to SANITIZE never BLOCK — a triage signal
+    rather than a content-modifying BLOCK.
+  - **Canary token verification** (`canary_leaked`, previously stubbed `false`)
+    — unstubbed with deterministic HMAC-SHA256 canaries. `CanaryManager`
+    (HMAC-SHA256 of `session_id|label`, keyed by server secret, base32
+    80-bit, `NGCANARY-...` prefix). Bounded labels A..H (≤8 per session).
+    Deterministic mint + detect — no server-side token storage; mint and
+    detect re-derive from `session_id`. Safe-by-default: `check_leak` returns
+    None when disabled/misconfigured/empty-session (additive signal that
+    never raises); mint raises on disabled/misconfigured (fail-closed).
+  - **Wiring:** `CanarySettings` (NEURALGUARD_CANARY_*) → `NeuralGuardConfig.canary`
+    (`enabled`, `secret` ≥32 chars enforced in production, `token_count` 1..8).
+    `main.py` builds the `CanaryManager` on `app.state` only when enabled; the
+    production lifespan refuses to start with no/short secret in production.
+  - **API surface:** `POST /v1/canary/mint` (503 disabled, 422 bad session /
+    bad count) + unstubbed `canary_leaked` field in `/v1/scan/output`. On a
+    canary leak the response surfaces a `CANARY-LEAK-001` finding under
+    `SYSTEM_PROMPT_EXTRACTION` (HIGH, BLOCK) with redacted evidence; the
+    verdict is forced to BLOCK and the reason string is appended to the
+    response. The canary check runs BEFORE the dispatcher so it can drive the
+    403 itself. Non-200 `/v1/scan/output` now returns the full `ScanOutputResponse`
+    body (`canary_leaked` + `redacted_output` + `findings`) at the action
+    status code.
+  - **CLI:** `neuralguard canary-mint <session_id> [--count N] [--json]`.
+  - **Tests:** 98 new — `tests/unit/test_canary.py` (25) +
+    `tests/unit/test_pattern_memory.py` (34) + `tests/unit/test_canary_api.py` (12)
+    + 4 prod-gate cases in `tests/unit/test_app_lifespan.py` + 4 CLI cases in
+    `tests/unit/test_cli.py`. Branch gate: 658 passed / 1 skipped locally,
+    ruff + mypy clean, py_compile OK on all 12 touched files. Integrity
+    verified: no memory/RAG/canary phrase leaks in non-target files; em-dashes
+    preserve house style (already used in `agent_guardian.py`).
 
-- **B4 — Benchmark integration.** ⏳ NOT STARTED. Extend Sprint A's harness
-  with NeuralStrike's `AgentPivot` (multi-agent lateral movement) and a
-  multi-turn attack script (delayed-injection sequences). Measure Agent
-  Guardian's ASR delta vs the B1-disabled baseline. Success: a measurable ASR
-  reduction with `agent_guardian.enabled=true`.
+- **B4 — Benchmark integration.** ⏳ NOT STARTED — next phase after the B3
+  merge lands on main. Extend Sprint A's harness with NeuralStrike's
+  `AgentPivot` (multi-agent lateral movement, `exploit_delegation(agent_from,
+  agent_to, malicious_instruction)` in
+  `NeuralStrike/src/neuralstrike/modules/exploit/agent_pivot.py`) plus
+  delayed-injection multi-turn sequences. Measure Agent Guardian's ASR delta
+  vs the B1-disabled baseline. Success: a measurable ASR reduction with
+  `agent_guardian.enabled=true`. Plan: `benchmarks/ng_vs_ns/multiturn_harness.py`
+  (live, skip-guarded like A2 — needs NeuralStrike editable + local Ollama +
+  the [semantic] extra) AND `tests/benchmarks/test_b4_multiturn.py` with a
+  DETERMINISTIC multi-turn regression gate (CI-able, no model dependency) plus
+  a live gate that skips in CI. Same-author caveat (attacker + defender = same
+  repo) is reiterated in the harness README.
 
 ### Honest non-goals (Sprint B)
 - No full LLM-based conversation reasoning — the B1 detector is
@@ -142,7 +191,10 @@ surface, so it deserves the measurement harness first.
 ### Deliverables
 - `scanners/agent_guardian.py` + `AgentGuardianScanner` registered in the pipeline
 - `cli.py` `analyze-template` subcommand + `/v1/analyze/template` route
-- ASI06 dedicated rule + canary verification in `scan/output`
+- `scanners/canary.py` `CanaryManager` + `POST /v1/canary/mint` + `canary_leaked`
+  in `/v1/scan/output` + `neuralguard canary-mint` CLI
+- `T-MEM` MEM-001..004 rules in `scanners/pattern.py` (54+ total rules across
+  9 categories)
 - Tests (unit + a multi-turn redteam fixture) + benchmark extension
 - README + `PRODUCTION_HARDENING_PLAN.md` updates; re-score in
   `Security_Portfolio_Reference.md`

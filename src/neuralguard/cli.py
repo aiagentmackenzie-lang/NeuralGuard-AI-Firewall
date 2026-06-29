@@ -52,6 +52,35 @@ def _cmd_analyze_template(args: argparse.Namespace) -> int:
     return 1 if (args.fail_on_high and has_high) else 0
 
 
+def _cmd_canary_mint(args: argparse.Namespace) -> int:
+    """`neuralguard canary-mint <session_id>` — mint per-session canary token(s)."""
+    from neuralguard.config.settings import load_config
+
+    config = load_config()
+    if not config.canary.enabled:
+        print(
+            "error: canary feature is disabled. Set NEURALGUARD_CANARY_ENABLED=true "
+            "and NEURALGUARD_CANARY_SECRET.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        from neuralguard.canary import CanaryManager
+
+        manager = CanaryManager(config.canary)
+        tokens = manager.mint(args.session_id, args.count)
+    except Exception as exc:  # misconfigured secret / validation
+        print(f"error: cannot mint canary: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps({"session_id": args.session_id, "tokens": tokens}))
+    else:
+        for tok in tokens:
+            print(tok)
+    return 0
+
+
 def main() -> None:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -91,6 +120,21 @@ def main() -> None:
     )
     at.set_defaults(func=_cmd_analyze_template)
 
+    # canary-mint (B3)
+    cm = subparsers.add_parser(
+        "canary-mint",
+        help="Mint per-session canary token(s) for system-prompt exfiltration detection.",
+    )
+    cm.add_argument("session_id", help="Session ID to bind the canary token(s) to.")
+    cm.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="Number of distinct canaries to mint (1-8). Defaults to NEURALGUARD_CANARY_TOKEN_COUNT.",
+    )
+    cm.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    cm.set_defaults(func=_cmd_canary_mint)
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -100,6 +144,9 @@ def main() -> None:
         sys.exit(0)
 
     if args.command == "analyze-template":
+        sys.exit(args.func(args))
+
+    if args.command == "canary-mint":
         sys.exit(args.func(args))
 
     if args.command == "serve" or args.command is None:
