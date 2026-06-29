@@ -156,8 +156,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         registry = self._tenant_registry
         if registry is not None and registry.enabled:
             # Resolve per-tenant overrides; None/unknown tenant -> global default
-            # (fail-open: a config miss never denies a request).
-            rpm, burst = registry.effective_rate_limit(tenant_id, rpm, burst)
+            # (fail-open: a config miss never denies a request). The registry is
+            # designed to never raise, but defend-in-depth: if it ever does, fall
+            # back to the global limits and log — never crash the request path
+            # with an unhandled exception (BaseHTTPMiddleware would bypass the
+            # global handler and leak a raw 500).
+            try:
+                rpm, burst = registry.effective_rate_limit(tenant_id, rpm, burst)
+            except (
+                Exception
+            ) as exc:  # defense-in-depth (covered by TestTenantEndpointExceptionHygiene)
+                logger.warning(
+                    "tenant_ratelimit_resolve_failed",
+                    tenant=tenant_id,
+                    error=repr(exc),
+                    msg="falling back to global rate-limit defaults",
+                )
 
         allowed: bool
         remaining: int

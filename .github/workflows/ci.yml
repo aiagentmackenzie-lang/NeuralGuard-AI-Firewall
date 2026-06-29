@@ -115,12 +115,17 @@ jobs:
         run: uv python install 3.11
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra db
+        run: uv sync --extra dev --extra db --extra tenants
 
       - name: Check for known vulnerabilities
         run: |
-          uv pip audit 2>/dev/null || uv run pip-audit 2>/dev/null || echo "pip-audit not available, skipping"
-        continue-on-error: true
+          uv run pip-audit --ignore-vuln PYSEC-2026-196
+        # Blocking (no continue-on-error): a known-vulnerable runtime dep
+        # fails CI. PYSEC-2026-196 is the pip *installer* self-vuln; pip is
+        # not a runtime dependency and is not shipped in the container
+        # (Dockerfile uses `uv sync --no-dev`, no pip) so it is ignored
+        # here with justification. Runtime deps (pydantic-settings,
+        # msgpack, etc.) are pinned to patched floors in pyproject.toml.
 
   # ── SBOM ─────────────────────────────────────────────────────────────
   sbom:

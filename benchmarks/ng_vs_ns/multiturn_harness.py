@@ -346,9 +346,7 @@ async def _ollama_ok(model: str) -> bool:
 # ── Attack generation ──────────────────────────────────────────────────────
 
 
-async def generate_agentpivot_sequences(
-    *, attacker_model: str
-) -> list[MultiturnSequence]:
+async def generate_agentpivot_sequences(*, attacker_model: str) -> list[MultiturnSequence]:
     """Generate an AgentPivot-driven multi-turn sequence using a live LLM.
 
     Returns a list with a single MultiturnSequence (`b4-pivot-<timestamp>`)
@@ -360,9 +358,7 @@ async def generate_agentpivot_sequences(
     """
     ns_settings, AgentPivot = _require_neuralstrike()  # noqa: N806
     ns_settings.attacker_model = attacker_model
-    pivot = AgentPivot(
-        target_framework="crewai", target_model=attacker_model, target_type="local"
-    )
+    pivot = AgentPivot(target_framework="crewai", target_model=attacker_model, target_type="local")
     delegation_payload = await pivot.exploit_delegation(
         agent_from="lowpriv",
         agent_to="highpriv",
@@ -454,9 +450,7 @@ def _worst(*verdicts: str) -> str:
     return max(verdicts, key=lambda v: VERDICT_RANK.get(v, 0))
 
 
-async def _eval_turn(
-    client: AsyncClient, text: str, session_id: str
-) -> tuple[str, float]:
+async def _eval_turn(client: AsyncClient, text: str, session_id: str) -> tuple[str, float]:
     resp = await client.post(
         "/v1/evaluate",
         json={"prompt": text, "tenant_id": TENANT_ID, "session_id": session_id},
@@ -644,10 +638,7 @@ def _format_results(payload: dict[str, Any]) -> str:
         f"curated benign sequences: {payload['n_curated_benign_sequences']}"
     )
     lines.append("")
-    lines.append(
-        f"{'config':<26} {'seqASR':>8} {'turnASR':>9} "
-        f"{'seqFPR':>8} {'turnFPR':>9}"
-    )
+    lines.append(f"{'config':<26} {'seqASR':>8} {'turnASR':>9} {'seqFPR':>8} {'turnFPR':>9}")
     lines.append("-" * 64)
     for c in payload["configs"]:
         lines.append(
@@ -658,7 +649,9 @@ def _format_results(payload: dict[str, Any]) -> str:
     lines.append("")
     if payload["delta"]:
         d = payload["delta"]
-        lines.append("Delta (baseline - with_guardian)  [positive ASR delta = guardian helps; negative FPR delta = guardian clean]:")
+        lines.append(
+            "Delta (baseline - with_guardian)  [positive ASR delta = guardian helps; negative FPR delta = guardian clean]:"
+        )
         lines.append(
             f"  seqASR delta: {d['asr_sequences_delta']:+.2%}  "
             f"turnASR delta: {d['asr_turns_delta']:+.2%}  "

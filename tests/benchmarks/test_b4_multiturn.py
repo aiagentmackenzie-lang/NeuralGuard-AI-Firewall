@@ -127,9 +127,7 @@ class TestB4MultiturnDeterministic:
     @pytest.mark.asyncio
     async def test_benign_multi_turn_not_overblocked(self):
         """Hard gate: benign multi-turn sequences must end ALLOW with AG on."""
-        records = await _replay_sequences_through_config(
-            config_name="with_agent_guardian"
-        )
+        records = await _replay_sequences_through_config(config_name="with_agent_guardian")
         benign_records = [r for r in records if not _is_attack(r)]
         assert len(benign_records) >= 2, (
             f"Expected >=2 benign multi-turn sequences, got {len(benign_records)}"
@@ -152,12 +150,8 @@ class TestB4MultiturnDeterministic:
         coverage-gap findings logged separately). A negative delta is a
         regression that fails the gate.
         """
-        baseline = await _replay_sequences_through_config(
-            config_name="baseline_no_guardian"
-        )
-        guarded = await _replay_sequences_through_config(
-            config_name="with_agent_guardian"
-        )
+        baseline = await _replay_sequences_through_config(config_name="baseline_no_guardian")
+        guarded = await _replay_sequences_through_config(config_name="with_agent_guardian")
         b_attack = [r for r in baseline if _is_attack(r)]
         g_attack = [r for r in guarded if _is_attack(r)]
         n_b = max(1, len(b_attack))

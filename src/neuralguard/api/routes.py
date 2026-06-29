@@ -312,8 +312,8 @@ async def scan_output(
         )
         arbitration.verdict = Verdict.BLOCK
         arbitration.arbitration_reason = (
-            (arbitration.arbitration_reason or "") + " | canary token leaked in output"
-        )
+            arbitration.arbitration_reason or ""
+        ) + " | canary token leaked in output"
         metrics.record_verdict(Verdict.BLOCK.value)
 
     # Dispatch response action (output scan uses action framework)
@@ -604,7 +604,7 @@ def _resolve_effective_scanners(
 async def list_tenants(
     request: Request,
     config: NeuralGuardConfig = Depends(get_config),
-) -> TenantListResponse:
+) -> TenantListResponse | JSONResponse:
     """List all configured tenants with their effective config (read-only).
 
     Auth-protected. Returns 404 if multi-tenant mode is disabled.
@@ -618,10 +618,13 @@ async def list_tenants(
                 "message": "Multi-tenant mode is disabled. Set NEURALGUARD_TENANT_ENABLED=true.",
             },
         )
-    items: list[TenantInfoResponse] = []
-    for cfg in registry.list_tenants():
-        items.append(_tenant_info_from_config(config, cfg))
-    return TenantListResponse(tenants=items, count=len(items))
+    try:
+        items: list[TenantInfoResponse] = []
+        for cfg in registry.list_tenants():
+            items.append(_tenant_info_from_config(config, cfg))
+        return TenantListResponse(tenants=items, count=len(items))
+    except Exception as exc:
+        return _internal_error(exc, "/v1/tenants")
 
 
 @router.get("/tenants/{tenant_id}", response_model=TenantInfoResponse)
@@ -629,7 +632,7 @@ async def get_tenant(
     tenant_id: str,
     request: Request,
     config: NeuralGuardConfig = Depends(get_config),
-) -> TenantInfoResponse:
+) -> TenantInfoResponse | JSONResponse:
     """Return the effective config for one tenant (read-only, no secrets).
 
     Auth-protected. A tenant with no override file returns ``configured=false``
@@ -664,8 +667,11 @@ async def get_tenant(
                 "message": "API key is not authorized for the requested tenant_id.",
             },
         )
-    cfg = registry.get(tenant_id)
-    return _tenant_info_from_config(config, cfg, tenant_id=tenant_id)
+    try:
+        cfg = registry.get(tenant_id)
+        return _tenant_info_from_config(config, cfg, tenant_id=tenant_id)
+    except Exception as exc:
+        return _internal_error(exc, f"/v1/tenants/{tenant_id}")
 
 
 def _tenant_info_from_config(

@@ -105,9 +105,7 @@ class CanaryManager:
             raise CanaryMisconfiguredError(
                 "Canary feature is enabled but NEURALGUARD_CANARY_SECRET is not set."
             )
-        mac = hmac.new(
-            self._secret, f"{session_id}|{label}".encode(), hashlib.sha256
-        ).digest()
+        mac = hmac.new(self._secret, f"{session_id}|{label}".encode(), hashlib.sha256).digest()
         return f"{_TOKEN_PREFIX}{self._encode(mac[:_HMAC_BYTES])}"
 
     def mint(self, session_id: str, count: int | None = None) -> list[str]:

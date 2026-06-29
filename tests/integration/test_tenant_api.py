@@ -153,16 +153,12 @@ class TestTenantBinding:
             app.router.lifespan_context(app),  # type: ignore[attr-defined]
         ):
             # Authenticated as acme -> reading globex is forbidden.
-                r = await c.get(
-                    "/v1/tenants/globex", headers={"X-API-Key": "key"}
-                )
-                assert r.status_code == 403
-                assert r.json()["detail"]["error"] == "tenant_mismatch"
-                # Reading own tenant is allowed.
-                r2 = await c.get(
-                    "/v1/tenants/acme", headers={"X-API-Key": "key"}
-                )
-                assert r2.status_code == 200
+            r = await c.get("/v1/tenants/globex", headers={"X-API-Key": "key"})
+            assert r.status_code == 403
+            assert r.json()["detail"]["error"] == "tenant_mismatch"
+            # Reading own tenant is allowed.
+            r2 = await c.get("/v1/tenants/acme", headers={"X-API-Key": "key"})
+            assert r2.status_code == 200
 
 
 # ── Lifespan production gate (YAML without PyYAML) ──────────────────────────
@@ -200,9 +196,7 @@ class TestTenantLifespanGates:
     async def test_production_json_without_pyyaml_allowed(self, tmp_path):
         d = tmp_path / "tenants"
         d.mkdir()
-        (d / "acme.json").write_text(
-            json.dumps({"tenant_id": "acme"}), encoding="utf-8"
-        )
+        (d / "acme.json").write_text(json.dumps({"tenant_id": "acme"}), encoding="utf-8")
         cfg = NeuralGuardConfig(
             environment="production",
             auth=AuthSettings(enabled=True, api_keys=["k|acme"]),
@@ -219,9 +213,7 @@ class TestTenantLifespanGates:
         app = create_app()
         assert app.state.tenant_registry is None
 
-    async def test_enabled_tenant_mode_registry_built_and_reload_task_started(
-        self, tenants_dir
-    ):
+    async def test_enabled_tenant_mode_registry_built_and_reload_task_started(self, tenants_dir):
         app = _app(tenants_dir)
         async with app.router.lifespan_context(app):  # type: ignore[attr-defined]
             assert app.state.tenant_registry is not None
@@ -229,3 +221,56 @@ class TestTenantLifespanGates:
             assert app.state.tenant_registry._reload_task is not None
         # After shutdown the reload task is cancelled.
         assert app.state.tenant_registry._reload_task is None
+
+
+# ── Exception hygiene (Sprint C C2) ─────────────────────────────────────────
+
+
+class TestTenantEndpointExceptionHygiene:
+    """The global @app.exception_handler(Exception) is unreachable through
+    BaseHTTPMiddleware, so each route must self-wrap in _internal_error. An
+    unexpected registry exception must return a sanitized 500 with a
+    correlation_id — never a raw Starlette 500 traceback."""
+
+    @pytest.mark.asyncio
+    async def test_list_tenants_registry_error_sanitized_500(self, tenants_dir, monkeypatch):
+        app = _app(tenants_dir)
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with (
+            AsyncClient(transport=transport, base_url="http://test") as c,
+            app.router.lifespan_context(app),  # type: ignore[attr-defined]
+        ):
+            registry = app.state.tenant_registry
+
+            def boom() -> list:
+                raise RuntimeError("simulated registry failure")
+
+            monkeypatch.setattr(registry, "list_tenants", boom)
+            r = await c.get("/v1/tenants")
+            assert r.status_code == 500
+            body = r.json()
+            assert body["error"] == "internal_error"
+            assert "correlation_id" in body
+            # The internal error must NOT leak to the client.
+            assert "simulated registry failure" not in r.text
+
+    @pytest.mark.asyncio
+    async def test_get_tenant_registry_error_sanitized_500(self, tenants_dir, monkeypatch):
+        app = _app(tenants_dir)
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with (
+            AsyncClient(transport=transport, base_url="http://test") as c,
+            app.router.lifespan_context(app),  # type: ignore[attr-defined]
+        ):
+            registry = app.state.tenant_registry
+
+            def boom(tenant_id: str):
+                raise RuntimeError("simulated get failure")
+
+            monkeypatch.setattr(registry, "get", boom)
+            r = await c.get("/v1/tenants/acme")
+            assert r.status_code == 500
+            body = r.json()
+            assert body["error"] == "internal_error"
+            assert "correlation_id" in body
+            assert "simulated get failure" not in r.text

@@ -21,9 +21,7 @@ class TestCliVersion:
 
 class TestCliCanaryMint:
     def test_canary_mint_disabled_exits_2(self, monkeypatch, capsys):
-        monkeypatch.setattr(
-            "sys.argv", ["neuralguard", "canary-mint", "sess-1"]
-        )
+        monkeypatch.setattr("sys.argv", ["neuralguard", "canary-mint", "sess-1"])
         from neuralguard.cli import main
 
         with pytest.raises(SystemExit) as exc:
@@ -38,9 +36,7 @@ class TestCliCanaryMint:
             "NEURALGUARD_CANARY_SECRET": "x" * 40,
         }
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            "sys.argv", ["neuralguard", "canary-mint", "sess-1"]
-        )
+        monkeypatch.setattr("sys.argv", ["neuralguard", "canary-mint", "sess-1"])
         from neuralguard.cli import main
 
         with pytest.raises(SystemExit) as exc:
