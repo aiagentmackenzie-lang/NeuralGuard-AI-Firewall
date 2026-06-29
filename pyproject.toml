@@ -56,11 +56,14 @@ db = [
 redis = [
     "redis>=5.2.0",
 ]
+tenants = [
+    "pyyaml>=6.0.1",
+]
 metrics = [
     "prometheus-client>=0.21.0",
 ]
 all = [
-    "neuralguard[semantic,db,redis,metrics]",
+    "neuralguard[semantic,db,redis,metrics,tenants]",
 ]
 dev = [
     "pytest>=8.3.0",
@@ -129,7 +132,7 @@ disallow_untyped_defs = true
 # Third-party libs without py.typed markers — treat as untyped rather than
 # blocking CI. These are stable, well-known libraries.
 [[tool.mypy.overrides]]
-module = ["regex", "onnxruntime", "tokenizers", "redis", "redis.*"]
+module = ["regex", "onnxruntime", "tokenizers", "redis", "redis.*", "yaml"]
 ignore_missing_imports = true
 
 # SQLAlchemy mapped_column inference can be noisy; keep strict but allow its

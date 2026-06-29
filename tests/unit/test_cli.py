@@ -71,6 +71,55 @@ class TestCliCanaryMint:
         assert len(data["tokens"]) == 3
 
 
+class TestCliTenants:
+    def _env(self, tmp_path, enabled=True):
+        return {
+            "NEURALGUARD_TENANT_ENABLED": "true" if enabled else "false",
+            "NEURALGUARD_TENANT_CONFIG_PATH": str(tmp_path),
+        }
+
+    def test_tenants_disabled_exits_2(self, monkeypatch, capsys, tmp_path):
+        monkeypatch.setattr(os, "environ", self._env(tmp_path, enabled=False))
+        monkeypatch.setattr("sys.argv", ["neuralguard", "tenants", "list"])
+        from neuralguard.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+        assert "disabled" in capsys.readouterr().err.lower()
+
+    def test_tenants_list(self, monkeypatch, capsys, tmp_path):
+        import json
+
+        (tmp_path / "acme.json").write_text(
+            json.dumps({"tenant_id": "acme", "description": "Acme"}), encoding="utf-8"
+        )
+        monkeypatch.setattr(os, "environ", self._env(tmp_path))
+        monkeypatch.setattr("sys.argv", ["neuralguard", "tenants", "list", "--json"])
+        from neuralguard.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        data = json.loads(capsys.readouterr().out)
+        assert isinstance(data, list)
+        assert data[0]["tenant_id"] == "acme"
+
+    def test_tenants_info_unknown_tenant_note(self, monkeypatch, capsys, tmp_path):
+        import json
+
+        monkeypatch.setattr(os, "environ", self._env(tmp_path))
+        monkeypatch.setattr("sys.argv", ["neuralguard", "tenants", "info", "ghost", "--json"])
+        from neuralguard.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["configured"] is False
+        assert data["tenant_id"] == "ghost"
+
+
 class TestCliServe:
     def test_serve_no_args_runs(self, monkeypatch, capsys):
         called = {}

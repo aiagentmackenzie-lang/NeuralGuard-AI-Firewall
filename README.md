@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), and Phase 3 Agent Guardian B1+B2+B3+B4 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification + multi-turn benchmark integration with AgentPivot coverage + B4-detected scanner gap closure) are shipped. **697 tests** (CI-realistic), ruff + mypy clean, 86% coverage gate (88%+ observed). P2 enterprise hardening remains — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), and Phase 3 Agent Guardian B1+B2+B3+B4 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification + multi-turn benchmark integration with AgentPivot coverage + B4-detected scanner gap closure) are shipped. **697 tests** on `main` (CI-realistic), ruff + mypy clean, 86% coverage gate (88%+ observed). Sprint C opened: C1 per-tenant config shipped on branch (759 tests on the branch). P2 enterprise hardening remains — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -81,7 +81,7 @@ LLM Provider / Local Model / Agent Framework
 | Phase 3 | Agent Guardian | ✅ B1+B2+B3+B4 shipped | Weeks 7-9 |
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
-**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) + B3 (ASI06 dedicated T-MEM rules MEM-001..004 + HMAC canary verification unstubbed — `POST /v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, `neuralguard canary-mint` CLI) + B4 (multi-turn benchmark integration — curated multi-turn sequences + live `AgentPivot.exploit_delegation` + deterministic CI gate + live gate) merged. **697 tests** (CI-realistic; runs the full suite; +36 from the B4 gap-closure follow-up: +8 MEM-002 user-as-subject + +21 JB-013 + +7 AG `_MEMORY_INJECTION` / `_ROLE_DRIFT` mirror tests), ruff + mypy clean, 86% coverage gate (88%+ observed on a fresh checkout). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P1-2 (per-tenant config) + P2 enterprise track.
+**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1 (multi-turn AgentGuardianScanner) + B2 (static prompt-template analyzer CLI + endpoint) + B3 (ASI06 dedicated T-MEM rules MEM-001..004 + HMAC canary verification unstubbed — `POST /v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, `neuralguard canary-mint` CLI) + B4 (multi-turn benchmark integration — curated multi-turn sequences + live `AgentPivot.exploit_delegation` + deterministic CI gate + live gate) merged. **Sprint C C1** (per-tenant config — `tenants/<id>.yaml|json` overrides, per-tenant RPM/burst + scanner ceiling, hot-reload, read-only API + CLI) shipped on branch `sprint-c/c1-per-tenant-config` (759 tests on the branch; awaiting merge). **697 tests** on `main` (CI-realistic; runs the full suite; +36 from the B4 gap-closure follow-up: +8 MEM-002 user-as-subject + +21 JB-013 + +7 AG `_MEMORY_INJECTION` / `_ROLE_DRIFT` mirror tests), ruff + mypy clean, 86% coverage gate (88%+ observed on a fresh checkout). CI: lint + matrix tests + coverage gate + boot-smoke (real uvicorn over HTTP) + nightly perf gate + nightly bench gate + SBOM + pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P2 enterprise track (P1-2 per-tenant config shipped on branch as Sprint C C1).
 **Next:** **P2 enterprise hardening** is now the open track (per-tenant config P1-2, JWT/OIDC + rotation API P2-4, K8s artifacts + HPA P2-6, cosign SBOM/image signing P2-5, restore 90% CI coverage gate P2, SIEM alert routing P2-7). The two scanner coverage gaps surfaced by the B4 harness (MEM-002 user-as-subject phrasings + JB "AI without safety guidelines" framing) are closed in branch `sprint-b/b4-gap-closure` (TBD merge).
 
 ---
@@ -256,6 +256,58 @@ framing; both closed in branch `sprint-b/b4-gap-closure`).
 (NeuralGuard) are by the same author; this measures defense-in-depth,
 not neutral independence. 7B local Ollama attacker is a lower bound on
 a frontier attacker's surface.
+
+## Per-tenant config (Sprint C, C1 / P1-2)
+
+Multi-tenant mode lets an operator override the global config per tenant via
+`tenants/<tenant_id>.yaml` (or `.json`) files. The override overlay applies at
+request time to the rate-limit quota and the three optional scanners.
+
+**Security model (opinionated, fail-safe):**
+
+- **Structural + Pattern are mandatory.** A tenant can never disable the core
+  sanitization + regex layers — they are not modelled in the override schema.
+- **Override = `None` inherits the global default.** Every override field
+  defaults to `None`, so a partial/empty tenant file degrades to the global
+  config, never to an unsafe zero.
+- **Unknown tenant -> global default (fail-OPEN, never a 403).** Denying a
+  request because a YAML file is missing is a self-inflicted denial-of-service.
+- **Tenant config is a ceiling for the client `request.scanners` field.** A
+  client may narrow the scanner set but never widen it past the tenant +
+  global registration (per-tenant enforcement, not just a default).
+- **Hot-reload is fail-safe.** A parse error keeps the last-good config and
+  logs; the registry is never blanked and the request path never raises.
+
+```yaml
+# tenants/acme.yaml  — filename stem MUST equal tenant_id
+tenant_id: acme
+description: "Acme Co"
+requests_per_minute: 120   # null to inherit NEURALGUARD_RATELIMIT_*
+burst_size: 20
+scanners:
+  agent_guardian: null     # inherit global
+  semantic: false          # this tenant opts out of the semantic layer
+  judge: null              # inherit global
+```
+
+```bash
+# Read-only effective-config surface (auth-gated, tenant-binding-enforced)
+neuralguard tenants list [--json]
+neuralguard tenants info <tenant_id> [--json]
+# Or via the API:
+curl $NG/v1/tenants          -H "Authorization: Bearer $KEY"
+curl $NG/v1/tenants/acme     -H "Authorization: Bearer $KEY"
+```
+
+YAML tenant files require the optional `[tenants]` extra (`pip install
+neuralguard[tenants]`); `.json` tenant files work with no extra. In production
+the lifespan refuses to start if tenant mode is on, a YAML file is present,
+and PyYAML is not installed. See [`tenants/example.yaml`](tenants/example.yaml)
+for a documented sample. **Honest non-goal:** C1 ships read-only config + a
+per-tenant ceiling; per-tenant JWT/OAuth (P2-4) and a write/admin API are
+follow-up Sprint C work.
+
+---
 
 ## Prompt-template analyzer (Phase 3, B2)
 
@@ -508,6 +560,7 @@ curl -X POST http://localhost:8000/v1/scan/output \
 | Observability | metrics | ✅ verified — /v1/metrics Prometheus endpoint |
 | Rate Limit (multi-worker) | per-tenant, cluster-wide | ✅ Redis-backed sliding window (atomic Lua); production refuses workers>1 without it |
 | Canary token verification | works | ✅ verified — `CanaryManager` HMAC-SHA256, `/v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, prod fail-fast on missing/short secret, `--fail-on-high` test surface |
+| Per-tenant config (C1) | works | ✅ verified on branch — `TenantConfigRegistry` loads `tenants/*.yaml\|json`, per-tenant RPM/burst + scanner ceiling (Structural/Pattern mandatory), hot-reload, `GET /v1/tenants[/{id}]` + `neuralguard tenants list\|info` CLI, prod fail-fast on YAML-without-PyYAML |
 
 > ✅ = verified by an automated test or CI gate. ⚠️ = local observation, not yet enforced in CI. ❌ = not implemented.
 

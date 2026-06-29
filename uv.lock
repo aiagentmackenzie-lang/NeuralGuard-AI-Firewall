@@ -1879,6 +1879,7 @@ all = [
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "prometheus-client" },
+    { name = "pyyaml" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "tokenizers" },
@@ -1921,6 +1922,9 @@ semantic-export = [
     { name = "sentence-transformers" },
     { name = "tokenizers" },
 ]
+tenants = [
+    { name = "pyyaml" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1939,7 +1943,7 @@ requires-dist = [
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.115.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
-    { name = "neuralguard", extras = ["semantic", "db", "redis", "metrics"], marker = "extra == 'all'" },
+    { name = "neuralguard", extras = ["semantic", "db", "redis", "metrics", "tenants"], marker = "extra == 'all'" },
     { name = "numpy", marker = "extra == 'semantic'", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'semantic-export'", specifier = ">=1.26.0" },
     { name = "onnxruntime", marker = "extra == 'semantic'", specifier = ">=1.19.0" },
@@ -1957,6 +1961,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "python-dateutil", specifier = ">=2.9.0" },
+    { name = "pyyaml", marker = "extra == 'tenants'", specifier = ">=6.0.1" },
     { name = "redis", marker = "extra == 'dev'", specifier = ">=5.2.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.2.0" },
     { name = "regex", specifier = ">=2024.11.0" },
@@ -1970,7 +1975,7 @@ requires-dist = [
     { name = "urllib3", specifier = ">=2.7.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
 ]
-provides-extras = ["semantic", "semantic-export", "db", "redis", "metrics", "all", "dev"]
+provides-extras = ["semantic", "semantic-export", "db", "redis", "tenants", "metrics", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "datasets", specifier = ">=4.8.5" }]

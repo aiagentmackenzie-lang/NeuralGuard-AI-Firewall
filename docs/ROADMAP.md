@@ -4,14 +4,13 @@
 > The gitignored `PRODUCTION_HARDENING_PLAN.md` is the internal ledger of
 > what already landed; this doc is what is **planned**.
 >
-> **Last updated:** 2026-06-29 · **Baseline:** `main` @ `45a08d2` (B4
-> merge) → B3 (`63ec379`) → pre-B3 (`72b2ff3`). **Sprint B (Phase 3
-> Agent Guardian) COMPLETE:** B1+B2 (`489b94e`), B3 (`63ec379`),
-> B4 (`45a08d2`). 661 passed / 1 skipped. B4 surfaced 2 real scanner
-> coverage gaps documented in
-> `benchmarks/ng_vs_ns/results/known_gaps.md` for follow-up commits.
-> The A2 semantic-FPR corroboration-gate fix is merged (`218f3b9`).
-> Branch `sprint-b/b4-gap-closure` closes both gaps (TBD merge).
+> **Last updated:** 2026-06-29 · **Baseline:** `main` @ `41118ba`
+> (B4 gap closure merge) → B4 (`45a08d2`) → B3 (`63ec379`). **Sprint B
+> (Phase 3 Agent Guardian) COMPLETE & MERGED:** B1+B2 (`489b94e`),
+> B3 (`63ec379`), B4 (`45a08d2`), B4 gap closure (`41118ba`). 697
+> passed / 1 skipped on `main`. **Sprint C opened:** C1 per-tenant
+> config shipped on branch `sprint-c/c1-per-tenant-config` (awaiting
+> merge) — 759 passed / 1 skipped on the branch.
 
 The P0 + P1 production-readiness sweep is closed (see the merge commit
 `a40d6f2` and `PRODUCTION_HARDENING_PLAN.md`). What remains is the
@@ -267,8 +266,30 @@ surface, so it deserves the measurement harness first.
 Post-moat. Not blocking; pick these up for specific customer/enterprise
 requirements.
 
-- **P1-2 — Per-tenant config.** `tenants/<id>.yaml` → per-tenant
-  RPM/burst/scanner overrides. `TenantSettings` exists but is unwired.
+- **P1-2 — Per-tenant config.** ✅ SHIPPED on branch
+  `sprint-c/c1-per-tenant-config` (off `main` @ `41118ba`), awaiting merge
+  gate. ``tenants/<id>.yaml|json`` override files loaded into an
+  in-memory `TenantConfigRegistry` keyed by tenant id; per-tenant
+  RPM/burst overrides + per-tenant enable/disable for the three optional
+  scanners (Agent Guardian, Semantic, Judge). Structural + Pattern are
+  mandatory and CANNOT be disabled per-tenant. Override resolution is
+  ``None = inherit global`` (every field defaults to None, so a partial
+  tenant file degrades to the global config, never to an unsafe zero).
+  Unknown-tenant miss is fail-OPEN to the global default (never a 403 —
+  denying on a config miss is a self-inflicted DoS). The tenant config is
+  a CEILING for the client ``request.scanners`` field: a client may
+  narrow but never widen past the tenant + global registration.
+  Hot-reload via directory-mtime poll (background task; parse error keeps
+  last-good + logs — never blanks the registry, never raises into the
+  request path). Read-only surface: ``GET /v1/tenants`` +
+  ``GET /v1/tenants/{id}`` (auth-gated, tenant-binding-enforced, no
+  secrets) + ``neuralguard tenants list|info <id>`` CLI. YAML tenant
+  files require the optional ``[tenants]`` extra (PyYAML); ``.json``
+  tenant files work with no extra. Production lifespan refuses to start
+  if tenant mode is on, a YAML file is present, and PyYAML is not
+  installed. Tests: +62 (config model, registry + hot-reload, pipeline
+  ceiling enforcement, rate-limit per-tenant, API + lifespan gates, CLI).
+  Branch gate: 759 passed / 1 skipped, ruff + mypy clean.
 - **P2-4 — JWT/OAuth2 + key rotation API.** Static API keys today; add
   short-lived JWT/OIDC + a rotation endpoint (Vault/SOPS integration).
 - **P2-6 — Kubernetes artifacts.** Helm chart / manifests + HPA on the
