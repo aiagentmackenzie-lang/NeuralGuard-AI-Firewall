@@ -73,7 +73,7 @@ jobs:
 
   # ── Coverage ─────────────────────────────────────────────────────────
   coverage:
-    name: Coverage gate (90%)
+    name: Coverage gate (86% CI-realistic)
     runs-on: ubuntu-latest
     needs: [test]
     steps:
