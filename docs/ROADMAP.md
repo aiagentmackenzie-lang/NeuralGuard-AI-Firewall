@@ -4,13 +4,12 @@
 > The gitignored `PRODUCTION_HARDENING_PLAN.md` is the internal ledger of
 > what already landed; this doc is what is **planned**.
 >
-> **Last updated:** 2026-06-29 · **Baseline:** `main` @ `41118ba`
-> (B4 gap closure merge) → B4 (`45a08d2`) → B3 (`63ec379`). **Sprint B
-> (Phase 3 Agent Guardian) COMPLETE & MERGED:** B1+B2 (`489b94e`),
-> B3 (`63ec379`), B4 (`45a08d2`), B4 gap closure (`41118ba`). 697
-> passed / 1 skipped on `main`. **Sprint C opened:** C1 per-tenant
-> config shipped on branch `sprint-c/c1-per-tenant-config` (awaiting
-> merge) — 759 passed / 1 skipped on the branch.
+> **Last updated:** 2026-06-30 · **Baseline:** `main` @ `91cd051`
+> (Sprint C C2 merge). **Sprint B (Phase 3 Agent Guardian) COMPLETE &
+> MERGED:** B1+B2 (`489b94e`), B3 (`63ec379`), B4 (`45a08d2`), B4 gap
+> closure (`41118ba`). **Sprint C COMPLETE & MERGED:** C1 per-tenant
+> config (`aadae4d`) + C2 production-readiness sweep (`7dec769`).
+> **761 passed / 1 skipped** on `main`.
 
 The P0 + P1 production-readiness sweep is closed (see the merge commit
 `a40d6f2` and `PRODUCTION_HARDENING_PLAN.md`). What remains is the
@@ -114,9 +113,8 @@ surface, so it deserves the measurement harness first.
   action-adjacent variables, raw structured-data injection. `--fail-on-high`
   CI gate. `src/neuralguard/analysis/template_analyzer.py`.
 
-- **B3 — ASI06 dedicated rule + canary unstub.** ✅ SHIPPED on branch
-  `sprint-b/b3-canary-tmem` tip, awaiting merge into main (next session
-  merge gate).
+- **B3 — ASI06 dedicated rule + canary unstub.** ✅ SHIPPED & MERGED
+  (`63ec379`).
   - **Memory poisoning (ASI06) — dedicated single-turn T-MEM rules**
     (`scanners/pattern.py`, MEM-001..004): MEM-001 HIGH→BLOCK catches explicit
     memory/RAG store writes ("store this into your long-term memory", "save
@@ -164,9 +162,7 @@ surface, so it deserves the measurement harness first.
     verified: no memory/RAG/canary phrase leaks in non-target files; em-dashes
     preserve house style (already used in `agent_guardian.py`).
 
-- **B4 — Benchmark integration.** ✅ SHIPPED on branch
-  `sprint-b/b4-multiturn-harness` (off `main` @ `63ec379`), awaiting merge
-  gate.
+- **B4 — Benchmark integration.** ✅ SHIPPED & MERGED (`45a08d2`).
   - **Multi-turn harness** (`benchmarks/ng_vs_ns/multiturn_harness.py`):
     replays curated multi-turn sequences targeting
     `AG-DELAYED-001` / `AG-DRIFT-001` / `AG-EXT-ACCUM-001` /
@@ -266,9 +262,7 @@ surface, so it deserves the measurement harness first.
 Post-moat. Not blocking; pick these up for specific customer/enterprise
 requirements.
 
-- **P1-2 — Per-tenant config.** ✅ SHIPPED on branch
-  `sprint-c/c1-per-tenant-config` (off `main` @ `41118ba`), awaiting merge
-  gate. ``tenants/<id>.yaml|json`` override files loaded into an
+- **P1-2 — Per-tenant config.** ✅ SHIPPED & MERGED (`aadae4d`). ``tenants/<id>.yaml|json`` override files loaded into an
   in-memory `TenantConfigRegistry` keyed by tenant id; per-tenant
   RPM/burst overrides + per-tenant enable/disable for the three optional
   scanners (Agent Guardian, Semantic, Judge). Structural + Pattern are
