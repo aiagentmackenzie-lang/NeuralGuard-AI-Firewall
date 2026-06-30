@@ -92,9 +92,7 @@ class TestCanaryMint:
 
     @pytest.mark.asyncio
     async def test_mint_503_when_disabled(self, plain_client: AsyncClient) -> None:
-        r = await plain_client.post(
-            "/v1/canary/mint", json={"session_id": "s1", "tenant_id": "t"}
-        )
+        r = await plain_client.post("/v1/canary/mint", json={"session_id": "s1", "tenant_id": "t"})
         assert r.status_code == 503
         assert r.json()["error"] == "canary_disabled"
 
@@ -115,9 +113,7 @@ class TestScanOutputCanary:
         assert data["verdict"] == "allow"
 
     @pytest.mark.asyncio
-    async def test_canary_leak_blocks_with_finding(
-        self, canary_client: AsyncClient
-    ) -> None:
+    async def test_canary_leak_blocks_with_finding(self, canary_client: AsyncClient) -> None:
         mint = await canary_client.post(
             "/v1/canary/mint", json={"session_id": "sess-1", "tenant_id": "t"}
         )
@@ -142,17 +138,13 @@ class TestScanOutputCanary:
         assert "REDACTED" in ev
 
     @pytest.mark.asyncio
-    async def test_canary_not_checked_without_session(
-        self, canary_client: AsyncClient
-    ) -> None:
+    async def test_canary_not_checked_without_session(self, canary_client: AsyncClient) -> None:
         """No session_id -> canary not joined -> no leak even if a token string is present."""
         mint = await canary_client.post(
             "/v1/canary/mint", json={"session_id": "sess-1", "tenant_id": "t"}
         )
         tok = mint.json()["tokens"][0]
-        r = await canary_client.post(
-            "/v1/scan/output", json={"output": tok, "tenant_id": "t"}
-        )
+        r = await canary_client.post("/v1/scan/output", json={"output": tok, "tenant_id": "t"})
         assert r.status_code == 200
         assert r.json()["canary_leaked"] is False
 

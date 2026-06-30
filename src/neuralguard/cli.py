@@ -117,8 +117,7 @@ def _cmd_tenants(args: argparse.Namespace) -> int:
     cfg = registry.get(args.tenant_id)
     if cfg is None:
         print(
-            f"note: tenant {args.tenant_id!r} has no override file "
-            f"(global defaults apply).",
+            f"note: tenant {args.tenant_id!r} has no override file (global defaults apply).",
             file=sys.stderr,
         )
         info = {

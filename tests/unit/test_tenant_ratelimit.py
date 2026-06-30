@@ -38,9 +38,7 @@ class TestRateLimitPerTenantResolution:
         )
         from neuralguard.tenants.registry import TenantConfigRegistry
 
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         mw = self._middleware(reg)
         assert mw._tenant_registry is reg

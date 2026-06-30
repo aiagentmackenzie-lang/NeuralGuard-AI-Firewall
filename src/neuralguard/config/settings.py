@@ -272,7 +272,8 @@ class TenantSettings(BaseSettings):
     enabled: bool = Field(default=False, description="Enable multi-tenant mode")
     default_tenant: str = Field(default="default", description="Default tenant ID")
     config_path: Path = Field(
-        default=Path("./tenants"), description="Directory for tenant config files")
+        default=Path("./tenants"), description="Directory for tenant config files"
+    )
     reload_interval_seconds: float = Field(
         default=30.0,
         description="Background hot-reload poll interval for the tenant config dir (0=off). "

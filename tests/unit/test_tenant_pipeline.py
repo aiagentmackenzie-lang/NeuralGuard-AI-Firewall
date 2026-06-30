@@ -50,13 +50,9 @@ class TestGetEnabledLayersTenantCeiling:
         )
         pipeline = ScannerPipeline(config)
         pipeline.set_tenant_registry(
-            _registry(
-                {"acme": TenantScannerOverrides(agent_guardian=False)}
-            )
+            _registry({"acme": TenantScannerOverrides(agent_guardian=False)})
         )
-        layers = pipeline.get_enabled_layers(
-            EvaluateRequest(prompt="x", tenant_id="acme")
-        )
+        layers = pipeline.get_enabled_layers(EvaluateRequest(prompt="x", tenant_id="acme"))
         # AG globally on, but tenant disables it -> not in the ceiling.
         assert ScanLayer.AGENT_GUARDIAN not in layers
         # Mandatory layers stay.
@@ -71,23 +67,15 @@ class TestGetEnabledLayersTenantCeiling:
         # override object cannot express structural at all.
         assert not hasattr(TenantScannerOverrides(), "structural")
         assert not hasattr(TenantScannerOverrides(), "pattern")
-        layers = pipeline.get_enabled_layers(
-            EvaluateRequest(prompt="x", tenant_id="acme")
-        )
+        layers = pipeline.get_enabled_layers(EvaluateRequest(prompt="x", tenant_id="acme"))
         assert ScanLayer.STRUCTURAL in layers
         assert ScanLayer.PATTERN in layers
 
     def test_tenant_cannot_widen_past_global_registration(self):
         config = NeuralGuardConfig()  # semantic globally OFF
         pipeline = ScannerPipeline(config)
-        pipeline.set_tenant_registry(
-            _registry(
-                {"acme": TenantScannerOverrides(semantic=True)}
-            )
-        )
-        layers = pipeline.get_enabled_layers(
-            EvaluateRequest(prompt="x", tenant_id="acme")
-        )
+        pipeline.set_tenant_registry(_registry({"acme": TenantScannerOverrides(semantic=True)}))
+        layers = pipeline.get_enabled_layers(EvaluateRequest(prompt="x", tenant_id="acme"))
         # Tenant wants semantic ON, but global config didn't enable it -> off.
         assert ScanLayer.SEMANTIC not in layers
 
@@ -97,9 +85,7 @@ class TestGetEnabledLayersTenantCeiling:
         )
         pipeline = ScannerPipeline(config)
         pipeline.set_tenant_registry(_registry({}))  # no override for "ghost"
-        layers = pipeline.get_enabled_layers(
-            EvaluateRequest(prompt="x", tenant_id="ghost")
-        )
+        layers = pipeline.get_enabled_layers(EvaluateRequest(prompt="x", tenant_id="ghost"))
         # AG globally on, no tenant override -> inherited.
         assert ScanLayer.AGENT_GUARDIAN in layers
 
@@ -110,9 +96,7 @@ class TestGetEnabledLayersTenantCeiling:
         )
         pipeline = ScannerPipeline(config)
         pipeline.set_tenant_registry(
-            _registry(
-                {"acme": TenantScannerOverrides(agent_guardian=False)}
-            )
+            _registry({"acme": TenantScannerOverrides(agent_guardian=False)})
         )
         # Client tries to force AG back on after the tenant disabled it.
         request = EvaluateRequest(

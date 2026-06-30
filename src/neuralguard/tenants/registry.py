@@ -31,7 +31,6 @@ logger = structlog.get_logger(__name__)
 _SUPPORTED_SUFFIXES = (".yaml", ".yml", ".json")
 
 
-
 class TenantConfigRegistry:
     """In-memory cache of per-tenant override configs.
 
@@ -100,7 +99,9 @@ class TenantConfigRegistry:
         path = self.config_path
         if not path.exists() or not path.is_dir():
             if not quiet:
-                logger.info("tenants_dir_missing", path=str(path), msg="all tenants use global default")
+                logger.info(
+                    "tenants_dir_missing", path=str(path), msg="all tenants use global default"
+                )
             self._configs = {}
             self._last_dir_mtime = None
             return

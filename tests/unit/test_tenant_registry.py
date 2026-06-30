@@ -44,9 +44,7 @@ class TestRegistryLoad:
         assert reg.effective_rate_limit("acme", 60, 10) == (60, 10)
 
     def test_empty_dir_loads_empty(self, tmp_path):
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         assert reg.list_tenants() == []
 
@@ -67,9 +65,7 @@ class TestRegistryLoad:
         )
         # An unrelated file type is ignored.
         _write(tmp_path / "README.md", "# not a tenant")
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         ids = [t.tenant_id for t in reg.list_tenants()]
         assert ids == ["acme", "globex"]
@@ -81,17 +77,13 @@ class TestRegistryLoad:
         # acme.yaml declares tenant_id: globex -> mismatch, skipped (last-good
         # retained if a prior load had it; here no prior, so dropped).
         _write(tmp_path / "acme.yaml", "tenant_id: globex\n")
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         assert reg.list_tenants() == []
 
     def test_malformed_file_kept_from_previous_load(self, tmp_path):
         _write(tmp_path / "acme.yaml", "tenant_id: acme\nrequests_per_minute: 100\n")
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         assert reg.get("acme").requests_per_minute == 100
         # Corrupt the file — the previous good config is retained.
@@ -101,9 +93,7 @@ class TestRegistryLoad:
 
     def test_unknown_tenant_returns_none_not_raising(self, tmp_path):
         _write(tmp_path / "acme.yaml", "tenant_id: acme\n")
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         # The fail-open contract: missing tenant config never raises.
         assert reg.get("does-not-exist") is None
@@ -111,9 +101,7 @@ class TestRegistryLoad:
 
     def test_yaml_without_pyyaml_raises_parse_error(self, tmp_path, monkeypatch):
         _write(tmp_path / "acme.yaml", "tenant_id: acme\n")
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         # Simulate PyYAML being unavailable.
         import builtins
 
@@ -139,9 +127,7 @@ class TestRegistryLoad:
 class TestRegistryHotReload:
     def test_dir_changed_detection(self, tmp_path):
         _write(tmp_path / "acme.yaml", "tenant_id: acme\nrequests_per_minute: 100\n")
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         assert not reg._dir_changed()
         # Bump mtime by writing a new file.
@@ -205,9 +191,7 @@ class TestRegistryResolution:
             tmp_path / "acme.yaml",
             "tenant_id: acme\nscanners:\n  agent_guardian: null\n  semantic: false\n",
         )
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         overlay = reg.effective_scanner_overlay("acme")
         assert overlay.agent_guardian is None
@@ -217,9 +201,7 @@ class TestRegistryResolution:
 
     def test_snapshot_is_a_copy(self, tmp_path):
         _write(tmp_path / "acme.yaml", "tenant_id: acme\n")
-        reg = TenantConfigRegistry(
-            enabled=True, default_tenant="default", config_path=tmp_path
-        )
+        reg = TenantConfigRegistry(enabled=True, default_tenant="default", config_path=tmp_path)
         reg.load()
         snap = reg.snapshot()
         assert "acme" in snap
