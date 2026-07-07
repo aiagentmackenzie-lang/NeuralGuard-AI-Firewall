@@ -99,6 +99,17 @@ Sprint A shipped two phases (see [`docs/ROADMAP.md`](docs/ROADMAP.md)):
 > what a frontier attacker would achieve — the value is the curve across
 > defender configs and the per-layer findings.
 
+> **Offensive-side counterpart (NeuralStrike Phase 7):** NeuralStrike now
+> ships the reciprocal `neuralstrike neuralguard-bench` command — the
+> **offensive** half's view of the same pairing. It runs a canonical
+> recon → weaponize → exploit → post-ex attack chain against a victim
+> with and without a NeuralGuard firewall in front and reports the ASR
+> delta. `neuralstrike neuralguard-bench --in-process` drives this
+> NeuralGuard repo's ASGI app in-process (`uv pip install -e
+> ../NeuralGuard-AI-Firewall` then run from the NeuralStrike repo). This is
+> the **defensive** half's view; both repos point at the same worked
+> example. See the NeuralStrike README §"NeuralGuard pairing (Phase 7)".
+
 ### A1 — deterministic regression gate
 
 A labeled corpus (27 attacks / 45 benign) run against `/v1/evaluate` in the
