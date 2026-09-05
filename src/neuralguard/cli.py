@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from neuralguard.main import main as serve_main
 
@@ -50,6 +51,35 @@ def _cmd_analyze_template(args: argparse.Namespace) -> int:
     # Exit non-zero so CI gates can fail on sinks (e.g. high-severity only).
     has_high = any(s.severity == "high" for s in result.sinks)
     return 1 if (args.fail_on_high and has_high) else 0
+
+
+def _cmd_audit_verify(args: argparse.Namespace) -> int:
+    """Verify per-worker hash chains; exit 0 = all valid, 1 = broken/parse error."""
+    import json as _json
+    import sys as _sys
+
+    from neuralguard.logging.verify import verify_audit_files
+
+    try:
+        report = verify_audit_files(Path(args.path))
+    except (OSError, ValueError) as exc:
+        print(f"audit-verify: cannot read {args.path}: {exc}", file=_sys.stderr)
+        return 2
+
+    if args.json:
+        print(_json.dumps(report.to_dict(), indent=2))
+    else:
+        print(
+            f"audit-verify: {report.files_read} file(s), {report.events_parsed} event(s), "
+            f"{report.parse_errors} parse error(s)"
+        )
+        for chain in report.chains:
+            status = "VALID" if chain.valid else "BROKEN"
+            print(f"  worker {chain.worker_id[:16]}…: {chain.event_count:4d} events  {status}")
+        verdict = "ALL CHAINS VALID" if report.all_valid else "CHAIN VERIFICATION FAILED"
+        print(verdict)
+
+    return 0 if report.all_valid else 1
 
 
 def _cmd_canary_mint(args: argparse.Namespace) -> int:
@@ -189,6 +219,22 @@ def main() -> None:
     )
     at.set_defaults(func=_cmd_analyze_template)
 
+    # audit-verify (F14)
+    av = subparsers.add_parser(
+        "audit-verify",
+        help="Verify per-worker hash chains in JSONL audit files (tamper evidence).",
+    )
+    av.add_argument(
+        "path",
+        help="An audit .jsonl file or a directory of them (e.g. /data/audit).",
+    )
+    av.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (for cron / CI).",
+    )
+    av.set_defaults(func=_cmd_audit_verify)
+
     # canary-mint (B3)
     cm = subparsers.add_parser(
         "canary-mint",
@@ -232,6 +278,9 @@ def main() -> None:
         sys.exit(args.func(args))
 
     if args.command == "canary-mint":
+        sys.exit(args.func(args))
+
+    if args.command == "audit-verify":
         sys.exit(args.func(args))
 
     if args.command == "tenants":
