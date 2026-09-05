@@ -534,6 +534,24 @@ async def info(
     and scanner coverage are not disclosed to unauthenticated callers.
     """
     _ = request  # auth enforced by AuthMiddleware on /v1/* (info is not public)
+    from neuralguard.net.egress import is_private_endpoint
+
+    # F9/F10.3 posture: where does data go? Surfaced so nobody is surprised.
+    proxy_info: dict[str, Any] | None = None
+    if config.proxy.enabled:
+        proxy_info = {
+            "enabled": True,
+            "upstream_egress": (
+                "local" if is_private_endpoint(config.proxy.upstream_url) else "cloud"
+            ),
+        }
+    judge_egress: str | None = None
+    if config.scanner.judge_enabled:
+        judge_egress = (
+            "local"
+            if is_private_endpoint(config.scanner.judge_ollama_url)
+            else ("explicit-egress" if config.scanner.judge_allow_egress else "blocked-in-prod")
+        )
     return {
         "name": config.app_name,
         "version": config.version,
@@ -555,6 +573,8 @@ async def info(
             "corpus_assisted_only": ["ASI04 (Supply Chain)", "ASI10 (Rogue Agents)"],
         },
         "api_version": "v1",
+        "judge_egress": judge_egress,
+        "proxy": proxy_info,
     }
 
 

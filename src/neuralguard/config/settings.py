@@ -456,6 +456,49 @@ class CanarySettings(BaseSettings):
         return v
 
 
+class ProxySettings(BaseSettings):
+    """Standalone appliance proxy configuration (F9).
+
+    OFF by default. Enabling turns NeuralGuard into a transparent guardian:
+    ``POST /v1/proxy/chat/completions`` accepts an OpenAI-format chat payload,
+    evaluates the user turns, forwards ALLOWed requests to the upstream, and
+    scans the completion before delivery. ``upstream_api_key`` is the
+    OPERATOR's upstream credential — server-side, never logged. Callers
+    authenticate to NeuralGuard with NeuralGuard API keys (tenant-bound).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NEURALGUARD_PROXY_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable the standalone appliance proxy routes. OFF by default.",
+    )
+    upstream_url: str = Field(
+        default="",
+        description="OpenAI-compatible upstream base URL (e.g. http://localhost:11434/v1 "
+        "for Ollama, https://api.example.com/v1 for a cloud). Required when enabled.",
+    )
+    upstream_api_key: str = Field(
+        default="",
+        description="The operator's upstream API key (server-side secret; never logged). "
+        "Omit for keyless local upstreams (Ollama).",
+    )
+    timeout_seconds: float = Field(
+        default=120.0,
+        description="Upstream HTTP timeout for one forwarded chat completion.",
+    )
+
+    @property
+    def is_configured(self) -> bool:
+        """Enabled AND pointed at an upstream."""
+        return self.enabled and bool(self.upstream_url.strip())
+
+
 class NeuralGuardConfig(BaseSettings):
     """Top-level configuration aggregating all sub-settings."""
 
@@ -482,6 +525,7 @@ class NeuralGuardConfig(BaseSettings):
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     agent_guardian: AgentGuardianSettings = Field(default_factory=AgentGuardianSettings)
     canary: CanarySettings = Field(default_factory=CanarySettings)
+    proxy: ProxySettings = Field(default_factory=ProxySettings)
 
 
 def load_config(config_path: Path | None = None) -> NeuralGuardConfig:

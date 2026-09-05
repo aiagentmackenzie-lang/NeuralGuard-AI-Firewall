@@ -22,6 +22,8 @@ from neuralguard.metrics import metrics
 from neuralguard.middleware.auth import AuthMiddleware
 from neuralguard.middleware.bodysize import BodySizeMiddleware
 from neuralguard.middleware.ratelimit import RateLimitMiddleware
+from neuralguard.models.schemas import ScanLayer
+from neuralguard.net.egress import is_private_endpoint
 from neuralguard.scanners.pattern import PatternScanner
 from neuralguard.scanners.pipeline import ScannerPipeline
 from neuralguard.scanners.structural import StructuralScanner
@@ -101,6 +103,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         host=config.server.host,
         port=config.server.port,
     )
+
+    # F10.5 warmup: load the judge model once at startup so the circuit
+    # breaker does not trip on cold-start timeouts of the first judged
+    # request. Runs in the lifespan (not create_app — tests construct apps
+    # without making model calls). Non-fatal by design.
+    judge_scanner = getattr(app.state, "judge_scanner", None)
+    if judge_scanner is not None:
+        app.state.judge_warmup_ok = judge_scanner.warmup()
 
     # Unknown NEURALGUARD_* env keys (F5): a typo'd or stale key is a silent
     # no-op today. Production refuses to start; dev/staging logs a loud
@@ -328,6 +338,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         with contextlib.suppress(Exception):
             ag_store.aclose()
 
+    # Close the proxy forwarder's HTTP client (F9).
+    proxy_forwarder = getattr(app.state, "proxy_forwarder", None)
+    if proxy_forwarder is not None:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await proxy_forwarder.aclose()
+
     structlog.get_logger("neuralguard").info("shutdown")
 
 
@@ -406,9 +424,6 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             structlog.get_logger("neuralguard").info(
                 "judge_scanner_registered", model=config.scanner.judge_model
             )
-            # F10.5: load the model once at boot so the circuit breaker does
-            # not trip on cold-start timeouts of the first judged request.
-            app.state.judge_warmup_ok = judge_scanner.warmup()
         except (ImportError, FileNotFoundError) as exc:
             structlog.get_logger("neuralguard").warning(
                 "judge_scanner_unavailable",
@@ -417,6 +432,10 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             )
 
     app.state.pipeline = pipeline
+
+    # F10.5: stash the judge scanner for the lifespan warmup (the warmup runs
+    # at STARTUP — constructing apps in tests must not make model calls).
+    app.state.judge_scanner = pipeline._scanners.get(ScanLayer.JUDGE)
 
     # ── Initialize the per-tenant config registry (Sprint C, C1) ──
     # Only constructed when enabled; its absence on app.state means multi-tenant
@@ -454,6 +473,31 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     # ── Initialize audit logger ──
     audit_logger = AuditLogger(config.audit)
     app.state.audit_logger = audit_logger
+
+    # ── Standalone appliance proxy (F9) ──
+    # OFF by default; enabled = NeuralGuard becomes a transparent guardian.
+    app.state.proxy_forwarder = None
+    if config.proxy.enabled:
+        if not config.proxy.upstream_url.strip():
+            raise RuntimeError(
+                "proxy.enabled=true but upstream_url is empty: the proxy would "
+                "have nowhere to forward. Set NEURALGUARD_PROXY_UPSTREAM_URL."
+            )
+        from neuralguard.proxy.forwarder import UpstreamForwarder
+
+        app.state.proxy_forwarder = UpstreamForwarder(config.proxy)
+        egress = (
+            "local"
+            if is_private_endpoint(config.proxy.upstream_url)
+            else "cloud (prompts LEAVE the trust boundary)"
+        )
+        structlog.get_logger("neuralguard").info(
+            "proxy_enabled",
+            upstream_egress=egress,
+            timeout_seconds=config.proxy.timeout_seconds,
+            msg="Standalone appliance proxy ENABLED. "
+            f"Upstream egress: {egress}. The upstream API key is held server-side.",
+        )
 
     # ── Middleware ──
     # Order matters: outermost first. Body-size limit must run BEFORE the app
@@ -499,6 +543,12 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
 
     # ── Routes ──
     app.include_router(router)
+    # /v1/info (service metadata, extended with F9/F10.3 egress posture) is
+    # in the main router. The proxy routes mount only when enabled (F9).
+    if config.proxy.enabled:
+        from neuralguard.api.routes_proxy import router as proxy_router
+
+        app.include_router(proxy_router)
 
     # ── Global exception handler: request_id correlation + sanitized 500 ──
     @app.exception_handler(Exception)
