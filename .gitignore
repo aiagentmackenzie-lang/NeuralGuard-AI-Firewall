@@ -33,6 +33,10 @@ AUDIT_HANDOFF.md
 BUG_CATALOG.md
 PRODUCTION_HARDENING_PLAN.md
 
+# cosign local signing output (regenerated per session; bundles are session
+# artifacts, CI re-signs keylessly — never commit signature bundles)
+dist-sign/
+
 # SBOM output (regenerated in CI)
 sbom.json
 sbom.xml

@@ -73,7 +73,7 @@ jobs:
 
   # ── Coverage ─────────────────────────────────────────────────────────
   coverage:
-    name: Coverage gate (86% CI-realistic)
+    name: Coverage gate (90%, full semantic layer)
     runs-on: ubuntu-latest
     needs: [test]
     steps:
@@ -85,14 +85,27 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
-      - name: Install dependencies
-        run: uv sync --extra dev --extra db
+      - name: Install dependencies (incl. semantic + semantic-export)
+        # semantic-export pulls torch/optimum: heavy but REQUIRED for an
+        # honest gate — without the ONNX model the semantic tests skip and
+        # coverage is measured on a reduced suite (the old 86% floor's lie).
+        run: uv sync --extra dev --extra db --extra tenants --extra semantic --extra semantic-export
+
+      - name: Export ONNX embedding model (regenerates gitignored model artifacts)
+        # Downloads all-MiniLM-L6-v2 from HuggingFace and exports ONNX.
+        run: uv run python scripts/export_onnx.py
+
+      - name: Rebuild semantic corpus vectors from tracked sources
+        # Deterministic replay of build+finalize from corpus/ (tracked);
+        # the A1 gate in the suite below is the arbiter of the rebuilt corpus.
+        run: uv run python scripts/rebuild_corpus_vectors.py
 
       - name: Run coverage
         run: |
           uv run pytest tests/ --cov=neuralguard --cov-report=term-missing
-        # fail_under is set in pyproject.toml [tool.coverage.report] (86% — a
-        # CI-realistic floor without the gitignored ONNX model; see note).
+        # fail_under is set in pyproject.toml [tool.coverage.report] (90% —
+        # CI now runs the FULL suite with the semantic model + 5.4x corpus,
+        # same as local; P2 + P2-9).
 
       - name: Upload coverage artifact
         if: always()
@@ -167,6 +180,69 @@ jobs:
           path: |
             sbom.json
             sbom.xml
+
+  # ── SBOM signing (P2-5) ────────────────────────────────────────────────
+  # Keyless cosign: the SBOM blob is SIGNED and ATTESTED (cyclonedx predicate
+  # — the SBOM is CycloneDX, so spdxjson would be a false claim). Bundles are
+  # uploaded so downstream consumers can verify without a registry. Image
+  # signing needs a registry — documented as an ops step in
+  # docs/runbooks/artifact_signing.md, not possible from CI without a push
+  # target. The SBOM is regenerated here (same commit = same provenance) so
+  # this job needs no artifact passing.
+  sbom-sign:
+    name: Sign + attest SBOM (keyless cosign)
+    runs-on: ubuntu-latest
+    needs: [sbom]
+    permissions:
+      contents: read
+      id-token: write  # keyless signing via GitHub OIDC (Fulcio)
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: 'v3.0.6'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Regenerate SBOM (same commit as the tested tree)
+        run: |
+          uv sync --extra dev --extra db
+          uv run pip install cyclonedx-bom
+          uv run cyclonedx-py environment --output-format json --output-file sbom.json
+
+      - name: Sign SBOM blob (keyless)
+        run: cosign sign-blob --yes --bundle sbom.json.sig.bundle sbom.json
+
+      - name: Attest SBOM blob (keyless, cyclonedx predicate)
+        run: cosign attest-blob --yes --predicate sbom.json --type cyclonedx --bundle sbom.json.attest.bundle sbom.json
+
+      - name: Verify signature + attestation (identity-scoped)
+        run: |
+          IDENTITY='^https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/\.github/workflows/ci\.yml@'
+          cosign verify-blob \
+            --bundle sbom.json.sig.bundle \
+            --certificate-identity-regexp "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            sbom.json
+          cosign verify-blob \
+            --bundle sbom.json.attest.bundle \
+            --certificate-identity-regexp "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            sbom.json
+
+      - name: Upload signing bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sbom-signing-bundles
+          path: |
+            sbom.json.sig.bundle
+            sbom.json.attest.bundle
   # ── Boot smoke ──────────────────────────────────────────────────────────
   # P0-1: actually start uvicorn against a production-shaped config and
   # exercise every endpoint over HTTP with auth. Catches env-parsing and
