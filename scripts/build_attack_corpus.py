@@ -144,9 +144,7 @@ def load_neuralchemy_dataset(max_per_category: int = 200) -> list[dict[str, str]
     from datasets import load_dataset
 
     print("📥 Loading neuralchemy/Prompt-injection-dataset (core)...")
-    ds = load_dataset(
-        "neuralchemy/Prompt-injection-dataset", "core", split="train", trust_remote_code=True
-    )
+    ds = load_dataset("neuralchemy/Prompt-injection-dataset", "core", split="train")
 
     attacks: list[dict[str, str]] = []
     seen_texts: set[str] = set()
@@ -201,7 +199,7 @@ def load_deepset_dataset() -> list[dict[str, str]]:
     from datasets import load_dataset
 
     print("📥 Loading deepset/prompt-injections...")
-    ds = load_dataset("deepset/prompt-injections", split="train", trust_remote_code=True)
+    ds = load_dataset("deepset/prompt-injections", split="train")
 
     attacks: list[dict[str, str]] = []
     seen: set[str] = set()
