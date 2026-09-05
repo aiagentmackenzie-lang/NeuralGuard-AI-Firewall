@@ -6,7 +6,8 @@ when the hybrid scorer couldn't reach a confident verdict.
 
 Design:
   - Gated: only fires when composite score is in ambiguous zone
-  - Timeout: 2s hard limit to prevent blocking the pipeline
+  - Timeout: 5s hard limit (configurable via NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS
+    in Phase 2) to prevent blocking the pipeline
   - Circuit breaker: trips after 3 consecutive failures, stays open
     for 60 seconds before retrying
   - Temperature=0: deterministic evaluation, no creativity

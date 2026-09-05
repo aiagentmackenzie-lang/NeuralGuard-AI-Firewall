@@ -31,6 +31,31 @@ class TestPatternScannerBasic:
         """Verify we have 50+ patterns compiled."""
         assert scanner.pattern_count >= 50, f"Only {scanner.pattern_count} patterns, expected 50+"
 
+    def test_pattern_count_matches_readme_claim(self):
+        """F1 pin: the README claims 113 patterns (63 EN + 50 i18n). The count
+        is derived from the rule lists so the README number can never
+        silently rot — a rule added/removed must update this test, which
+        forces a README update in the same commit."""
+        from neuralguard.scanners import pattern as pattern_mod
+        from neuralguard.scanners import pattern_i18n as i18n_mod
+
+        en_count = sum(
+            len(rules)
+            for name in dir(pattern_mod)
+            if name.endswith("_PATTERNS")
+            and isinstance((rules := getattr(pattern_mod, name)), list)
+        )
+        i18n_count = sum(
+            len(rules)
+            for name in dir(i18n_mod)
+            if name.endswith("_PATTERNS") and isinstance((rules := getattr(i18n_mod, name)), list)
+        )
+        assert en_count == 63, f"EN rule count changed to {en_count} — update the README + this pin"
+        assert i18n_count == 50, (
+            f"i18n rule count changed to {i18n_count} — update the README + this pin"
+        )
+        assert PatternScanner(ScannerSettings()).pattern_count == en_count + i18n_count == 113
+
     def test_empty_request_rejected(self, scanner):
         """Empty requests are rejected at validation level (422), not scanner level."""
         with pytest.raises(ValidationError):

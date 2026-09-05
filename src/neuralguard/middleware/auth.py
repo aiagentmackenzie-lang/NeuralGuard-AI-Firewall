@@ -52,6 +52,11 @@ def _constant_time_lookup(candidate: str, key_map: dict[str, str]) -> str | None
 
     Compares against every configured key with compare_digest so timing does
     not leak which key (or prefix) matched.
+
+    Scale note: this is O(n_keys)/request. Fine for the ≤ few-hundred API
+    keys of a single-tenant appliance; enterprise scale (P2-4) replaces the
+    static key map with JWT/OIDC verification (constant-time, key-count
+    independent).
     """
     matched_tenant: str | None = None
     for key, tenant in key_map.items():

@@ -139,6 +139,7 @@ def _internal_error(exc: Exception, path: str) -> JSONResponse:
 async def evaluate(
     body: EvaluateRequest,
     request: Request,
+    response: Response,
     pipeline: ScannerPipeline = Depends(get_pipeline),
     config: NeuralGuardConfig = Depends(get_config),
     audit: AuditLogger = Depends(get_audit_logger),
@@ -209,7 +210,8 @@ async def evaluate(
             headers=action_result.headers,
         )
 
-    # Normal 200 response (ALLOW / SANITIZE)
+    # Normal 200 response (ALLOW / SANITIZE). The verdict header is set here
+    # too (F15): headers previously survived only on non-200 responses.
     logger.info(
         "evaluate_response",
         request_id=audit_response.request_id,
@@ -219,6 +221,7 @@ async def evaluate(
         latency_ms=f"{total_ms:.2f}",
         reason=arbitration.arbitration_reason,
     )
+    response.headers["X-NeuralGuard-Verdict"] = arbitration.verdict.value
 
     return audit_response
 
@@ -227,6 +230,7 @@ async def evaluate(
 async def scan_output(
     body: ScanOutputRequest,
     request: Request,
+    response: Response,
     pipeline: ScannerPipeline = Depends(get_pipeline),
     config: NeuralGuardConfig = Depends(get_config),
     audit: AuditLogger = Depends(get_audit_logger),
@@ -348,6 +352,10 @@ async def scan_output(
             content=audit_response.model_dump(mode="json"),
             headers=action_result.headers,
         )
+
+    # F15: the verdict header is set on 200s too — previously it survived
+    # only on non-200 responses.
+    response.headers["X-NeuralGuard-Verdict"] = arbitration.verdict.value
 
     return audit_response
 

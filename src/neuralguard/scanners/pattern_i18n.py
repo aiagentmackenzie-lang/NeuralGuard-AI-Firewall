@@ -497,8 +497,6 @@ def resolve_category(rule_id: str) -> ThreatCategory:
         return ThreatCategory.DOS_ABUSE
     if upper.startswith("ENC"):
         return ThreatCategory.ENCODING_EVASION
-    if upper.startswith("PI-D"):
-        return ThreatCategory.PROMPT_INJECTION_DIRECT
     return ThreatCategory.PROMPT_INJECTION_DIRECT  # fallback
 
 

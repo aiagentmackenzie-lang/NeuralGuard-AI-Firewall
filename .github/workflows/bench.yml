@@ -116,31 +116,6 @@ jobs:
   # The deterministic gate has no model dependency (curated sequences
   # only, in-process via ASGITransport). It hard-fails on ASR/FPR
   # regression vs baseline. The live gate (live AgentPivot + Ollama)
-  # is skip-in-CI by design; it lives in 
-  # for local + nightly-with-model runs.
-  bench-b4-deterministic:
-    name: B4 deterministic multi-turn gate (no model)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --extra dev --extra db
-
-      - name: Run B4 deterministic regression gate
-        run: |
-          uv run pytest tests/benchmarks/test_b4_multiturn.py::TestB4MultiturnDeterministic -v -s
-
-  # ── B4: deterministic multi-turn regression gate (CI-able) ──────────
-  # The deterministic gate has no model dependency (curated sequences
-  # only, in-process via ASGITransport). It hard-fails on ASR/FPR
-  # regression vs baseline. The live gate (live AgentPivot + Ollama)
   # is skip-in-CI by design; it lives in
   # `tests/benchmarks/test_b4_multiturn.py` for local + nightly-with-
   # model runs.

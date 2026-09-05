@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1+B2+B3+B4 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification + multi-turn benchmark integration with AgentPivot coverage + B4-detected scanner gap closure), and Sprint C C1 per-tenant config + C2 production-readiness sweep are shipped. **761 tests** on `main` (CI-realistic), ruff + mypy clean, 86% coverage gate (90%+ observed with the ONNX semantic model). P2 enterprise hardening remains — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1+B2+B3+B4 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification + multi-turn benchmark integration with AgentPivot coverage + B4-detected scanner gap closure), and Sprint C C1 per-tenant config + C2 production-readiness sweep are shipped. **805 tests** on `main` (800 pass locally with Ollama up; the 2 model-dependent judge-fixture tests skip in CI), ruff + mypy clean, 86% coverage gate (90%+ observed with the ONNX semantic model). P2 enterprise hardening remains — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -81,7 +81,7 @@ LLM Provider / Local Model / Agent Framework
 | Phase 3 | Agent Guardian | ✅ B1+B2+B3+B4 shipped | Weeks 7-9 |
 | Phase 4 | Enterprise Fortress | 🔴 Not Started | Weeks 10-12 |
 
-**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1+B2+B3+B4 merged; Sprint C C1 (per-tenant config) + C2 (production-readiness sweep: `ruff format` gate, PyYAML CI fix, flaky latency test, CVE bumps, blocking pip-audit, tenant exception hygiene) all merged to `main` at `91cd051`. **761 passed / 1 skipped** on `main`, ruff + mypy clean (49 files), 86% coverage gate (90.96% observed locally with the ONNX semantic model). CI: lint (ruff + format + mypy), matrix tests (3.11/3.12), coverage gate, boot-smoke (real uvicorn over HTTP), semantic-smoke, nightly perf gate, nightly bench gate, SBOM, blocking pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P2 enterprise track.
+**Current:** Phase 0 + 1 + 2 + the P0/P1 deployability sweep complete; Sprint A (NG↔NS benchmark harness) complete; A2 semantic-FPR corroboration-gate fix merged; Phase 3 Agent Guardian B1+B2+B3+B4 merged; Sprint C C1 (per-tenant config) + C2 (production-readiness sweep: `ruff format` gate, PyYAML CI fix, flaky latency test, CVE bumps, blocking pip-audit, tenant exception hygiene) all merged to `main` at `91cd051`. **805 collected — 800 passed / 3 skipped locally, the 2 model-dependent judge-fixture tests skip in CI**, ruff + mypy clean (49 files), 86% coverage gate (90.96% observed locally with the ONNX semantic model). CI: lint (ruff + format + mypy), matrix tests (3.11/3.12), coverage gate, boot-smoke (real uvicorn over HTTP), semantic-smoke, nightly perf gate, nightly bench gate, SBOM, blocking pip-audit. **Production-ready** for single-worker and Redis-backed multi-worker deploys — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) for the closed-items ledger and the remaining P2 enterprise track.
 **Next:** **P2 enterprise hardening** is now the open track (per-tenant config P1-2, JWT/OIDC + rotation API P2-4, K8s artifacts + HPA P2-6, cosign SBOM/image signing P2-5, restore 90% CI coverage gate P2, SIEM alert routing P2-7). The two scanner coverage gaps surfaced by the B4 harness (MEM-002 user-as-subject phrasings + JB "AI without safety guidelines" framing) are closed in branch `sprint-b/b4-gap-closure` (TBD merge).
 
 ---
@@ -421,7 +421,9 @@ DB, Redis) and returns 503 when the core is broken, 200 `degraded` when
 optional layers degrade (the firewall keeps serving with deterministic
 detection + JSONL audit fallback). Auth-protected by default; add `/v1/ready`
 to `NEURALGUARD_AUTH_PUBLIC_ENDPOINTS` for an unauthenticated kubelet probe.
-`GET /v1/health` remains the public liveness probe.
+`GET /v1/health` remains the public liveness probe. Public endpoints match
+exact paths only — a trailing slash (`/v1/health/`) is NOT public and 401s.
+Clients must call the exact documented paths.
 
 **Audit integrity.** Every audit event is hash-chained (`worker_id` /
 `prev_hash` / `event_hash`). On-disk or in-DB tampering of an event breaks
@@ -548,7 +550,7 @@ curl -X POST http://localhost:8000/v1/scan/output \
 }
 ```
 
-> **Note:** Canary token verification is stubbed (`canary_leaked=false`) and planned for Phase 3. Output scanning currently covers PII/credential leakage, system prompt extraction, and encoding evasion patterns. Metrics are available at `GET /v1/metrics` (auth-protected).
+> Output scanning covers PII/credential leakage, system prompt extraction, and encoding evasion patterns. Metrics are available at `GET /v1/metrics` (auth-protected).
 
 ---
 
@@ -556,7 +558,7 @@ curl -X POST http://localhost:8000/v1/scan/output \
 
 | Metric | Target | Status |
 |---|---|---|
-| Detection Rate (Direct PI) | >95% | ✅ verified — 158 patterns (108 EN + 50 i18n), 13 redteam tests |
+| Detection Rate (Direct PI) | >95% | ✅ verified — 113 patterns (63 EN + 50 i18n), 13 redteam tests |
 | Detection Rate (Rephrased PI) | >80% | ⚠️ local observation only — semantic/judge, NOT CI-verified (ONNX model is gitignored; real-model tests skip in CI) |
 | False Positive Rate | <2% | ✅ verified — the A1 regression gate (CI) asserts FPR < 2% on a 45-prompt benign corpus (0.00% measured). A2 live: the semantic layer escalates 3 benign creative/translation prompts (6.67%, review signal — no content modification via the corroboration gate) |
 | P95 Latency (Pattern-only) | <10ms | ⚠️ observed ~0.3 ms locally; NOT load-tested (no perf harness in CI) |
