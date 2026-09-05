@@ -151,9 +151,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "Production startup refused: rate_limit.backend=redis but no redis_url set. "
                 "Set NEURALGUARD_RATELIMIT_REDIS_URL."
             )
-        # Agent Guardian backend sanity (Phase 3, Sprint B). The redis backend
-        # is a B1+ follow-up -- refuse a config that asks for it without a URL
-        # rather than silently degrading to per-request-only analysis.
+        # Agent Guardian backend sanity (F4). The redis backend is implemented
+        # (shared signal store); still refuse a config that asks for it
+        # without a URL rather than failing at first request.
         if (
             config.agent_guardian.enabled
             and config.agent_guardian.backend == "redis"
@@ -251,6 +251,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if redis_limiter is not None:
         await redis_limiter.aclose()
 
+    # Close the Agent Guardian redis session-store connection (F4).
+    ag_store = getattr(app.state, "agent_guardian_redis_store", None)
+    if ag_store is not None:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            ag_store.aclose()
+
     structlog.get_logger("neuralguard").info("shutdown")
 
 
@@ -293,7 +301,12 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     if config.agent_guardian.enabled:
         from neuralguard.scanners.agent_guardian import AgentGuardianScanner
 
-        pipeline.register_scanner(AgentGuardianScanner(config.agent_guardian))
+        ag_scanner = AgentGuardianScanner(config.agent_guardian)
+        pipeline.register_scanner(ag_scanner)
+        # F4: stash the redis-backed session store so the lifespan can close
+        # the connection cleanly on shutdown (same pattern as the limiter).
+        if ag_scanner._redis_store is not None:
+            app.state.agent_guardian_redis_store = ag_scanner._redis_store
         structlog.get_logger("neuralguard").info(
             "agent_guardian_registered",
             backend=config.agent_guardian.backend,

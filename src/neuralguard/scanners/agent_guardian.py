@@ -23,11 +23,15 @@ Design:
     1. Multi-turn in one request (``messages`` array) -- analyzed directly.
     2. Across-request (single ``prompt`` + ``session_id``) -- the per-session
        sliding window supplies the prior turns.
-  - In-memory backend (B1); the interface is designed for a Redis backend
-    (B1+ follow-up, reusing the P1-1 pattern). Memory backend is per-worker;
-    production multi-worker requires the redis backend.
+  - Two state backends:
+    - ``memory``: in-process sliding window. Per-worker; production
+      multi-worker requires the redis backend (the lifespan warns).
+    - ``redis`` (F4): shared per-session signal store in Redis, one key per
+      session, atomic record via a Lua script (reuses the P1-1 rate-limiter
+      pattern). Same scanner semantics across workers. Retains ONLY per-turn
+      binary signal flags, never raw turn text (privacy-by-design).
   - Bounded: per-session window of last N turns + LRU eviction of sessions
-    past ``max_sessions`` to bound memory.
+    past ``max_sessions`` to bound memory (redis keys carry an inactivity TTL).
   - Thread-safe (a lock guards the session store).
   - Fail-closed on state-store errors (matches the rate limiter contract).
   - Sessions are isolated; no cross-session user profiling.
@@ -181,42 +185,54 @@ def _count_matches(patterns: list[re_module.Pattern], text: str) -> int:
     return n
 
 
+def _turn_flags(text: str) -> tuple[int, int, int]:
+    """Per-turn binary signal flags (role-drift, extraction, memory-injection).
+
+    The state stores keep ONLY these flags — never raw turn text (F4 privacy
+    sub-item). The flags carry everything the accumulation analysis needs;
+    the raw text of the CURRENT turn is available in-process at scan time via
+    the request itself.
+    """
+    return (
+        int(_count_matches(_ROLE_DRIFT, text) > 0),
+        int(_count_matches(_EXTRACTION_PROBE, text) > 0),
+        int(_count_matches(_MEMORY_INJECTION, text) > 0),
+    )
+
+
 # ── Per-session sliding window ─────────────────────────────────────────────
 
 
 class _SessionWindow:
-    """Bounded sliding window of recent user-turn signals for one session."""
+    """Bounded sliding window of recent user-turn signal flags for a session.
 
-    __slots__ = ("_max", "extraction", "memory_inj", "role_drift", "turns")
+    F4 privacy: stores ONLY per-turn signal flags, never raw turn text. The
+    in-memory store previously retained raw turn texts — unnecessary (the
+    current turn's text arrives with each request) and a retention liability.
+    """
+
+    __slots__ = ("_max", "extraction", "memory_inj", "role_drift", "signals")
 
     def __init__(self, max_turns: int) -> None:
-        self.turns: list[str] = []  # recent user-turn texts (capped)
+        self.signals: list[tuple[int, int, int]] = []  # (r, e, m) per turn, capped
         self.role_drift: int = 0
         self.extraction: int = 0
         self.memory_inj: int = 0
         self._max = max_turns
 
-    def add_turn(self, text: str) -> None:
-        self.turns.append(text)
-        if len(self.turns) > self._max:
-            # Evict oldest; recompute cumulative counters from the surviving
-            # window so the counts reflect ONLY the retained turns.
-            self.turns = self.turns[-self._max :]
-            self._recompute()
-
-    def _recompute(self) -> None:
-        self.role_drift = sum(_count_matches(_ROLE_DRIFT, t) > 0 for t in self.turns)
-        self.extraction = sum(_count_matches(_EXTRACTION_PROBE, t) > 0 for t in self.turns)
-        self.memory_inj = sum(_count_matches(_MEMORY_INJECTION, t) > 0 for t in self.turns)
-
-    def add_signals(self, text: str) -> None:
-        """Tally this turn's signals into the cumulative counters."""
-        if _count_matches(_ROLE_DRIFT, text) > 0:
-            self.role_drift += 1
-        if _count_matches(_EXTRACTION_PROBE, text) > 0:
-            self.extraction += 1
-        if _count_matches(_MEMORY_INJECTION, text) > 0:
-            self.memory_inj += 1
+    def record(self, flags: tuple[int, int, int]) -> None:
+        """Append a turn's signal flags; evict the oldest past the cap."""
+        self.signals.append(flags)
+        self.role_drift += flags[0]
+        self.extraction += flags[1]
+        self.memory_inj += flags[2]
+        if len(self.signals) > self._max:
+            # Evict the oldest turn's flags; the cumulative counters decrement
+            # exactly — no re-regex of retained text needed (there is none).
+            evicted = self.signals.pop(0)
+            self.role_drift -= evicted[0]
+            self.extraction -= evicted[1]
+            self.memory_inj -= evicted[2]
 
 
 class ConversationState:
@@ -241,12 +257,11 @@ class ConversationState:
                 self._sessions.move_to_end(session_id)
             return win
 
-    def record_turn(self, session_id: str, text: str) -> _SessionWindow:
-        """Record a user turn and its signals; return the updated window."""
+    def record_turn(self, session_id: str, flags: tuple[int, int, int]) -> _SessionWindow:
+        """Record a turn's signal flags; return the updated window."""
         win = self.get_or_create(session_id)
         with self._lock:
-            win.add_signals(text)
-            win.add_turn(text)
+            win.record(flags)
         return win
 
     def session_count(self) -> int:
@@ -256,6 +271,99 @@ class ConversationState:
     def clear(self) -> None:
         with self._lock:
             self._sessions.clear()
+
+
+# Atomic per-session signal record (F4). KEYS[1] = session key,
+# ARGV[1] = "<r><e><m>" flags string, ARGV[2] = window (max turns),
+# ARGV[3] = TTL seconds. LPUSH newest-first + LTRIM to the window, then
+# count the retained flags server-side and (re)arm the TTL.
+_SESSION_SIGNALS_LUA = """
+local key = KEYS[1]
+local flags = ARGV[1]
+local window = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+
+redis.call('LPUSH', key, flags)
+redis.call('LTRIM', key, 0, window - 1)
+local entries = redis.call('LRANGE', key, 0, -1)
+local n = #entries
+local r, e, m = 0, 0, 0
+for i = 1, n do
+    local f = entries[i]
+    if string.sub(f, 1, 1) == '1' then r = r + 1 end
+    if string.sub(f, 2, 2) == '1' then e = e + 1 end
+    if string.sub(f, 3, 3) == '1' then m = m + 1 end
+end
+redis.call('EXPIRE', key, ttl)
+return {n, r, e, m}
+"""
+
+
+class RedisSessionStore:
+    """Shared per-session signal store in Redis (F4).
+
+    Closes the F4 trap: ``backend="redis"`` previously recorded NOTHING
+    (every stateful path was gated on ``backend == "memory"``), silently
+    degrading Agent Guardian to single-turn-only analysis in exactly the
+    multi-worker production deployments the redis backend exists for.
+
+    Semantics match the in-memory window: a bounded (LTRIM) list of per-turn
+    signal flags per session key, counted atomically at record time. Stores
+    ONLY flag strings — never raw turn text.
+
+    Uses a SYNC redis client: ``AgentGuardianScanner.scan`` is synchronous
+    (same as the judge scanner's blocking httpx call). The Lua script keeps
+    record + trim + count + TTL arm atomic across workers.
+
+    Fail-closed: connection or script errors propagate to the scanner's
+    error path, which returns BLOCK with an AG-ERR-001 finding — a
+    detection layer that cannot see its session state must not silently
+    pass traffic.
+    """
+
+    KEY_PREFIX = "ng:ag:signals:"
+
+    def __init__(self, settings: AgentGuardianSettings, client: Any | None = None) -> None:
+        self._window = settings.session_window_turns
+        self._ttl = settings.session_ttl_seconds
+        if client is not None:
+            self._client = client
+            self._owns_client = False
+        else:
+            if not settings.redis_url:
+                raise ValueError(
+                    "AgentGuardianSettings.redis_url is required when "
+                    "backend=redis and no client is injected."
+                )
+            from redis import Redis as _Redis
+
+            self._client = _Redis.from_url(settings.redis_url, decode_responses=True)
+            self._owns_client = True
+        self._script = self._client.register_script(_SESSION_SIGNALS_LUA)
+
+    def record(self, session_key: str, flags: tuple[int, int, int]) -> tuple[int, int, int, int]:
+        """Record one turn's flags; return (n_turns, role, extraction, memory).
+
+        The counts cover the RETAINED window only (post-LTRIM), matching the
+        in-memory eviction semantics exactly.
+        """
+        result = self._script(
+            keys=[f"{self.KEY_PREFIX}{session_key}"],
+            args=[f"{flags[0]}{flags[1]}{flags[2]}", self._window, self._ttl],
+        )
+        return (int(result[0]), int(result[1]), int(result[2]), int(result[3]))
+
+    def raw_key(self, session_key: str) -> str:
+        """The Redis key backing a session key (introspection/tests)."""
+        return f"{self.KEY_PREFIX}{session_key}"
+
+    def aclose(self) -> None:
+        """Release the Redis connection if this store owns it."""
+        if self._owns_client:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self._client.close()
 
 
 # ── Scanner ────────────────────────────────────────────────────────────────
@@ -269,11 +377,22 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
     def __init__(self, settings: AgentGuardianSettings) -> None:
         super().__init__(settings)
         self._ag = settings
-        self._state = ConversationState(settings)
+        self._redis_store: RedisSessionStore | None = None
+        self._state: ConversationState | None = None
+        if settings.backend == "redis":
+            # F4: the redis backend previously recorded NOTHING (silent no-op).
+            # The shared store makes multi-worker production actually stateful.
+            self._redis_store = RedisSessionStore(settings)
+        else:
+            self._state = ConversationState(settings)
 
     @property
-    def state(self) -> ConversationState:
-        """Access the conversation state (for testing/debugging)."""
+    def state(self) -> ConversationState | None:
+        """Access the in-memory conversation state (testing/debugging).
+
+        ``None`` when the redis backend is active (the shared store owns the
+        state; no in-process windows are kept).
+        """
         return self._state
 
     def scan(
@@ -313,26 +432,48 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
         if not user_texts:
             return []
 
-        # Mode 2 (across-request): record the current turn into the per-session
-        # window so prior-turn signals accumulate. For mode 1 (multi-turn
-        # messages in one request) we analyze the messages directly, but still
-        # record the latest user turn for future requests in the same session.
+        # Mode 2 (across-request): record the current turn's signal flags into
+        # the per-session store so prior-turn signals accumulate. Mode 1
+        # (multi-turn messages in one request) is analyzed directly, but the
+        # turns are still recorded for future requests in the same session.
+        # F4: stores keep ONLY per-turn signal flags, never raw turn text.
         session_id = self._session_key(request)
-        if session_id is not None and self._ag.backend == "memory":
-            for text in user_texts:
-                self._state.record_turn(session_id, text)
+        flags_list = [_turn_flags(text) for text in user_texts]
+        redis_counts: tuple[int, int, int, int] | None = None
+        if session_id is not None:
+            if self._ag.backend == "redis" and self._redis_store is not None:
+                for flags in flags_list:
+                    redis_counts = self._redis_store.record(session_id, flags)
+            else:
+                for flags in flags_list:
+                    self._state.record_turn(session_id, flags)  # type: ignore[union-attr]
 
-        # The conversation we analyze: prefer the full messages array (mode 1,
-        # richest); fall back to the session window (mode 2).
+        # Signal counts + "is there prior conversation" — source depends on
+        # the input mode and backend. With a state store the counts cover the
+        # retained window INCLUDING the just-recorded turns (same semantics as
+        # the pre-F4 in-memory flow).
         if request.messages and len(request.messages) > 1:
-            conversation = [m.content for m in request.messages if m.role == "user"]
-            window = None
-        elif session_id is not None and self._ag.backend == "memory":
+            # Mode 1: analyze the request's own user turns directly.
+            role_count = self._count_across(_ROLE_DRIFT, user_texts)
+            ext_count = self._count_across(_EXTRACTION_PROBE, user_texts)
+            mem_count = self._count_across(_MEMORY_INJECTION, user_texts)
+            has_prior = len(user_texts) >= 2
+        elif redis_counts is not None:
+            n_window, role_count, ext_count, mem_count = redis_counts
+            has_prior = n_window >= 2
+        elif session_id is not None and self._state is not None:
             window = self._state.get_or_create(session_id)
-            conversation = window.turns
+            role_count = window.role_drift
+            ext_count = window.extraction
+            mem_count = window.memory_inj
+            has_prior = len(window.signals) >= 2
         else:
-            conversation = user_texts
-            window = None
+            # No session: the current request's user turns are the whole
+            # conversation (single-turn analysis; no cross-request state).
+            role_count = self._count_across(_ROLE_DRIFT, user_texts)
+            ext_count = self._count_across(_EXTRACTION_PROBE, user_texts)
+            mem_count = self._count_across(_MEMORY_INJECTION, user_texts)
+            has_prior = len(user_texts) >= 2
 
         findings: list[Finding] = []
 
@@ -340,7 +481,6 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
         # injection directive AND a back-reference to prior conversation, and
         # there IS prior conversation to weaponize.
         latest = user_texts[-1]
-        has_prior = len(conversation) >= 2
         if (
             has_prior
             and _any_match(_INJECTION_MARKER, latest)
@@ -364,7 +504,6 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
             )
 
         # 2. Role drift: persona-redefinition signals across the window.
-        role_count = window.role_drift if window else self._count_across(_ROLE_DRIFT, conversation)
         if role_count >= self._ag.role_drift_threshold:
             findings.append(
                 self._finding(
@@ -386,9 +525,6 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
 
         # 3. Extraction accumulation: system-prompt-extraction probes across
         # the window.
-        ext_count = (
-            window.extraction if window else self._count_across(_EXTRACTION_PROBE, conversation)
-        )
         if ext_count >= self._ag.extraction_probe_threshold:
             findings.append(
                 self._finding(
@@ -409,9 +545,6 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
 
         # 4. Memory-injection accumulation (ASI06): persistent-memory-injection
         # directives across the window.
-        mem_count = (
-            window.memory_inj if window else self._count_across(_MEMORY_INJECTION, conversation)
-        )
         if mem_count >= self._ag.memory_injection_threshold:
             findings.append(
                 self._finding(

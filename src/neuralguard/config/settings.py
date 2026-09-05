@@ -339,10 +339,11 @@ class AgentGuardianSettings(BaseSettings):
       session that lands on different workers is not correlated — the
       production lifespan refuses to start with ``backend=memory`` in
       multi-worker production (mirrors the rate limiter rule).
-    - ``redis``: shared sliding window backed by Redis (reuses the P1-1
-      pattern). Correct across workers. Requires the ``[redis]`` extra and a
-      reachable Redis at ``redis_url``. (B1 ships the in-memory backend; the
-      Redis backend is a B1+ follow-up — the interface is designed for it.)
+    - ``redis``: shared per-session signal store backed by Redis (F4; one
+      key per session, atomic Lua record, reuses the P1-1 pattern). Same
+      scanner semantics across workers. Requires the ``redis`` package and a
+      reachable Redis at ``redis_url``. Stores ONLY per-turn signal flags,
+      never raw turn text.
     """
 
     model_config = SettingsConfigDict(
@@ -363,6 +364,12 @@ class AgentGuardianSettings(BaseSettings):
     redis_url: str | None = Field(
         default=None,
         description="Redis URL for the redis backend. Required when backend=redis.",
+    )
+    session_ttl_seconds: int = Field(
+        default=1800,
+        description="Redis backend: per-session inactivity TTL in seconds. A "
+        "session that stays silent longer than this loses its accumulated "
+        "window (bounds redis memory; re-armed on every recorded turn).",
     )
     # Detection thresholds (per session window)
     role_drift_threshold: int = Field(
