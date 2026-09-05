@@ -627,6 +627,98 @@ ENC_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
 ]
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# T-TOOL: Supply Chain (ASI04, dedicated — P2-3). Rule IDs: SC-001 to SC-005.
+# Prompt-side supply-chain abuse: package/registry poisoning instructions,
+# install-from-arbitrary-index, download-and-execute. Complements TOOL-001..005
+# (which cover tool-call surface, not dependency supply chain).
+# ═════════════════════════════════════════════════════════════════════════
+
+SC_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
+    (
+        "SC-001",
+        Severity.HIGH,
+        0.86,
+        "Install from arbitrary index/URL — 'pip install X --index-url <url> / from github/gist'",
+        r"(?i)\b(?:pip3?|npm|pnpm|yarn|uv|cargo|gem|composer)\s+(?:install|add)\b[^\n]{0,80}(?:--(?:extra-)?index-url\s+\S|https?://|git\+|github\.com/[^/\s]+/[^/\s]+|gist\.)",
+    ),
+    (
+        "SC-002",
+        Severity.HIGH,
+        0.84,
+        "Download-and-execute — 'curl/wget ... | bash/sh/python'",
+        r"(?i)\b(?:curl|wget|fetch|iwr|invoke-webrequest)\b[^\n;|]{0,120}\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b|\|\s*(?:bash|powershell|iex|python3?)\b",
+    ),
+    (
+        "SC-003",
+        Severity.HIGH,
+        0.82,
+        "Dependency swap — 'replace/use package X instead of Y / remove the pinned version'",
+        r"(?i)\b(?:replace|swap|substitute|use)\s+(?:the\s+)?(?:package|dependency|module|library|import)\b[^\n]{0,60}\b(?:instead\s+of|rather\s+than|with)\b|\b(?:remove|drop|bypass)\s+(?:the\s+)?(?:version\s+)?p(?:in|ins|inning)\b",
+    ),
+    (
+        "SC-004",
+        Severity.MEDIUM,
+        0.76,
+        "Registry/mirror redirect — 'point the registry at / use this mirror / set index'",
+        r"(?i)\b(?:registry|mirror|index|repository)\s+(?:config|url|host)?\s*[:=]?\s*https?://|\b(?:npm|pip)\s+config\s+set\b|\bnpmrc\b.{0,30}(?:registry|_auth)\s*[:=]",
+    ),
+    (
+        "SC-005",
+        Severity.MEDIUM,
+        0.74,
+        "Typosquat injection — 'install requets/reqeusts (lookalike of a known package)'",
+        r"(?i)\b(?:install|import|add|use)\s+(?:the\s+)?(?:package\s+)?(?:requets|reqeusts|reqests|python-dateutil2?|colarful|colourama|crossenv|beautifulsoup4?)\b",
+    ),
+]
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# T-AGT: Rogue Agents (ASI10, dedicated — P2-3). Rule IDs: RA-001 to RA-005.
+# Agent-impersonation / forged inter-agent authority: fake orchestrator
+# claims, forged agent-to-agent messages, permission-grant forgery,
+# orchestration hijack. Complements the Agent Guardian's cross-turn view.
+# ═════════════════════════════════════════════════════════════════════════
+
+RA_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
+    (
+        "RA-001",
+        Severity.HIGH,
+        0.85,
+        "Authority impersonation — 'as the orchestrator/lead/supervisor agent I instruct'",
+        r"(?i)\bas\s+the\s+(?:orchestrator|coordinator|lead|supervisor|senior|primary|root|admin)\s+(?:agent|assistant|worker|subagent|process)\b|\b(?:speaking|writing|acting)\s+as\s+(?:the\s+)?(?:system|orchestrator|admin)\s+agent\b",
+    ),
+    (
+        "RA-002",
+        Severity.HIGH,
+        0.84,
+        "Forged agent-to-agent message — 'message from agent X: / agent has approved/granted'",
+        r"(?i)\b(?:message|msg|note|memo)\s+from\s+(?:the\s+)?(?:agent|subagent|worker|assistant|bot)(?:\s+\w[\w-]{0,20})?\s*[:\u2014-]|\b(?:agent|worker|subagent)\s+\w[\w-]{0,20}\s+(?:has\s+)?(?:approved|granted|authorized|confirmed|verified)\b",
+    ),
+    (
+        "RA-003",
+        Severity.HIGH,
+        0.83,
+        "Permission-grant forgery — 'you have been granted admin/full permissions / permissions elevated'",
+        r"(?i)\b(?:you|this\s+agent)\s+(?:have|has)\s+been\s+(?:granted|given|awarded)\b[^\n]{0,40}\b(?:admin|root|full|elevated|unrestricted|sudo)\b|\bpermissions?\s+(?:elevated|upgraded|escalated)\b|\b(?:system|admin)\s*:\\s*(?:grant|elevate|escalate)\b",
+    ),
+    (
+        "RA-004",
+        Severity.MEDIUM,
+        0.76,
+        "Unauthorized delegation — 'spawn/instruct a subagent to bypass/ignore'",
+        r"(?i)\b(?:spawn|launch|instruct|task|tell|direct)\s+(?:a\s+|another\s+|the\s+)?(?:subagent|sub-agent|worker\s+agent|child\s+agent|secondary\s+agent)\b[^\n]{0,60}\b(?:ignore|bypass|override|skip|circumvent)\b",
+    ),
+    (
+        "RA-005",
+        Severity.MEDIUM,
+        0.75,
+        "Orchestration hijack — 'all other agents must now / this is the new lead agent'",
+        r"(?i)\ball\s+(?:other\s+)?(?:agents|workers|subagents|assistants)\s+(?:must|should|will|need\s+to)\s+now\b|\b(?:i\s+am|this\s+is)\s+the\s+(?:new|acting)\s+(?:lead|primary|coordinator|orchestrator)(?:\s+agent)?\b[^\n]{0,30}(?:now|from\s+now\s+on|as\s+of)",
+    ),
+]
+
+
 # ── Compile all patterns ─────────────────────────────────────────────────
 
 ALL_PATTERN_SETS: list[tuple[ThreatCategory, list[tuple[str, Severity, float, str, str]]]] = [
@@ -639,6 +731,8 @@ ALL_PATTERN_SETS: list[tuple[ThreatCategory, list[tuple[str, Severity, float, st
     (ThreatCategory.TOOL_MISUSE, TOOL_PATTERNS),
     (ThreatCategory.DOS_ABUSE, DOS_PATTERNS),
     (ThreatCategory.ENCODING_EVASION, ENC_PATTERNS),
+    (ThreatCategory.TOOL_MISUSE, SC_PATTERNS),
+    (ThreatCategory.AGENT_GOAL_HIJACK, RA_PATTERNS),
 ]
 
 

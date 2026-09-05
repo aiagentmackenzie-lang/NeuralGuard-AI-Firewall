@@ -77,7 +77,7 @@ ES_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.93,
         "[ES] Instruction override — 'ignora todas las instrucciones / olvida todo'",
-        r"(?i)\b(?:ignora|olvida|descarta|anula|obvia)\s+(?:todas\s+las\s+|tus\s+|las\s+|tus\s+anteriores\s+)?(?:instrucciones?|reglas?|directrices?|normas?|restricciones?)\b",
+        r"(?i)\b(?:ignora|olvida|descarta|anula|obvia)\s+(?:todas\s+las\s+|tus\s+|las\s+|anteriores\s+)?(?:instrucciones?|reglas?|directrices?|normas?|restricciones?)\b",
     ),
     (
         "PI-D-ES-002",
@@ -120,7 +120,7 @@ FR_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.93,
         "[FR] Instruction override — 'ignore toutes les instructions / oublie tout'",
-        r"(?i)\b(?:ignore|oublie|contourne|annule|ne\s+suive)\s+(?:toutes\s+les\s+|tes\s+|les\s+|les\s+précédentes\s+)?(?:instructions?|règles?|directives?|consignes?|contraintes?)\b",
+        r"(?i)\b(?:ignore|oublie|contourne|annule|ne\s+suivez)\s+(?:toutes\s+les\s+|tes\s+|les\s+|les\s+précédentes\s+)?(?:instructions?|règles?|directives?|consignes?|contraintes?)\b",
     ),
     (
         "PI-D-FR-002",
@@ -163,7 +163,7 @@ DE_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.93,
         "[DE] Instruction override — 'ignoriere alle anweisungen / vergiss alles'",
-        r"(?i)\b(?:ignoriere|vergiss|umgehe|überschreite|annuliere)\s+(?:alle\s+(?:vorherigen\s+)?|deine\s+|die\s+)?(?:anweisungen?|regeln?|anordnungen?|vorschriften?|beschränkungen?)\b",
+        r"(?i)\b(?:ignoriere|vergiss|umgehe|überschreite|annulliere)\s+(?:alle\s+(?:vorherigen\s+)?|deine\s+|die\s+)?(?:anweisungen?|regeln?|anordnungen?|vorschriften?|beschränkungen?)\b",
     ),
     (
         "PI-D-DE-002",
@@ -220,7 +220,7 @@ ZH_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.88,
         "[ZH] Jailbreak — DAN / 开发者模式 / 无限制模式 / 做你想做的",
-        r"(?i)(?:DAN| developer mode|開發者模式|开发者模式|無限制模式|无限制模式|管理員模式|管理员模式|root模式|ROOT模式)|(?:做你?想做的|做?任何?你?想?做?的|你?现在?可以?做?任何?事[情]?)",
+        r"(?i)(?:DAN|developer\s+mode|開發者模式|开发者模式|無限制模式|无限制模式|管理員模式|管理员模式|root模式|ROOT模式)|(?:做你?想做的|做?任何?你?想?做?的|你?现在?可以?做?任何?事[情]?)",
     ),
     (
         "EXT-ZH-004",
@@ -263,7 +263,7 @@ JA_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.88,
         "[JA] Jailbreak — DAN / デベロッパーモード / すべてを実行して / 何でもする",
-        r"(?i)(?:DAN| developer mode|デベロッパーモード|開発者モード|Godモード|管理者モード)|(?:全て実行|すべて実行し|何でもして|なんでもして)\s*(?:くれ|ください|て|ろ)|(?:制限なく|無制限で)\s*(?:行動し|応答し|動作し)\s*(?:ろ|て|てください|なさい)",
+        r"(?i)(?:DAN|developer\s+mode|デベロッパーモード|開発者モード|Godモード|管理者モード)|(?:全て実行|すべて実行し|何でもして|なんでもして)\s*(?:くれ|ください|て|ろ)|(?:制限なく|無制限で)\s*(?:行動し|応答し|動作し)\s*(?:ろ|て|てください|なさい)",
     ),
     (
         "EXT-JA-004",
@@ -306,7 +306,7 @@ KO_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.88,
         "[KO] Jailbreak — DAN / 개발자 모드 / 관리자 모드 / 무엇이든 해",
-        r"(?i)(?:DAN| developer mode|개발자\s*모드|관리자\s*모드|God\s*모드|루트\s*모드)|(?:무엇이든|무엇이|아무거나|뭐든지|맡긴\s*대로)\s*(?:해|해줘|해주라|수행해|실행해|다\s*해|다\s*실행해)|(?:제한\s*없이|제약\s*없이)\s*(?:행동|응답|답변|작동)\s*(?:해|해줘|해라)",
+        r"(?i)(?:DAN|developer\s+mode|개발자\s*모드|관리자\s*모드|God\s*모드|루트\s*모드)|(?:무엇이든|무엇이|아무거나|뭐든지|맡긴\s*대로)\s*(?:해|해줘|해주라|수행해|실행해|다\s*해|다\s*실행해)|(?:제한\s*없이|제약\s*없이)\s*(?:행동|응답|답변|작동)\s*(?:해|해줘|해라)",
     ),
     (
         "EXT-KO-004",
@@ -320,7 +320,7 @@ KO_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.MEDIUM,
         0.78,
         "[KO] Constraint removal — '규칙을 따르지 마 / 제한 없이'",
-        r"(?:규칙|지시|명령|제한|제약|가드레일).*?(?:따르지|따르지\s*마|지키지\s*마|따르지\s*말고|받지|받지\s*마)|(?:제한|제약|규칙|명령|지시).*?(?:없이|없이|해제|해제하고|빼|빼고)|(?:제한|제약|규칙|명령)\s*(?:없이|없는|없음|없는)\s*(?:상태|상태로|환경|환경에서)",
+        r"(?:규칙|지시|명령|제한|제약|가드레일).*?(?:따르지|따르지\s*마|지키지\s*마|따르지\s*말고|받지|받지\s*마)|(?:제한|제약|규칙|명령|지시).*?(?:없이|해제|해제하고|빼|빼고)|(?:제한|제약|규칙|명령)\s*(?:없이|없는|없음|없는)\s*(?:상태|상태로|환경|환경에서)",
     ),
 ]
 
@@ -363,7 +363,7 @@ RU_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.MEDIUM,
         0.78,
         "[RU] Constraint removal — 'не следуй правилам / без ограничений'",
-        r"(?i)\b(?:не\s+следуй|игнорируй)\s+(?:свои\s+)?(?:правила?|ограничения?|ограничения?)\b|\bбез\s+(?:любых\s+)?(?:ограничений|правил|предел)а?\b",
+        r"(?i)\b(?:не\s+следуй|игнорируй)\s+(?:свои\s+)?(?:правила?|ограничения?)\b|\bбез\s+(?:любых\s+)?(?:ограничений|правил|предел)а?\b",
     ),
 ]
 
@@ -399,7 +399,7 @@ AR_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.91,
         "[AR] System prompt extraction — 'كرر كل ما فوق / اظهر تعليماتك'",
-        r"(?:كرر|اكرر|كَرِّر|إعادة|أعد|أعيد|اعاد|قل|اخبرني|أخرج|أظهر|اظهر)\s*(?:كل|جميع|ما|كامل|كل\s+ما|جميع\s+ما)?\s*(?:فوق|اعلى|سابق|ما\s+سبق|موجود\s+اعلى|موجودة\s+اعلى|كُتِبَ|كتب|الموجود\s+في\s+الأعلى|الموجود\s+في\s+الاعلى)|(?:أظهر|اظهر|اكشف|اكشفي|أخرج|اخرج|اعطني)\s*(?:لي)?\s*(?:تعليماتك|تعليماتك|توجيهاتك|توجيهاتك|الأوامر|الاوامر|القواعد|الضوابط|الشروط|System|الشروط)\s*(?:الخاصة|الخاصه|السريه|السرية|المخفيه|المخفية)?",
+        r"(?:كرر|اكرر|كَرِّر|إعادة|أعد|أعيد|اعاد|قل|اخبرني|أخرج|أظهر|اظهر)\s*(?:كل|جميع|ما|كامل|كل\s+ما|جميع\s+ما)?\s*(?:فوق|اعلى|سابق|ما\s+سبق|موجود\s+اعلى|موجودة\s+اعلى|كُتِبَ|كتب|الموجود\s+في\s+الأعلى|الموجود\s+في\s+الاعلى)|(?:أظهر|اظهر|اكشف|اكشفي|أخرج|اخرج|اعطني)\s*(?:لي)?\s*(?:تعليماتك|تعليماتك|توجيهاتك|الأوامر|الاوامر|القواعد|الضوابط|الشروط|System)\s*(?:الخاصة|الخاصه|السريه|السرية|المخفيه|المخفية)?",
     ),
     (
         "PI-D-AR-005",
@@ -421,14 +421,14 @@ VI_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.93,
         "[VI] Instruction override — 'bỏ qua tất cả hướng dẫn / quên các quy tắc'",
-        r"(?i)\b(?:bỏ\s+qua|bỏ\s+qua|quên|phớt\s+lờ|bỏ\s+qua|không\s+tuân\s+theo)\s+(?:tất\s+cả|các)?\s*(?:hướng\s+dẫn|quy\s+tắc|chỉ\s+thị|yêu\s+cầu|giới\s+hạn|hạn\s+chế|điều\s+kiện|quy\s+định)\b",
+        r"(?i)\b(?:bỏ\s+qua|quên|phớt\s+lờ|không\s+tuân\s+theo)\s+(?:tất\s+cả|các)?\s*(?:hướng\s+dẫn|quy\s+tắc|chỉ\s+thị|yêu\s+cầu|giới\s+hạn|hạn\s+chế|điều\s+kiện|quy\s+định)\b",
     ),
     (
         "PI-D-VI-002",
         Severity.HIGH,
         0.90,
         "[VI] Role switching — 'bây giờ bạn là / hãy đóng vai / giả vờ bạn là'",
-        r"(?i)\b(?:bây\s+giờ|từ\s+bây\s+giờ|từ\s+đây\s+về\s+sau|hiện\s+tại)\s+(?:bạn|mày|ngươi|anh|chị|em|cậu)\s+(?:là|đã\s+là|trở\s+thành|trở\s+thành)\b|\b(?:hãy|hãy\s+đóng\s+vai|đóng\s+vai|giả\s+vờ|giả\s+bộ|giả\s+bộ)\s+(?:là|làm|như|như\s+thể|như\s+thể\s+bạn\s+là)\b",
+        r"(?i)\b(?:bây\s+giờ|từ\s+bây\s+giờ|từ\s+đây\s+về\s+sau|hiện\s+tại)\s+(?:bạn|mày|ngươi|anh|chị|em|cậu)\s+(?:là|đã\s+là|trở\s+thành)\b|\b(?:hãy|hãy\s+đóng\s+vai|đóng\s+vai|giả\s+vờ|giả\s+bộ|giả\s+bộ)\s+(?:là|làm|như|như\s+thể|như\s+thể\s+bạn\s+là)\b",
     ),
     (
         "JB-VI-003",
@@ -442,7 +442,7 @@ VI_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.91,
         "[VI] System prompt extraction — 'lặp lại tất cả ở trên / hiển thị hướng dẫn của bạn'",
-        r"(?i)\b(?:lặp\s+lại|nói\s+lại|đọc\s+lại|xuất\s+ra|hiển\s+thị|in\s+ra)\s+(?:tất\s+cả|toàn\s+bộ|mọi\s+thứ)\s+(?:ở\s+trên|ở\s+trên|đã\s+nói|đã\s+viết|đã\s+đề\s+cập|đã\s+đưa\s+ra)\b|\b(?:hiển\s+thị|xuất\s+ra|đưa\s+ra|cho\s+tôi\s+biết|nói\s+cho)\s+(?:hướng\s+dẫn|quy\s+tắc|chỉ\s+thị|yêu\s+cầu)\s+(?:của\s+bạn|của\s+bạn)?\b",
+        r"(?i)\b(?:lặp\s+lại|nói\s+lại|đọc\s+lại|xuất\s+ra|hiển\s+thị|in\s+ra)\s+(?:tất\s+cả|toàn\s+bộ|mọi\s+thứ)\s+(?:ở\s+trên|đã\s+nói|đã\s+viết|đã\s+đề\s+cập|đã\s+đưa\s+ra)\b|\b(?:hiển\s+thị|xuất\s+ra|đưa\s+ra|cho\s+tôi\s+biết|nói\s+cho)\s+(?:hướng\s+dẫn|quy\s+tắc|chỉ\s+thị|yêu\s+cầu)\s+(?:của\s+bạn|của\s+bạn)?\b",
     ),
     (
         "PI-D-VI-005",
@@ -491,6 +491,10 @@ def resolve_category(rule_id: str) -> ThreatCategory:
         return ThreatCategory.SYSTEM_PROMPT_EXTRACTION
     if upper.startswith("EXF"):
         return ThreatCategory.DATA_EXFILTRATION
+    if upper.startswith("SC"):
+        return ThreatCategory.TOOL_MISUSE
+    if upper.startswith("RA"):
+        return ThreatCategory.AGENT_GOAL_HIJACK
     if upper.startswith("TOOL"):
         return ThreatCategory.TOOL_MISUSE
     if upper.startswith("DOS"):

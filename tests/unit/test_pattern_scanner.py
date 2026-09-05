@@ -51,11 +51,11 @@ class TestPatternScannerBasic:
             for name in dir(i18n_mod)
             if name.endswith("_PATTERNS") and isinstance((rules := getattr(i18n_mod, name)), list)
         )
-        assert en_count == 63, f"EN rule count changed to {en_count} — update the README + this pin"
+        assert en_count == 73, f"EN rule count changed to {en_count} — update the README + this pin"
         assert i18n_count == 50, (
             f"i18n rule count changed to {i18n_count} — update the README + this pin"
         )
-        assert PatternScanner(ScannerSettings()).pattern_count == en_count + i18n_count == 113
+        assert PatternScanner(ScannerSettings()).pattern_count == en_count + i18n_count == 123
 
     def test_empty_request_rejected(self, scanner):
         """Empty requests are rejected at validation level (422), not scanner level."""
