@@ -153,14 +153,14 @@ source = ["neuralguard"]
 branch = true
 
 [tool.coverage.report]
-# CI-realistic floor for the full suite measured WITHOUT the gitignored
-# ONNX model (the semantic tests skip when the model is absent). Observed:
-# ~87.4% full-suite / ~88.6% core-only on a fresh checkout. The full suite
-# reaches ~90%+ when the semantic model is present (run scripts/export_onnx.py
-# locally); restoring a 90% CI gate requires regenerating the model in CI
-# (tracked as P2 in PRODUCTION_HARDENING_PLAN.md). 86% gives margin for
-# shared-runner variance while still gating real regressions.
-fail_under = 86
+# 90% CI floor (P2, raised from 86% on 2026-09-05). CI now runs the FULL
+# suite with the semantic layer: the ONNX model is regenerated in CI
+# (scripts/export_onnx.py) and the 5.4x corpus is rebuilt from tracked
+# sources (scripts/rebuild_corpus_vectors.py) — the semantic tests no longer
+# skip. Measured 91.49% locally with the full model + corpus (P2-9 headroom
+# tests landed the same day); 90% gates real regressions with margin for
+# shared-runner variance.
+fail_under = 90
 show_missing = true
 exclude_lines = [
     "pragma: no cover",
