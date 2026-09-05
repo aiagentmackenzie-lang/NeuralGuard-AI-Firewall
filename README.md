@@ -450,12 +450,17 @@ internally-consistent chains are then rejected by `neuralguard audit-verify
 backup, restore, and chain verification.
 
 **SIEM routing (P2-7).** Audit events (with their chain hash) fan out to
-Splunk HEC (native) and/or a generic JSON webhook (ELK / Sentinel via their
-supported ingestion integrations) — `NEURALGUARD_SIEM_*`, off by default.
-A BLOCK-rate spike detector (sliding window, edge-triggered, cooldown) emits
-one alert per spike episode. Delivery is bounded (in-flight cap, drop + warn
-beyond it) and best-effort by design: routing is observability, delivery
-failures never affect verdicts.
+Splunk HEC (native), a generic JSON webhook (ELK / Sentinel via their
+supported ingestion integrations), or **SecurityScarletAI** (local SIEM):
+verdicts map into ScarletAI's ECS-normalized IngestEvent schema
+(`event_category: intrusion_detection`, severity ladder: block→high /
+critical ≥0.9 confidence, escalate→medium, allow→info + filtered by
+default; spike alerts → critical) and POST to
+`NEURALGUARD_SIEM_SCARLETAI_URL` with the scoped ingest token —
+ScarletAI's enrichment + correlation chains fire on arrival, and the
+tamper-evident chain hash rides in `raw_data`. Delivery is bounded
+(in-flight cap, drop + warn beyond it) and best-effort by design: routing
+is observability, delivery failures never affect verdicts.
 
 **JWT bearer auth + key rotation (P2-4).** In addition to static API keys:
 short-lived JWTs (`NEURALGUARD_AUTH_JWT_ENABLED`, HS256 with an alg

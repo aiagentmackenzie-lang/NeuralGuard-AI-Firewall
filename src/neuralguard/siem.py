@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
@@ -42,6 +43,69 @@ logger = structlog.get_logger(__name__)
 
 # Log at most one drop-warning per this many drops (bounded log noise under load).
 _DROP_LOG_EVERY = 50
+
+# ECS severity mapping: NeuralGuard verdict → ScarletAI alert severity.
+# High-confidence BLOCKs escalate to critical (a confirmed attack, not a
+# suspicion); ALLOW maps to info and is filtered by default anyway.
+_VERDICT_SEVERITY = {
+    "block": "high",
+    "quarantine": "critical",
+    "escalate": "medium",
+    "sanitize": "medium",
+    "rate_limit": "low",
+    "allow": "info",
+}
+
+
+def map_to_scarletai(payload: dict[str, Any], settings: SiemSettings) -> dict[str, Any]:
+    """Map a NeuralGuard SIEM envelope into a ScarletAI IngestEvent dict.
+
+    ScarletAI normalizes to ECS (Elastic Common Schema). The mapping keeps
+    the tamper-evident chain (event_hash + event_sig) inside ``raw_data`` so
+    the SIEM inherits NeuralGuard's non-repudiation, and NL2SQL can query
+    findings/scanner_details directly.
+
+    - host_name: configured host or this machine's hostname (required field,
+      sanitized by ScarletAI's own validator).
+    - event_category: ECS ``intrusion_detection`` — these ARE detection
+      events, not host telemetry.
+    - event_type: ECS ``info`` (the verdict detail rides in raw_data).
+    - event_action: queryable verdict discriminator (verdict_block,
+      block_rate_spike, ...).
+    - severity: verdict → ECS severity; a spike alert is critical.
+    """
+    import platform as _platform
+
+    event_type = payload.get("event_type", "neuralguard.verdict")
+    inner = payload.get("event", {})
+    if event_type == "neuralguard.block_spike":
+        verdict = "block"  # a spike IS a block storm
+        action = "block_rate_spike"
+        severity = "critical"
+    else:
+        verdict = str(inner.get("verdict", "allow"))
+        action = f"verdict_{verdict}"
+        severity = _VERDICT_SEVERITY.get(verdict, "info")
+        if verdict == "block" and float(inner.get("confidence", 0.0)) >= 0.9:
+            severity = "critical"
+
+    host = settings.scarletai_host or _platform.node() or "neuralguard"
+    ts = payload.get("time")
+    timestamp = (
+        datetime.fromtimestamp(ts, UTC).isoformat()
+        if isinstance(ts, (int, float))
+        else datetime.now(UTC).isoformat()
+    )
+    return {
+        "@timestamp": timestamp,
+        "host_name": host[:253],
+        "source": "neuralguard",
+        "event_category": "intrusion_detection",
+        "event_type": "info",
+        "event_action": action,
+        "severity": severity,
+        "raw_data": {"neuralguard": inner},
+    }
 
 
 class SiemRouter:
@@ -68,6 +132,8 @@ class SiemRouter:
             self._sinks.append("splunk_hec")
         if settings.webhook_url:
             self._sinks.append("webhook")
+        if settings.scarletai_url:
+            self._sinks.append("scarletai")
         self._semaphore = asyncio.Semaphore(settings.max_inflight)
         # Spike detector: ring of recent verdicts (True = BLOCK) + running count.
         self._recent_blocks: deque[bool] = deque(maxlen=settings.spike_window)
@@ -86,6 +152,10 @@ class SiemRouter:
 
         Called from ``AuditLogger._persist`` AFTER the chain hash is stamped,
         so SIEM consumers receive the tamper-evident form of every event.
+
+        ALLOW-verdict filtering (scarletai sink only, ``route_allow=False``)
+        filters DELIVERY, never the spike detector — the block RATIO needs
+        allow verdicts in its denominator.
         """
         if not self._sinks:
             return
@@ -97,8 +167,15 @@ class SiemRouter:
 
         spiked = self._record_and_detect(event.verdict.value)
         if spiked:
-            payload = payload  # verdict event still delivered
             self._schedule(self._spike_payload())
+
+        # ALLOW filter: scarletai-only deployments default to alert-quality.
+        if (
+            event.verdict.value == "allow"
+            and not self.settings.scarletai_route_allow
+            and self._sinks == ["scarletai"]
+        ):
+            return
         self._schedule(payload)
 
     # ── Spike detection ───────────────────────────────────────────────────
@@ -206,6 +283,8 @@ class SiemRouter:
                     await self._post_splunk(client, payload)
                 if "webhook" in self._sinks:
                     await self._post_webhook(client, payload)
+                if "scarletai" in self._sinks:
+                    await self._post_scarletai(client, payload)
 
     def _deliver_sync(self, payload: dict[str, Any]) -> None:
         # Sync fallback path (no running loop): single bounded attempt.
@@ -218,10 +297,46 @@ class SiemRouter:
                     self._post_splunk_sync(client, payload)
                 if "webhook" in self._sinks:
                     self._post_webhook_sync(client, payload)
+                if "scarletai" in self._sinks:
+                    self._post_scarletai_sync(client, payload)
         except Exception as exc:
             self._on_dropped(f"sync_error: {exc.__class__.__name__}")
 
-    # ── Sink implementations ──────────────────────────────────────────────
+    # ── Sink implementations ─────────────────────────────────────────────
+
+    def _post_scarletai_sync(self, client: httpx.Client, payload: dict[str, Any]) -> None:
+        scarletai_url = self.settings.scarletai_url
+        assert scarletai_url is not None  # "scarletai" in _sinks guarantees this
+        headers = (
+            {"Authorization": f"Bearer {self.settings.scarletai_token}"}
+            if self.settings.scarletai_token
+            else {}
+        )
+        response = client.post(
+            scarletai_url, json=[map_to_scarletai(payload, self.settings)], headers=headers
+        )
+        self._check(response, "scarletai")
+
+    async def _post_scarletai(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> None:
+        try:
+            scarletai_url = self.settings.scarletai_url
+            assert scarletai_url is not None  # "scarletai" in _sinks guarantees this
+            headers = (
+                {"Authorization": f"Bearer {self.settings.scarletai_token}"}
+                if self.settings.scarletai_token
+                else {}
+            )
+            response = await client.post(
+                scarletai_url,
+                json=[map_to_scarletai(payload, self.settings)],
+                headers=headers,
+            )
+            self._check(response, "scarletai")
+        except Exception as exc:
+            logger.warning("siem_sink_failed", sink="scarletai", error=str(exc))
+            self._on_dropped(f"scarletai: {exc.__class__.__name__}")
+
+    # ── Sink implementations ─────────────────────────────────────────────
 
     def _post_splunk_sync(self, client: httpx.Client, payload: dict[str, Any]) -> None:
         hec_url = self.settings.splunk_hec_url

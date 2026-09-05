@@ -397,6 +397,29 @@ class SiemSettings(BaseSettings):
         default=None,
         description="Optional bearer token for the generic webhook (never logged)",
     )
+    scarletai_url: str | None = Field(
+        default=None,
+        description=(
+            "SecurityScarletAI ingest endpoint (e.g. "
+            "http://127.0.0.1:8000/api/v1/ingest). Maps audit events into the "
+            "ECS-normalized IngestEvent schema; correlations fire on arrival."
+        ),
+    )
+    scarletai_token: str | None = Field(
+        default=None,
+        description="ScarletAI INGEST_BEARER_TOKEN (scoped: ingest-only, never logged)",
+    )
+    scarletai_host: str | None = Field(
+        default=None,
+        description=("host_name reported to ScarletAI (defaults to this machine's hostname)"),
+    )
+    scarletai_route_allow: bool = Field(
+        default=False,
+        description=(
+            "Also route ALLOW verdicts to ScarletAI (default: only non-allow "
+            "verdicts + spike alerts — alert-quality over volume)"
+        ),
+    )
     timeout_seconds: float = Field(
         default=5.0, ge=0.5, le=60, description="Per-delivery HTTP timeout"
     )
