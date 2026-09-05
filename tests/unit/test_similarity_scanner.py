@@ -566,12 +566,14 @@ class TestSimilarityScannerWithRealModel:
         """Semantic scan P95 latency should stay well under any regression-inducing bug.
 
         A regression that re-loads the corpus or re-initializes the ONNX session
-        per scan would push latency into the 1000ms+ range, so a 120ms P95 budget
-        is a meaningful regression guard while honestly reflecting ONNX
-        inference + 1,401-vector corpus similarity on a shared CPU. The previous
-        5-sample "P95" was actually the max-of-5 and flaked under CPU contention
-        (observed 74ms during the full suite). 40 samples gives a real 95th
-        percentile.
+        per scan would push latency into the 1000ms+ range, so the P95 budget is
+        a meaningful regression guard while honestly reflecting ONNX inference
+        + 7,623-vector corpus similarity. Budget is 400ms: ~19ms p95 on the dev
+        Mac mini, but shared-CI vCPUs measured 125ms (2026-09-05) — the guard
+        targets the 1000ms+ reload regression class, not machine speed. The
+        previous 5-sample "P95" was actually the max-of-5 and flaked under CPU
+        contention (observed 74ms during the full suite). 40 samples gives a
+        real 95th percentile.
         """
         # Warm up (first scan pays the session/corpus warmup cost).
         req = EvaluateRequest(prompt="warmup")
@@ -597,7 +599,7 @@ class TestSimilarityScannerWithRealModel:
         latencies.sort()
         p95 = latencies[int(len(latencies) * 0.95)]
         avg_latency = sum(latencies) / len(latencies)
-        assert p95 < 120, f"P95 latency {p95:.1f}ms exceeds 120ms (avg: {avg_latency:.1f}ms)"
+        assert p95 < 400, f"P95 latency {p95:.1f}ms exceeds 400ms (avg: {avg_latency:.1f}ms)"
 
     def test_finding_metadata_includes_similarity(self, scanner: object) -> None:
         """Findings include similarity metadata."""
