@@ -121,13 +121,28 @@ class ScannerSettings(BaseSettings):
 
     # LLM-as-Judge (Phase 2)
     judge_enabled: bool = Field(default=False, description="Enable LLM-as-Judge")
-    judge_model: str = Field(default="gpt-4o-mini", description="Judge model identifier")
+    judge_model: str = Field(
+        default="mistral:7b", description="Judge model identifier (Ollama tag)"
+    )
     judge_max_tokens: int = Field(default=512, description="Max tokens for judge response")
     judge_temperature: float = Field(default=0.0, description="Judge sampling temperature")
     judge_ollama_url: str = Field(
         default="http://localhost:11434",
-        description="Ollama base URL for the judge. In production this MUST resolve to a "
-        "loopback/private address to keep prompts inside the trust boundary.",
+        description="Ollama base URL for the judge. Production ENFORCES a "
+        "loopback/private address unless NEURALGUARD_SCANNER_JUDGE_ALLOW_EGRESS=true "
+        "(explicit, logged) — F10.3.",
+    )
+    judge_timeout_seconds: int = Field(
+        default=5,
+        description="Hard timeout for one judge HTTP call. Cloud-via-Ollama models "
+        "and large local models (cold starts) need more than the old hardcoded 5s "
+        "in some environments — raise it deliberately.",
+    )
+    judge_allow_egress: bool = Field(
+        default=False,
+        description="F10.3: explicit opt-in to a NON-loopback judge endpoint (cloud-via-Ollama). "
+        "When true, prompts leave the trust boundary — the startup logs it loudly and "
+        "readiness surfaces it. Never enable for sensitive workloads.",
     )
     judge_max_concurrency: int = Field(
         default=4,

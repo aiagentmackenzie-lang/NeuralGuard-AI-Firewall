@@ -139,6 +139,16 @@ def _probe_scanners(
     # ping would add latency + a network hop to a frequently-hit endpoint.
     if config.scanner.judge_enabled:
         out["judge"] = "ok" if any(l.value == "judge" for l in registered) else "fail"
+        # F10.3: surface whether judged prompts leave the trust boundary.
+        from neuralguard.main import _is_private_judge_url
+
+        out["judge_egress"] = (
+            "local"
+            if _is_private_judge_url(config.scanner.judge_ollama_url)
+            else (
+                "explicit-egress" if config.scanner.judge_allow_egress else "egress-refused-in-prod"
+            )
+        )
     else:
         out["judge"] = "skip"
 

@@ -60,6 +60,31 @@ structlog.configure(
 )
 
 
+def _is_private_judge_url(url: str) -> bool:
+    """True if the judge endpoint is loopback/private (F10.3 egress gate).
+
+    Private = loopback literals, RFC1918, link-local, IPv6 loopback/ULA,
+    dot-less hostnames (container-internal names like ``ollama``), and the
+    Docker host reference ``host.docker.internal``. Everything else (public
+    IPs and dot-ful public hostnames) is EGRESS.
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return False
+    if host == "host.docker.internal":
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        # Not an IP literal: bare names are container-internal; public
+        # hostnames have dots and are egress.
+        return "." not in host
+    return addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_unspecified
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan — startup and shutdown logic.
@@ -249,6 +274,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 msg="allow_insecure_http=true: ensure a TLS-terminating reverse proxy is in front.",
             )
 
+    # Judge egress gate (F10.3): production ENFORCES a loopback/private judge
+    # endpoint unless the operator opts in explicitly (logged + surfaced in
+    # readiness). Cloud-via-Ollama models route via the local daemon but
+    # inference happens at the vendor — that IS egress.
+    if (
+        config.environment == "production"
+        and config.scanner.judge_enabled
+        and not _is_private_judge_url(config.scanner.judge_ollama_url)
+    ):
+        if config.scanner.judge_allow_egress:
+            structlog.get_logger("neuralguard").warning(
+                "judge_egress_explicitly_allowed",
+                url=config.scanner.judge_ollama_url,
+                msg="Judge prompts LEAVE the trust boundary (explicit opt-in). "
+                "Never enable for sensitive workloads.",
+            )
+        else:
+            raise RuntimeError(
+                "Production startup refused: judge_ollama_url "
+                f"({config.scanner.judge_ollama_url}) is not loopback/private. "
+                "Prompts would leave the trust boundary. Set "
+                "NEURALGUARD_SCANNER_JUDGE_ALLOW_EGRESS=true to opt in "
+                "explicitly (logged, and surfaced in /v1/ready)."
+            )
+
     yield
 
     # ── Shutdown ──
@@ -351,10 +401,14 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
         try:
             from neuralguard.semantic.judge import JudgeScanner
 
-            pipeline.register_scanner(JudgeScanner(config.scanner))
+            judge_scanner = JudgeScanner(config.scanner)
+            pipeline.register_scanner(judge_scanner)
             structlog.get_logger("neuralguard").info(
                 "judge_scanner_registered", model=config.scanner.judge_model
             )
+            # F10.5: load the model once at boot so the circuit breaker does
+            # not trip on cold-start timeouts of the first judged request.
+            app.state.judge_warmup_ok = judge_scanner.warmup()
         except (ImportError, FileNotFoundError) as exc:
             structlog.get_logger("neuralguard").warning(
                 "judge_scanner_unavailable",

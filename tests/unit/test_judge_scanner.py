@@ -396,10 +396,12 @@ class TestJudgeScannerIntegration:
 
     @pytest.fixture
     def live_scanner(self) -> JudgeScanner:
-        s = ScannerSettings(judge_enabled=True, judge_model="gemma3:4b")
+        s = ScannerSettings(
+            judge_enabled=True,
+            judge_model="gemma3:4b",
+            judge_timeout_seconds=10,  # real model inference needs headroom (F10.1)
+        )
         scanner = JudgeScanner(s)
-        # Increase timeout for integration tests (real model inference)
-        scanner.JUDGE_TIMEOUT_SECONDS = 10
         # Verify Ollama is reachable
         try:
             with httpx.Client(timeout=3) as client:
