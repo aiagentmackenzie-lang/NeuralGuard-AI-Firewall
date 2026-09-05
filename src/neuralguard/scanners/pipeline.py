@@ -324,7 +324,7 @@ class ScannerPipeline:
         # uncertainty). This is what lets the judge drop the semantic-layer FPR
         # on benign creative/translation prompts that ESCALATE on a lone
         # ambiguous semantic match.
-        if self.config.action.judge_resolves_escalate and winning_verdict == Verdict.ESCALATE:
+        if self.config.scanner.judge_resolves_escalate and winning_verdict == Verdict.ESCALATE:
             judge_results = [r for r in results if r.layer == ScanLayer.JUDGE]
             clean_allow = [r for r in judge_results if r.verdict == Verdict.ALLOW and not r.error]
             if judge_results and len(clean_allow) == len(judge_results):

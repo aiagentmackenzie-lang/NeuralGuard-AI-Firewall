@@ -144,6 +144,20 @@ class ScannerSettings(BaseSettings):
         "When true, prompts leave the trust boundary — the startup logs it loudly and "
         "readiness surfaces it. Never enable for sensitive workloads.",
     )
+    judge_resolves_escalate: bool = Field(
+        default=False,
+        description="F20: when True, a clean LLM-Judge ALLOW verdict resolves an ESCALATE "
+        "(ambiguous) verdict to ALLOW — the judge is the authoritative resolver of the "
+        "ambiguous zone. The judge cannot downgrade SANITIZE/BLOCK/QUARANTINE. A skipped, "
+        "timed-out, or errored judge does NOT resolve (fail-closed). Tradeoff (measured "
+        "in A2): with a weak judge this drops benign-prompt FPR to 0% but also lets "
+        "through attacks the semantic layer caught as ESCALATE when the judge "
+        "false-negatives them (7B mistral false-negatives ContextPoison "
+        "extract_system_prompt). Only enable with a judge measured reliable enough "
+        "(27B re-measurement, Phase 2). Default False keeps the safe behavior. NOTE: "
+        "this field was previously on ActionSettings — passing it there (or the old "
+        "NEURALGUARD_ACTION_ prefix) is now dead.",
+    )
     judge_max_concurrency: int = Field(
         default=4,
         description="Max concurrent in-flight judge HTTP calls per worker",
@@ -183,21 +197,6 @@ class ActionSettings(BaseSettings):
         "FPR on benign creative/translation prompts (A2 finding). Set False to "
         "restore the pre-fix behavior (semantic-alone can SANITIZE at composite "
         ">= score_threshold_sanitize).",
-    )
-    judge_resolves_escalate: bool = Field(
-        default=False,
-        description="Opt-in: when True, a clean LLM-Judge ALLOW verdict resolves a hybrid "
-        "ESCALATE (ambiguous) verdict to ALLOW - the judge is the authoritative "
-        "resolver of the ambiguous zone, so its benign call downgrades ESCALATE. "
-        "The judge cannot downgrade SANITIZE/BLOCK/QUARANTINE (only ESCALATE). A "
-        "skipped, timed-out, or errored judge does NOT resolve (the pre-judge "
-        "ESCALATE stands). Tradeoff (measured in A2): with a weak/local judge this "
-        "DROPS the semantic-layer FPR on benign creative/translation prompts to "
-        "0% but ALSO lets through real attacks the semantic layer caught as "
-        "ESCALATE when the judge false-negatives them (7B mistral false-negatives "
-        "ContextPoison extract_system_prompt). Enable ONLY with a frontier judge "
-        "reliable enough to not false-negative on ambiguous attacks. Default False "
-        "keeps the safe behavior (judge can upgrade ESCALATE but not downgrade).",
     )
 
 

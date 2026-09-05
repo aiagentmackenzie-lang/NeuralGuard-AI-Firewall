@@ -194,7 +194,7 @@ class TestJudgeResolvesEscalate:
 
     def test_clean_judge_allow_resolves_escalate_to_allow(self, config):
         """A clean LLM-Judge ALLOW downgrades a hybrid ESCALATE to ALLOW (opt-in)."""
-        config.action.judge_resolves_escalate = True
+        config.scanner.judge_resolves_escalate = True
         config.scanner.semantic_enabled = True
         config.scanner.judge_enabled = True
         config.action.fail_closed = False
@@ -232,7 +232,7 @@ class TestJudgeResolvesEscalate:
         """A timed-out/errored judge does NOT resolve ESCALATE (pre-judge stands)."""
         from neuralguard.models.schemas import ScannerResult
 
-        config.action.judge_resolves_escalate = True
+        config.scanner.judge_resolves_escalate = True
         config.scanner.semantic_enabled = True
         config.scanner.judge_enabled = True
         config.action.fail_closed = False
@@ -277,7 +277,7 @@ class TestJudgeResolvesEscalate:
 
     def test_judge_cannot_downgrade_sanitize(self, config):
         """Judge ALLOW cannot downgrade SANITIZE - only ESCALATE."""
-        config.action.judge_resolves_escalate = True
+        config.scanner.judge_resolves_escalate = True
         pipeline = ScannerPipeline(config)
         pipeline.register_scanner(
             MockScanner(config.scanner, Verdict.ALLOW, layer=ScanLayer.STRUCTURAL)
@@ -306,7 +306,7 @@ class TestJudgeResolvesEscalate:
 
     def test_judge_resolves_disabled_keeps_escalate(self, config):
         """With judge_resolves_escalate=False, ESCALATE stands on clean judge ALLOW."""
-        config.action.judge_resolves_escalate = False
+        config.scanner.judge_resolves_escalate = False
         config.scanner.semantic_enabled = True
         config.scanner.judge_enabled = True
         config.action.fail_closed = False

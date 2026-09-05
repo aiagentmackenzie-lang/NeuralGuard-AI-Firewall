@@ -126,16 +126,26 @@ signal.
 ### A2 — live NeuralStrike attacker across 3 defender configs
 
 Live `JailbreakForge` (iterative mutation) + `ContextPoison` prompts
-replayed through three NeuralGuard pipeline configurations
-(`mistral:7b`, 18 attacks / 45 benign):
+replayed through three NeuralGuard pipeline configurations (18 attacks /
+45 benign). **Re-measured 2026-09-04** with the Phase 2 judge modernization
+(configurable judge timeout, 27B judge, egress gate, meta-attack fence) —
+full dated tables + the `judge_resolves_escalate` decision experiment in
+[A2_RESULTS.md](benchmarks/ng_vs_ns/results/A2_RESULTS.md):
 
-| Config | ASR | FPR | p95 latency |
+| Attacker | pattern_only | pattern + semantic | pattern + semantic + judge |
 |:--|--:|--:|--:|
-| pattern_only | 61.11% | 0.00% | 2.2 ms |
-| pattern + semantic | 44.44% | 6.67% | 30.1 ms |
-| pattern + semantic + judge | 44.44% | 6.67% | 47.0 ms |
+| mistral:7b (lower bound) | 27.78% | 22.22% | 22.22% |
+| qwen3.8:27b (stronger attacker) | **61.11%** | **50.00%** | 50.00% (44.44% with `judge_resolves_escalate`) |
 
-**Monotonic ASR drop across configs: TRUE** (0.61 → 0.44 → 0.44; each layer does not raise ASR).
+FPR is 6.67% on the semantic/judge configs in every run (the 3 documented
+benign ESCALATEs); with the 27B judge + `judge_resolves_escalate=true` the
+benign escalates resolve to ALLOW (measured FPR → 0%) and the 27B judge
+correctly BLOCKs the ContextPoison extraction attack the 7B judge
+false-negatived. Flag default stays **false** (safe for weak judges).
+
+**Monotonic ASR drop across configs: TRUE** in every run; each layer does not
+raise ASR. Same-author caveat: this measures defense-in-depth, not neutral
+third-party independence.
 
 Findings (full detail in [`benchmarks/ng_vs_ns/results/A2_RESULTS.md`](benchmarks/ng_vs_ns/results/A2_RESULTS.md)):
 - **Semantic-FPR corroboration gate (2026-06-28 fix):** the semantic layer
@@ -146,10 +156,12 @@ Findings (full detail in [`benchmarks/ng_vs_ns/results/A2_RESULTS.md`](benchmark
   semantic similarity at/above the 0.75 BLOCK floor. The semantic ASR gain is
   preserved. The FPR-as-non-allow metric stays 6.67% (a defensible ESCALATE
   review signal, not a false content mutation).
-- **Opt-in `judge_resolves_escalate`** (default false): a clean judge ALLOW
-  downgrades ESCALATE → ALLOW, dropping FPR to 0.00% on this benign corpus.
-  Opt-in because the 7B judge false-negatives `ContextPoison extract_system_prompt`
-  (raising ASR back to the pattern-only level). Enable only with a frontier judge.
+- **Opt-in `NEURALGUARD_SCANNER_JUDGE_RESOLVES_ESCALATE`** (default false;
+  F20: this knob moved from the dead-on-arrival ActionSettings placement):
+  a clean judge ALLOW downgrades ESCALATE → ALLOW, dropping FPR to 0.00% on
+  this benign corpus. Opt-in because the 7B judge false-negatives
+  `ContextPoison extract_system_prompt` (raising ASR back to the pattern-only
+  level). Re-measured 2026-09-04 with the 27B judge — see A2_RESULTS.
 - The judge adds no ASR benefit on this set with the safe default (curve flat
   0.44 → 0.44); first-call latency dominates p95.
 - `ContextPoison` context-exhaustion (lorem-ipsum DoS) is undetected by all

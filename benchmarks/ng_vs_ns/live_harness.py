@@ -120,7 +120,12 @@ class ConfigResult:
 # ── NeuralGuard config builder ─────────────────────────────────────────────
 
 
-def build_ng_config(config: str, *, judge_model: str) -> NeuralGuardConfig:
+def build_ng_config(
+    config: str,
+    *,
+    judge_model: str,
+    judge_resolves_escalate: bool = False,
+) -> NeuralGuardConfig:
     """Build a NeuralGuard config for one of the three defender configs."""
     base: dict[str, Any] = dict(
         environment="development",
@@ -139,6 +144,7 @@ def build_ng_config(config: str, *, judge_model: str) -> NeuralGuardConfig:
             judge_enabled=True,
             judge_model=judge_model,
             judge_ollama_url="http://localhost:11434",
+            judge_resolves_escalate=judge_resolves_escalate,
         )
     else:  # pragma: no cover - defensive
         raise ValueError(f"unknown config: {config!r}")
@@ -276,9 +282,16 @@ async def eval_config(
     benign: list[dict[str, Any]],
     *,
     judge_model: str,
+    judge_resolves_escalate: bool = False,
 ) -> ConfigResult:
     """Replay attacks + benign through one NeuralGuard config, in-process."""
-    app = create_app(build_ng_config(config, judge_model=judge_model))
+    app = create_app(
+        build_ng_config(
+            config,
+            judge_model=judge_model,
+            judge_resolves_escalate=judge_resolves_escalate,
+        )
+    )
     transport = ASGITransport(app=app)
     attack_verdicts: list[dict[str, Any]] = []
     benign_verdicts: list[dict[str, Any]] = []
@@ -321,6 +334,7 @@ async def run(
     judge_model: str = DEFAULT_JUDGE_MODEL,
     jb_iterations: int = JB_ITERATIONS,
     configs: list[str] | None = None,
+    judge_resolves_escalate: bool = False,
 ) -> dict[str, Any]:
     """Generate attacks once, replay across the selected configs, return results dict.
 
@@ -353,7 +367,13 @@ async def run(
     for config in selected_configs:
         print(f"[A2] evaluating config={config} ...")
         t0 = time.perf_counter()
-        res = await eval_config(config, attacks, benign, judge_model=judge_model)
+        res = await eval_config(
+            config,
+            attacks,
+            benign,
+            judge_model=judge_model,
+            judge_resolves_escalate=judge_resolves_escalate,
+        )
         print(
             f"[A2]   {config}: ASR={res.asr:.2%}  FPR={res.fpr:.2%}  "
             f"p95={res.p95_latency_ms:.1f}ms  ({time.perf_counter() - t0:.1f}s)"
@@ -363,6 +383,7 @@ async def run(
     return {
         "attacker_model": attacker_model,
         "judge_model": judge_model,
+        "judge_resolves_escalate": judge_resolves_escalate,
         "jb_iterations": jb_iterations,
         "configs_run": selected_configs,
         "n_attacks": len(attacks),
@@ -448,6 +469,12 @@ async def _cli_main(argv: list[str] | None = None) -> int:
         "CI uses 'pattern_only' (the ONNX model is gitignored).",
     )
     parser.add_argument(
+        "--judge-resolves-escalate",
+        action="store_true",
+        help="Run with judge_resolves_escalate=true (the A2 decision experiment: "
+        "does the judge resolve benign ESCALATEs to ALLOW without false-negatives?).",
+    )
+    parser.add_argument(
         "--save",
         default=str(RESULTS_DIR / "a2_results.json"),
         help="Path to write the JSON results.",
@@ -459,6 +486,7 @@ async def _cli_main(argv: list[str] | None = None) -> int:
         judge_model=args.judge,
         jb_iterations=args.jb_iterations,
         configs=[c.strip() for c in args.configs.split(",") if c.strip()],
+        judge_resolves_escalate=args.judge_resolves_escalate,
     )
     print(_format_results(payload))
 
