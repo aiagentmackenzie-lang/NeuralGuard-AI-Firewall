@@ -1,0 +1,70 @@
+# Redis — shared state for the rate limiter (sliding window) and the Agent
+# Guardian session store. Single replica: this is ephemeral coordination
+# state, not durable data. Rate-limit windows and AG session windows reset on
+# pod loss (fail-closed: the app refuses to serve if redis is unreachable in
+# production with backends pointed at it).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: neuralguard
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: neuralguard-appliance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+          # noeviction: dropping rate-limit or AG keys silently would weaken
+          # the controls; bounded maxmemory + persistence-free is the honest
+          # tradeoff for this state class.
+          ports:
+            - containerPort: 6379
+              name: redis
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 320Mi
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: neuralguard
+  labels:
+    app.kubernetes.io/name: redis
+spec:
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - port: 6379
+      targetPort: redis
+      name: redis

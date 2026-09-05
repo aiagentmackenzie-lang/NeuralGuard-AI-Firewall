@@ -1,0 +1,56 @@
+# Non-secret configuration. Secrets (API keys, canary secret, audit signing
+# key, JWT secret, postgres password) live in secret.example.yaml → secret.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neuralguard-config
+  namespace: neuralguard
+  labels:
+    app.kubernetes.io/name: neuralguard
+    app.kubernetes.io/part-of: neuralguard-appliance
+data:
+  # ── Posture ──
+  NEURALGUARD_ENVIRONMENT: "production"
+  NEURALGUARD_LOG_LEVEL: "INFO"
+  # Behind a Service/Ingress TLS terminates upstream; the pod serves plain
+  # HTTP on the cluster-internal network only. Never expose this port to the
+  # internet without TLS in front (docs/runbooks/tls_termination.md).
+  NEURALGUARD_ALLOW_INSECURE_HTTP: "true"
+  NEURALGUARD_MAX_REQUEST_BODY_BYTES: "1048576"
+  # ── Auth ── (keys + jwt secret injected from Secret)
+  NEURALGUARD_AUTH_ENABLED: "true"
+  NEURALGUARD_AUTH_ENFORCE_TENANT_FROM_KEY: "true"
+  # Runtime key rotation: NOT enabled here on purpose — multi-replica
+  # rotation needs a shared durable keys file (RWX volume). Env/redeploy is
+  # the documented multi-worker rotation path (P2-4); the rotate endpoint
+  # refuses runtime-only rotation in production.
+  # ── Detection layers ──
+  # Structural + Pattern are mandatory. Semantic requires the ONNX model:
+  # bake models/ into a custom image or mount a PV at /app/models and set
+  # SEMANTIC_ENABLED=true (models are gitignored — the stock image ships
+  # with semantic OFF rather than pretending it's on).
+  SEMANTIC_ENABLED: "false"
+  JUDGE_ENABLED: "false"
+  # Point the judge at an Ollama you operate, e.g. an in-cluster Ollama
+  # service or a host daemon via the cluster's egress policy. Fill in and
+  # set JUDGE_ENABLED=true to use:
+  # JUDGE_OLLAMA_URL: "http://ollama.neuralguard.svc.cluster.local:11434"
+  # JUDGE_MODEL: "mistral:7b"
+  # JUDGE_TIMEOUT_SECONDS: "10"
+  # ── Agent Guardian (F4: shared state via redis) ──
+  NEURALGUARD_AGENT_GUARDIAN_ENABLED: "true"
+  NEURALGUARD_AGENT_GUARDIAN_BACKEND: "redis"
+  NEURALGUARD_AGENT_GUARDIAN_REDIS_URL: "redis://redis:6379/1"
+  # ── Rate limiting (shared across replicas via redis) ──
+  NEURALGUARD_RATELIMIT_ENABLED: "true"
+  NEURALGUARD_RATELIMIT_BACKEND: "redis"
+  NEURALGUARD_RATELIMIT_REDIS_URL: "redis://redis:6379/0"
+  NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE: "120"
+  NEURALGUARD_RATELIMIT_BURST_SIZE: "20"
+  # ── Audit ── (postgres backend; password from Secret)
+  NEURALGUARD_AUDIT_BACKEND: "postgres"
+  NEURALGUARD_AUDIT_JSONL_PATH: "/data/audit"
+  # ── SIEM routing (P2-7) — off by default, see siem.py for all knobs ──
+  # NEURALGUARD_SIEM_ENABLED: "true"
+  # NEURALGUARD_SIEM_SINKS: "scarletai"
+  # NEURALGUARD_SIEM_SCARLETAI_URL: "http://scarletai-api.other-namespace.svc:8000"

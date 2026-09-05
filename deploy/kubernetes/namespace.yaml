@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neuralguard
+  labels:
+    app.kubernetes.io/name: neuralguard
+    app.kubernetes.io/part-of: neuralguard-appliance

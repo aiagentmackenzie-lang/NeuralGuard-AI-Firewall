@@ -1,0 +1,37 @@
+# NeuralGuard Kubernetes deployment (P2-6)
+#
+# Raw manifests + kustomize — no Helm binary dependency, readable as-is.
+#
+# VALIDATION STATUS (honest):
+#   - Schema-validated offline with kubeconform against the Kubernetes 1.31
+#     schemas (`kubeconform -strict -summary deploy/kubernetes/`).
+#   - NOT cluster-tested. No cluster exists on the dev machine; the cluster
+#     drill (apply, probes, HPA scaling, prometheus-adapter custom metrics,
+#     rotation path) is PENDING and must not be claimed as done.
+#
+# Topology mirrors docker-compose.appliance.yml:
+#   neuralguard (this chart) + redis (rate-limit + AG session state)
+#   + postgres (audit backend). The judge/semantic layers point at an Ollama
+#   you bring (in-cluster or host) — models are gigabytes and are NOT baked
+#   into these manifests.
+#
+# Deploy:
+#   kubectl create namespace neuralguard           # or let kustomization do it
+#   cp secret.example.yaml secret.yaml             # fill in REAL values
+#   kubectl apply -k deploy/kubernetes             # secret.yaml NOT applied by
+#                                                  # kustomization (not listed) —
+#                                                  # apply it explicitly first:
+#   kubectl apply -f secret.yaml -n neuralguard
+#
+# Images: ghcr.io/aiagentmackenzie-lang/neuralguard:0.2.0 — build it yourself
+# (`docker build -t ghcr.io/aiagentmackenzie-lang/neuralguard:0.2.0 .` and push
+# to YOUR registry); the project ships a Dockerfile, not a registry push.
+
+resources:
+  - namespace.yaml
+  - redis.yaml
+  - postgres.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml

@@ -1,0 +1,54 @@
+# HorizontalPodAutoscaler — P2-6 "HPA on the metrics".
+#
+# ACTIVE config: resource-metric autoscaling (CPU + memory). Works with
+# metrics-server out of the box and is schema-validated offline (kubeconform).
+#
+# CUSTOM-METRIC scaling (verdict throughput, BLOCK-rate) needs a
+# prometheus-adapter (or KEDA) mapping NeuralGuard's /v1/metrics into the
+# metrics.k8s.io custom metrics API — that mapping cannot be validated
+# without a cluster, so it ships here as a COMMENTED template, to be enabled
+# and validated in the PENDING cluster drill (see deploy/kubernetes/README.md
+# — honestly: not cluster-tested).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: neuralguard
+  namespace: neuralguard
+  labels:
+    app.kubernetes.io/name: neuralguard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: neuralguard
+  minReplicas: 2
+  maxReplicas: 8
+  behavior:
+    scaleDown:
+      # Verdict latency spikes are bursty; hold headroom for 5 minutes.
+      stabilizationWindowSeconds: 300
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  # ── TEMPLATE: prometheus-adapter custom metric (UNVALIDATED — cluster drill) ──
+  # Requires prometheus-adapter with a rule scraping neuralguard's
+  # /v1/metrics, e.g. a `verdicts_rate` (rate(neuralguard_verdicts_total[1m]))
+  # series. Then append:
+  # metrics:
+  #   - type: Pods
+  #     pods:
+  #       metric:
+  #         name: verdicts_rate
+  #       target:
+  #         type: AverageValue
+  #         averageValue: "100"   # scale up past ~100 verdicts/min per pod
