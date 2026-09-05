@@ -437,3 +437,7 @@ class AuditEvent(BaseModel):
         default=None, description="Previous event's event_hash, or None for the chain head."
     )
     event_hash: str | None = Field(default=None, description="SHA-256 chain hash of this event.")
+    event_sig: str | None = Field(
+        default=None,
+        description="Ed25519 signature over event_hash (P2-10). Present when audit signing is enabled.",
+    )

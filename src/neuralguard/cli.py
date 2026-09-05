@@ -61,7 +61,7 @@ def _cmd_audit_verify(args: argparse.Namespace) -> int:
     from neuralguard.logging.verify import verify_audit_files
 
     try:
-        report = verify_audit_files(Path(args.path))
+        report = verify_audit_files(Path(args.path), pubkey_hex=args.pubkey)
     except (OSError, ValueError) as exc:
         print(f"audit-verify: cannot read {args.path}: {exc}", file=_sys.stderr)
         return 2
@@ -69,9 +69,10 @@ def _cmd_audit_verify(args: argparse.Namespace) -> int:
     if args.json:
         print(_json.dumps(report.to_dict(), indent=2))
     else:
+        signed = " + signature verification" if args.pubkey else ""
         print(
             f"audit-verify: {report.files_read} file(s), {report.events_parsed} event(s), "
-            f"{report.parse_errors} parse error(s)"
+            f"{report.parse_errors} parse error(s){signed}"
         )
         for chain in report.chains:
             status = "VALID" if chain.valid else "BROKEN"
@@ -80,6 +81,22 @@ def _cmd_audit_verify(args: argparse.Namespace) -> int:
         print(verdict)
 
     return 0 if report.all_valid else 1
+
+
+def _cmd_audit_keygen(args: argparse.Namespace) -> int:
+    """Generate an Ed25519 signing keypair (P2-10): print seed + public key."""
+    import sys as _sys
+
+    from neuralguard.logging.signing import generate_signing_keypair
+
+    try:
+        seed_hex, pubkey_hex = generate_signing_keypair()
+    except Exception as exc:  # pragma: no cover — cryptography missing/broken
+        print(f"audit-keygen: {exc}", file=_sys.stderr)
+        return 2
+    print(f"signing_key (NEURALGUARD_AUDIT_SIGNING_KEY): {seed_hex}")
+    print(f"public_key  (audit-verify --pubkey):        {pubkey_hex}")
+    return 0
 
 
 def _cmd_canary_mint(args: argparse.Namespace) -> int:
@@ -233,7 +250,20 @@ def main() -> None:
         action="store_true",
         help="Emit machine-readable JSON (for cron / CI).",
     )
+    av.add_argument(
+        "--pubkey",
+        default=None,
+        help="Ed25519 public key (hex) — ALSO verify every event signature (P2-10). "
+        "Requires signatures on all events; unsigned chains report BROKEN.",
+    )
     av.set_defaults(func=_cmd_audit_verify)
+
+    # audit-keygen (P2-10)
+    ak = subparsers.add_parser(
+        "audit-keygen",
+        help="Generate an Ed25519 signing keypair for audit-event signing (P2-10).",
+    )
+    ak.set_defaults(func=_cmd_audit_keygen)
 
     # canary-mint (B3)
     cm = subparsers.add_parser(
@@ -281,6 +311,9 @@ def main() -> None:
         sys.exit(args.func(args))
 
     if args.command == "audit-verify":
+        sys.exit(args.func(args))
+
+    if args.command == "audit-keygen":
         sys.exit(args.func(args))
 
     if args.command == "tenants":

@@ -84,6 +84,8 @@ class AuditLogger:
 
         self._worker_id: str = _uuid.uuid4().hex
         self._last_hash: str | None = None
+        # P2-10: optional Ed25519 signing seed (hex). None = signing off.
+        self._signing_seed: str | None = getattr(settings, "signing_key", None)
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -157,6 +159,14 @@ class AuditLogger:
         event.prev_hash = self._last_hash
         event.event_hash = compute_event_hash(event, self._last_hash)
         self._last_hash = event.event_hash
+
+        # P2-10: when signing is configured, sign the chain hash. A signature
+        # failure here is a configuration-class bug — raise (do not write an
+        # unsigned event into a deployment the operator believes is signing).
+        if self._signing_seed is not None:
+            from neuralguard.logging.signing import sign_event_hash
+
+            event.event_sig = sign_event_hash(event.event_hash, self._signing_seed)
 
         # P2-7: SIEM routing sees the tamper-evident form (chain hash stamped).
         # Best-effort: route() never blocks or raises; delivery failures are

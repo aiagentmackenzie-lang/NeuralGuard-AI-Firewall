@@ -31,6 +31,7 @@ dependencies = [
     "structlog>=24.4.0",
     "python-dateutil>=2.9.0",
     "pyjwt>=2.10.0",  # P2-4: short-lived JWT bearer auth (HS256 allowlist)
+    "cryptography>=44.0.0",  # P2-10: Ed25519 audit-event signing
     # Pinned floors for known-vulnerable transitive deps (see pip-audit).
     "aiohttp>=3.14.3",  # 3.14.1 had PYSEC-2026-3545/3546/3547
     "idna>=3.15",

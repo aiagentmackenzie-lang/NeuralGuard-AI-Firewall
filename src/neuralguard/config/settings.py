@@ -337,6 +337,28 @@ class AuditSettings(BaseSettings):
         description="Max concurrent in-flight async Postgres writes per worker. "
         "Beyond this, audit events fall back to JSONL to bound memory.",
     )
+    signing_key: str | None = Field(
+        default=None,
+        description=(
+            "Ed25519 PRIVATE seed (hex, 32 bytes) for audit-event signing (P2-10). "
+            "When set, every persisted event's chain hash is signed (event_sig). "
+            "Verify with: neuralguard audit-verify --pubkey <derived pubkey hex>. "
+            "Held server-side, never logged. Generate: neuralguard audit-keygen."
+        ),
+    )
+
+    @field_validator("signing_key", mode="after")
+    @classmethod
+    def _validate_signing_key(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        from neuralguard.logging.signing import SigningKeyError, public_key_from_seed
+
+        try:
+            public_key_from_seed(v)
+        except SigningKeyError as exc:
+            raise ValueError(f"audit signing_key invalid: {exc}") from exc
+        return v
 
 
 class SiemSettings(BaseSettings):

@@ -439,7 +439,11 @@ Clients must call the exact documented paths.
 
 **Audit integrity.** Every audit event is hash-chained (`worker_id` /
 `prev_hash` / `event_hash`). On-disk or in-DB tampering of an event breaks
-both its own hash and the next event's `prev_hash`. See
+both its own hash and the next event's `prev_hash`. Optional Ed25519
+signing (P2-10): set `NEURALGUARD_AUDIT_SIGNING_KEY` (`neuralguard
+audit-keygen`) and every persisted event's chain hash is signed — forged,
+internally-consistent chains are then rejected by `neuralguard audit-verify
+--pubkey <hex>`. See
 [`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md) for
 backup, restore, and chain verification.
 

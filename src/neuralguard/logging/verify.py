@@ -67,12 +67,18 @@ def _audit_files(target: Path) -> list[Path]:
     return [target]
 
 
-def verify_audit_files(target: Path) -> AuditVerifyReport:
+def verify_audit_files(target: Path, pubkey_hex: str | None = None) -> AuditVerifyReport:
     """Load + group + verify every per-worker chain under ``target``.
 
     Files are read in sorted order (daily rotation names sort
     chronologically); events group by ``worker_id`` across files so a chain
     spanning a rotation boundary is still verified end-to-end.
+
+    P2-10: when ``pubkey_hex`` is provided, EVERY event must also carry a
+    valid Ed25519 signature (``event_sig``) over its ``event_hash`` — a
+    chain that is hash-consistent but unsigned/signed by another key is
+    reported BROKEN (a forged file would be hash-consistent too; that is
+    exactly what signing exists to catch).
     """
     files = _audit_files(target)
     chains: dict[str, list[AuditEvent]] = {}
@@ -103,11 +109,21 @@ def verify_audit_files(target: Path) -> AuditVerifyReport:
     )
     for worker_id in sorted(chains):
         events = chains[worker_id]
+        valid = verify_chain(events)
+        if valid and pubkey_hex is not None:
+            from neuralguard.logging.signing import verify_event_signature
+
+            valid = all(
+                e.event_sig is not None
+                and e.event_hash is not None
+                and verify_event_signature(e.event_hash, e.event_sig, pubkey_hex)
+                for e in events
+            )
         report.chains.append(
             ChainReport(
                 worker_id=worker_id,
                 event_count=len(events),
-                valid=verify_chain(events),
+                valid=valid,
             )
         )
     return report
