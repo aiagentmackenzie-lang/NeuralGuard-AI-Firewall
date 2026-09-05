@@ -3,13 +3,24 @@ and Layer Arbitration.
 
 Pipeline execution order:
   1. Structural (sanitization + normalization)
-  2. Pattern (regex/heuristic - <5ms)
-  3. Semantic (embedding/ML - <50ms, Phase 2)
+  2. Agent Guardian (cross-turn accumulation signals — records the turn
+     into the per-session window; ~0.03 ms regex sweep)
+  3. Pattern (regex/heuristic - <5ms)
+  4. Semantic (embedding/ML - <50ms, Phase 2)
      → Hybrid Scoring (combines pattern + semantic)
-  4. Judge (LLM-as-Judge - <500ms, Phase 2, gated by hybrid score)
+  5. Judge (LLM-as-Judge - <500ms, Phase 2, gated by hybrid score)
+
+Agent Guardian runs BEFORE Pattern (F2): the fail-closed early exit on a
+BLOCK verdict stops the pipeline after the blocking layer, so if AG ran
+after Pattern, a Pattern-BLOCKed turn would never be recorded into the
+session window and cross-turn accumulation would be blind to the
+strongest turns. AG-before-Pattern costs nothing measurable and keeps
+the accumulation counters complete. Trade-off (accepted): an AG-BLOCKed
+turn early-exits before the Pattern layer runs, so Pattern's rule IDs
+are absent from that turn's report — the verdict is BLOCK either way.
 
 Arbitration rule (with hybrid scoring):
-  - Pattern BLOCK always wins (high-precision, early exit)
+  - The strictest verdict wins: BLOCK > SANITIZE > ESCALATE > ...
   - Hybrid scoring can upgrade verdicts (e.g. ALLOW -> SANITIZE)
   - Judge only fires in ambiguous zone (composite 0.30-0.70)
   - BLOCK cannot be overridden without explicit FORCE_ALLOW audit trail
@@ -57,8 +68,11 @@ class ScannerPipeline:
         self._scanners: dict[ScanLayer, BaseScanner[Any]] = {}
         self._layer_order: list[ScanLayer] = [
             ScanLayer.STRUCTURAL,
-            ScanLayer.PATTERN,
+            # AG before Pattern (F2): a Pattern-BLOCKed turn must still be
+            # recorded into AG's session window — the fail-closed early exit
+            # would otherwise skip AG entirely on the strongest turns.
             ScanLayer.AGENT_GUARDIAN,
+            ScanLayer.PATTERN,
             ScanLayer.SEMANTIC,
             ScanLayer.JUDGE,
         ]
@@ -145,7 +159,10 @@ class ScannerPipeline:
         if request and request.scanners is not None:
             layers = [l for l in self._layer_order if l in request.scanners and l in layers]
 
-        return layers
+        # Canonical execution order (F2): project the resolved layer set onto
+        # _layer_order so AG runs before Pattern regardless of how the set was
+        # assembled (config baseline, tenant ceiling, or request override).
+        return [l for l in self._layer_order if l in layers]
 
     @property
     def hybrid_engine(self) -> Any:
