@@ -9,7 +9,7 @@ try:
 
     __version__ = _version("neuralguard")
 except Exception:
-    __version__ = "0.1.0"  # fallback for editable installs
+    __version__ = "0.2.0"  # fallback for editable installs
 
 
 if TYPE_CHECKING:

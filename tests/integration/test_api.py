@@ -31,7 +31,7 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["version"] == "0.1.0"
+        assert data["version"] == "0.2.0"
         assert "scanners" in data
 
     @pytest.mark.asyncio
@@ -51,7 +51,7 @@ class TestInfoEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "NeuralGuard"
-        assert data["version"] == "0.1.0"
+        assert data["version"] == "0.2.0"
         assert "owasp_coverage" in data
         assert "LLM01" in data["owasp_coverage"]["dedicated_rules"][0]
         # ASI04/ASI10 are corpus-assisted only, not dedicated rules

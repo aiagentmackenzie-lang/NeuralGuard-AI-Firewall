@@ -16,7 +16,7 @@ class TestCliVersion:
             main()
         assert exc.value.code == 0
         captured = capsys.readouterr()
-        assert "NeuralGuard v0.1.0" in captured.out
+        assert "NeuralGuard v0.2.0" in captured.out
 
 
 class TestCliCanaryMint:

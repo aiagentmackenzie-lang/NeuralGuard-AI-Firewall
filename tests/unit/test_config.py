@@ -78,7 +78,7 @@ class TestNeuralGuardConfig:
     def test_defaults(self):
         c = NeuralGuardConfig()
         assert c.app_name == "NeuralGuard"
-        assert c.version == "0.1.0"
+        assert c.version == "0.2.0"
         assert c.environment == "development"
         assert isinstance(c.server, ServerSettings)
         assert isinstance(c.scanner, ScannerSettings)

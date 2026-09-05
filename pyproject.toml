@@ -1,6 +1,6 @@
 [project]
 name = "neuralguard"
-version = "0.1.0"
+version = "0.2.0"
 description = "LLM Guard / AI Application Firewall — defensive middleware for prompt injection, jailbreak detection, and agentic security"
 readme = "README.md"
 license = { text = "MIT" }

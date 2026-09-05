@@ -63,3 +63,6 @@ tenants/*.json
 
 # local dev secrets — never commit
 .env
+
+# F18: live benchmark run artifacts are machine-local; durable results live in *_RESULTS.md
+benchmarks/ng_vs_ns/results/
