@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed, P2 enterprise track landed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1+B2+B3+B4 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification + multi-turn benchmark integration with AgentPivot coverage + B4-detected scanner gap closure), Sprint C C1 per-tenant config + C2 production-readiness sweep, **the standalone appliance proxy (F9: POST /v1/proxy/chat/completions, compose profile + runbook, boot-drill verified)**, **SIEM routing + BLOCK-spike alerting (P2-7)**, **JWT bearer auth + runtime key rotation (P2-4)**, and **Ed25519 audit-event signing (P2-10)** are shipped. **956 tests** on `main` (951 pass locally with Ollama up; the 2 model-dependent judge-fixture tests fail locally / skip in CI; 3 skipped), ruff + mypy strict clean, 86% coverage gate (90%+ observed with the ONNX semantic model). Remaining P2: cosign/image signing (P2-5), K8s artifacts (P2-6), 90% CI gate, i18n native-speaker review (P2-11) — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed, P2 enterprise track landed).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS enforcement, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1+B2+B3+B4 (multi-turn detection + static template analysis + ASI06 dedicated T-MEM rules + canary token verification + multi-turn benchmark integration with AgentPivot coverage + B4-detected scanner gap closure), Sprint C C1 per-tenant config + C2 production-readiness sweep, **the standalone appliance proxy (F9: POST /v1/proxy/chat/completions, compose profile + runbook, boot-drill verified)**, **SIEM routing + BLOCK-spike alerting (P2-7)**, **JWT bearer auth + runtime key rotation (P2-4)**, and **Ed25519 audit-event signing (P2-10)** are shipped. **1041 tests** on `main` (1039 pass locally with Ollama up; the 2 model-dependent judge-fixture tests fail locally / skip in CI; 1 skipped), ruff + mypy strict clean, **90% coverage gate — CI now regenerates the ONNX model + rebuilds the semantic corpus from tracked sources, so the gate runs the FULL suite honestly (91.30% measured)**. Also shipped: **cosign SBOM signing + attestation (P2-5, keyless in CI / key-based locally)**, **Kubernetes manifests + HPA (P2-6, schema-validated offline — cluster drill pending)**, **dedicated ASI04 Supply Chain + ASI10 Rogue Agents rules (P2-3, 123 patterns)**, **pure-ASGI middleware stack (P2-8 — the global exception handler genuinely backstops, proven by test)**. Remaining P2: i18n native-speaker review (P2-11 — pending HUMAN review, self-audit done; see `docs/i18n_native_review_request.md`) — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -488,12 +488,12 @@ endpoint over HTTP with auth) + a nightly `perf` gate (p95 latency +
 fail-closed-under-load) + SBOM (CycloneDX) + pip-audit.
 
 **OWASP coverage honesty.** `/v1/info` splits coverage into `dedicated_rules`
-(LLM01/02/05/07/10, ASI01/02/06 — the ASI06 surface is now covered by both
-the multi-turn AgentGuardianScanner accumulation rule **and** the dedicated
-T-MEM MEM-001..004 rules) vs `corpus_assisted_only` (ASI04 Supply Chain,
-ASI10 Rogue Agents) — the latter have no dedicated detection rules, only
-incidental corpus vectors. Do not rely on corpus-assisted coverage as a
-control.
+(LLM01/02/05/07/10, ASI01/02/04/06/10 — ASI06 via the multi-turn
+AgentGuardianScanner accumulation rule **and** the dedicated T-MEM
+MEM-001..004 rules; ASI04 via dedicated SC-001..005 supply-chain rules
+(P2-3); ASI10 via dedicated RA-001..005 rogue-agent rules (P2-3)). The
+remaining corpus-assisted-only surface is documented honestly in `/v1/info`
+— do not rely on corpus-assisted coverage as a control.
 
 **Canary token verification** is shipped (Phase 3, B3) — HMAC-SHA256 canaries
 on `session_id`, `POST /v1/canary/mint`, unstubbed `canary_leaked` in
@@ -599,17 +599,17 @@ curl -X POST http://localhost:8000/v1/scan/output \
 
 | Metric | Target | Status |
 |---|---|---|
-| Detection Rate (Direct PI) | >95% | ✅ verified — 113 patterns (63 EN + 50 i18n), 13 redteam tests |
+| Detection Rate (Direct PI) | >95% | ✅ verified — 123 patterns (73 EN incl. SC/RA + 50 i18n), 13 redteam tests |
 | Detection Rate (Rephrased PI) | >80% | ⚠️ local observation only — semantic/judge, NOT CI-verified (ONNX model is gitignored; real-model tests skip in CI) |
 | False Positive Rate | <2% | ✅ verified — the A1 regression gate (CI) asserts FPR < 2% on a 45-prompt benign corpus (0.00% measured). A2 live: the semantic layer escalates 3 benign creative/translation prompts (6.67%, review signal — no content modification via the corroboration gate) |
 | P95 Latency (Pattern-only) | <10ms | ⚠️ observed ~0.3 ms locally; NOT load-tested (no perf harness in CI) |
 | P95 Latency (Pattern + Semantic) | <50ms | ⚠️ local observation (~30 ms); NOT CI-verified |
 | P95 Latency (Full Pipeline + Judge) | <5s | ⚠️ local observation (~3 s, gated to ambiguous zone); NOT CI-verified |
-| Test Coverage | 86% CI floor | ✅ verified — 88.41% (560 tests) on a fresh checkout without the gitignored ONNX model; 86% gate enforced in CI. Full suite reaches ~90%+ with the semantic model present (run `scripts/export_onnx.py` locally). Semantic extra verified in the `semantic-smoke` CI job. |
+| Test Coverage | 90% CI floor | ✅ verified — CI regenerates the ONNX model (`scripts/export_onnx.py`) and rebuilds the corpus from tracked sources (`scripts/rebuild_corpus_vectors.py`), so the gate runs the FULL suite: **91.30% measured, 90% enforced**. |
 | Type Safety (mypy strict) | clean | ✅ verified — 0 errors, enforced in CI |
 | Memory Footprint (ONNX runtime) | <500MB | ✅ ~87 MB ONNX model, no PyTorch at runtime (export tool pulls torch) |
 | Decompression Bomb Defense | bounded | ✅ verified — 8 MiB hard cap via incremental decompress, tested |
-| Corpus Size | 1,000+ vectors | ✅ verified — 1,401 vectors across 9 categories (8 → 9; `MEMORY_POISONING` added for the B3 dedicated T-MEM rules) |
+| Corpus Size | 1,000+ vectors | ✅ verified — **7,623 vectors (F12 5.4× augmentation)**; CI rebuilds a 6,503-vector tracked-source subset that passes the same A1 gate (checkpoint-overwrite residual documented in the rebuild script) |
 | Auth / Tenant Isolation | enforced | ✅ verified — API-key auth, tenant binding, no header spoofing, tested |
 | Observability | metrics | ✅ verified — /v1/metrics Prometheus endpoint |
 | Rate Limit (multi-worker) | per-tenant, cluster-wide | ✅ Redis-backed sliding window (atomic Lua); production refuses workers>1 without it |

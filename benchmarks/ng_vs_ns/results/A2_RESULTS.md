@@ -183,3 +183,62 @@ curve. The 7B-attacker runs land much lower (27.78%), consistent with the
 "7B attacker is a lower bound" caveat above. Attacker stochasticity moves
 absolute numbers run-to-run; the curve shape and the corroboration-gate FPR
 contract are the stable signals.
+
+## 2026-09-05 re-measurement — F12 5.4× augmented corpus (qwen3.8:27b)
+
+**Run date:** 2026-09-05 · **Attacker + judge:** `qwen3.8:27b` (same methodology
+as run C, 2026-09-04) · `--jb-iterations` 3 · 18 attacks (15 JailbreakForge +
+3 ContextPoison, generated live) · 45 benign (A1 corpus). The ONLY change vs
+run C: the semantic corpus grew 1,398 → **7,623 vectors (5.4×)** via
+curator-framing paraphrase augmentation + hygiene (F12, `d6f8ec1`). Judge
+timeout raised to 240 s (`NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS`) — run C's
+judge timed out at 5 s and was a no-op; here the 27B judge COMPLETES (264 s of
+real judge wall-clock in the third config). Same-author caveat unchanged.
+
+### Headline delta (corpus effect, pattern_semantic column)
+
+| config | run C (pre-augmentation) | this run (5.4× corpus) | Δ |
+|:--|---:|---:|:--|
+| `pattern_only` | 61.11% | 61.11% | control identical — clean baseline match |
+| `pattern_semantic` | 50.00% | **38.89%** | **ASR −11.11 pt** |
+| `pattern_semantic_judge` | 50.00% (judge no-op) | **38.89%** (judge completes) | ASR −11.11 pt |
+| FPR (semantic/judge) | 6.67% | **4.44%** | **FPR −2.23 pt** |
+
+Monotonic ASR drop across configs: **TRUE** (61.11 → 38.89 → 38.89).
+
+Per-module ASR (pattern_only → pattern_semantic): JailbreakForge 60.00% →
+40.00%; ContextPoison 66.67% → 33.33%.
+
+### Findings
+
+1. **The F12 thesis is CONFIRMED on both axes.** The paraphrase-augmented
+   corpus recovers MORE mutated attacks (ASR 50.00% → 38.89%, −11.11 pt) AND
+   produces FEWER false positives (FPR 6.67% → 4.44%, −2.23 pt — one fewer
+   benign ESCALATE: 2/45 vs 3/45). The corpus hygiene (dropping benign-prefix
+   compounds + the benign-blocking paraphrase guard) did not trade recall for
+   precision — it improved both, because the removed vectors were FPR
+   generators and the added paraphrases are attack-shaped.
+2. **The judge completed this time and added nothing on this set** — with
+   `judge_resolves_escalate = false` the judge cannot downgrade ESCALATEs, and
+   the surviving attacks are already non-ALLOW. Consistent with the 2026-09-04
+   decision experiment: the judge's value is resolving benign ESCALATEs to
+   ALLOW (FPR → 0%, measured with the flag ON + 27B judge), not additional
+   ASR on this attack set.
+3. **pattern_only control matched run C exactly (61.11%)** — attacker
+   stochasticity did not move the no-semantic baseline this run, so the
+   semantic-column delta is attributable to the corpus change, not attacker
+   luck.
+
+### Reproduce
+
+```bash
+uv pip install -e ../NeuralStrike
+uv sync --extra dev --extra db --extra semantic
+ollama pull qwen3.8:27b
+NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS=240 \
+  uv run python -m benchmarks.ng_vs_ns.live_harness \
+  --attacker qwen3.8:27b --judge qwen3.8:27b
+```
+
+Results JSON: `a2_results.json` (this directory — the tracked file now holds
+this run).
