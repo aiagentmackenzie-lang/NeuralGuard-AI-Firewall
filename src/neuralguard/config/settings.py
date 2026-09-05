@@ -296,6 +296,75 @@ class AuditSettings(BaseSettings):
     )
 
 
+class SiemSettings(BaseSettings):
+    """SIEM routing + BLOCK-rate spike alerting (P2-7).
+
+    Splunk HEC is a native sink; the generic JSON webhook covers ELK /
+    Sentinel via their supported ingestion integrations. Disabled by
+    default: zero routing overhead until explicitly enabled.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NEURALGUARD_SIEM_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable SIEM event routing")
+    splunk_hec_url: str | None = Field(
+        default=None,
+        description="Splunk HTTP Event Collector base URL, e.g. https://splunk.example.com:8088",
+    )
+    splunk_hec_token: str | None = Field(
+        default=None,
+        description="Splunk HEC token (held server-side, never logged)",
+    )
+    splunk_source_type: str = Field(
+        default="neuralguard:verdict", description="Splunk sourcetype for routed events"
+    )
+    webhook_url: str | None = Field(
+        default=None,
+        description=(
+            "Generic JSON webhook sink (ELK webhook input, Sentinel Logic App, "
+            "any JSON collector)"
+        ),
+    )
+    webhook_token: str | None = Field(
+        default=None,
+        description="Optional bearer token for the generic webhook (never logged)",
+    )
+    timeout_seconds: float = Field(
+        default=5.0, ge=0.5, le=60, description="Per-delivery HTTP timeout"
+    )
+    max_inflight: int = Field(
+        default=20,
+        ge=1,
+        le=1000,
+        description=(
+            "Max concurrent SIEM deliveries; beyond this events are DROPPED "
+            "with a warning (bounded memory — no unbounded queue)"
+        ),
+    )
+    spike_window: int = Field(
+        default=100,
+        ge=10,
+        le=100000,
+        description="Spike detector: sliding window size in verdicts",
+    )
+    spike_block_threshold: float = Field(
+        default=0.5,
+        ge=0.01,
+        le=1.0,
+        description="Spike detector: BLOCK ratio over the window that triggers an alert",
+    )
+    spike_cooldown_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=86400,
+        description="Minimum seconds between spike alerts (edge-trigger re-arm)",
+    )
+
+
 class TenantSettings(BaseSettings):
     """Multi-tenant configuration."""
 
@@ -553,6 +622,7 @@ class NeuralGuardConfig(BaseSettings):
     agent_guardian: AgentGuardianSettings = Field(default_factory=AgentGuardianSettings)
     canary: CanarySettings = Field(default_factory=CanarySettings)
     proxy: ProxySettings = Field(default_factory=ProxySettings)
+    siem: SiemSettings = Field(default_factory=SiemSettings)
 
 
 def load_config(config_path: Path | None = None) -> NeuralGuardConfig:

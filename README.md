@@ -443,6 +443,14 @@ both its own hash and the next event's `prev_hash`. See
 [`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md) for
 backup, restore, and chain verification.
 
+**SIEM routing (P2-7).** Audit events (with their chain hash) fan out to
+Splunk HEC (native) and/or a generic JSON webhook (ELK / Sentinel via their
+supported ingestion integrations) — `NEURALGUARD_SIEM_*`, off by default.
+A BLOCK-rate spike detector (sliding window, edge-triggered, cooldown) emits
+one alert per spike episode. Delivery is bounded (in-flight cap, drop + warn
+beyond it) and best-effort by design: routing is observability, delivery
+failures never affect verdicts.
+
 **Resource limits.** `docker-compose.yml` sets container memory/CPU limits so a
 decompression or regex bomb cannot OOM the host. The request body size is
 capped (`NEURALGUARD_MAX_REQUEST_BODY_BYTES`, default 1 MiB) and 413s

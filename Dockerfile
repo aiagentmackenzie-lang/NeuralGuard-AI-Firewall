@@ -15,8 +15,10 @@ COPY pyproject.toml uv.lock* ./
 COPY README.md LICENSE* ./
 COPY src/ src/
 
-# Install dependencies
-RUN uv sync --no-dev --extra db --extra metrics --frozen
+# Install dependencies. Extras must cover every backend the appliance
+# profiles can enable: db (postgres audit), redis (AG session store +
+# rate-limit backend), tenants (YAML tenant registry), metrics (Prometheus).
+RUN uv sync --no-dev --extra db --extra redis --extra tenants --extra metrics --frozen
 
 # Production stage
 FROM base AS production

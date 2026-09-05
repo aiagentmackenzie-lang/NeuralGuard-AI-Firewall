@@ -14,7 +14,10 @@ verdict-shaped response.
   (`NEURALGUARD_PROXY_UPSTREAM_API_KEY`) is held server-side, never logged.
 - **Agent Guardian + rate limiting share state via Redis** (multi-worker safe).
 - **Audit**: JSONL (`/data/audit`, hash-chained per worker — verify with
-  `neuralguard audit-verify /data/audit`) or Postgres.
+  `uv run neuralguard audit-verify /data/audit` inside the container — the
+  script lives in the venv, not on PATH: `docker compose
+  -f docker-compose.appliance.yml exec neuralguard uv run neuralguard
+  audit-verify /data/audit`) or Postgres.
 - **Judge**: local Ollama (`mistral:7b` default). RAM sizing: judge model + 1
   GB per worker + redis + postgres. `qwen3.8:27b` needs ~20 GB and a raised
   `NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS` (~30-60 s; it evaluates in
@@ -30,6 +33,16 @@ export NEURALGUARD_PROXY_UPSTREAM_URL="http://host.docker.internal:11434/v1"
 docker compose -f docker-compose.appliance.yml up -d
 curl -s "http://127.0.0.1:8000/v1/health"
 ```
+
+> **Config-surface gotcha (compose interpolation):** compose auto-reads a
+> `.env` file in the project directory and it WINS over the `:-default`
+> values in this file. On an appliance box that is the intended operator
+> surface — but set `NEURALGUARD_ENVIRONMENT=production` explicitly (env
+> var or `.env`), otherwise a leftover dev `.env` silently boots the
+> appliance in development mode, where the F5 unknown-key REFUSE gate does
+> not fire. Verify with: `docker compose -f docker-compose.appliance.yml
+> exec neuralguard uv run python -c "from neuralguard.config.settings import
+> load_config; print(load_config().environment)"` → `production`.
 
 The container reaches host Ollama via `host.docker.internal` (colima:
 `host.docker.internal` resolves to the host). For a REMOTE or CLOUD upstream,

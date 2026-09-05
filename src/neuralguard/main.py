@@ -471,7 +471,30 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
         app.state.canary_manager = None
 
     # ── Initialize audit logger ──
-    audit_logger = AuditLogger(config.audit)
+    # P2-7: SIEM routing — constructed only when enabled AND at least one sink
+    # is configured. enabled-without-sinks in production is a loud refusal
+    # (misconfigured observability must not boot silently dark); dev warns.
+    siem_router = None
+    if config.siem.enabled:
+        if not config.siem.splunk_hec_url and not config.siem.webhook_url:
+            msg = (
+                "siem.enabled=true but no sink is configured: set "
+                "NEURALGUARD_SIEM_SPLUNK_HEC_URL and/or NEURALGUARD_SIEM_WEBHOOK_URL"
+            )
+            if config.environment == "production":
+                raise RuntimeError(msg)
+            structlog.get_logger("neuralguard").warning("siem_no_sink", msg=msg)
+        else:
+            from neuralguard.siem import SiemRouter
+
+            siem_router = SiemRouter(config.siem)
+            structlog.get_logger("neuralguard").info(
+                "siem_router_registered",
+                sinks=siem_router._sinks,
+                spike_window=config.siem.spike_window,
+                spike_block_threshold=config.siem.spike_block_threshold,
+            )
+    audit_logger = AuditLogger(config.audit, siem_router=siem_router)
     app.state.audit_logger = audit_logger
 
     # ── Standalone appliance proxy (F9) ──

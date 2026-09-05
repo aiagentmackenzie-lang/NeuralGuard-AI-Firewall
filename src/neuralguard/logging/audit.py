@@ -31,7 +31,8 @@ from neuralguard.models.schemas import (
 )
 
 if TYPE_CHECKING:
-    from neuralguard.config.settings import AuditSettings
+    from neuralguard.config.settings import AuditSettings, SiemSettings
+    from neuralguard.siem import SiemRouter
 
 logger = structlog.get_logger(__name__)
 
@@ -54,8 +55,22 @@ class AuditLogger:
     - Configurable retention with automatic cleanup
     """
 
-    def __init__(self, settings: AuditSettings) -> None:
+    def __init__(
+        self,
+        settings: AuditSettings,
+        siem_router: SiemRouter | None = None,
+        siem_settings: SiemSettings | None = None,
+    ) -> None:
         self.settings = settings
+        # P2-7: optional SIEM routing — constructed by create_app when enabled.
+        # None = feature off, zero overhead (the default posture).
+        self._siem: SiemRouter | None = None
+        if siem_router is not None:
+            self._siem = siem_router
+        elif siem_settings is not None and siem_settings.enabled:
+            from neuralguard.siem import SiemRouter
+
+            self._siem = SiemRouter(siem_settings)
         self._jsonl_path = Path(settings.jsonl_path)
         self._jsonl_path.mkdir(parents=True, exist_ok=True)
         self._pg_available: bool = False
@@ -142,6 +157,12 @@ class AuditLogger:
         event.prev_hash = self._last_hash
         event.event_hash = compute_event_hash(event, self._last_hash)
         self._last_hash = event.event_hash
+
+        # P2-7: SIEM routing sees the tamper-evident form (chain hash stamped).
+        # Best-effort: route() never blocks or raises; delivery failures are
+        # logged/counted inside the router and never affect verdicts.
+        if self._siem is not None:
+            self._siem.route(event)
 
         try:
             if self.settings.backend == "postgres":
