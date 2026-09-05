@@ -185,3 +185,50 @@ class TestProductionMultiWorkerFailFast:
 
 # asyncio safety: pytest-asyncio auto mode handles the async defs above.
 _ = asyncio
+
+
+class TestRedisCostLimiter:
+    """F7: cost-based mode on the Redis backend (fakeredis runs the same Lua)."""
+
+    async def test_charges_cost_against_budget(self, limiter: RedisRateLimiter):
+        a1 = await limiter.check_cost("rl:ct", cost=300, budget=1000)
+        assert a1[0] and a1[1] == 700 and a1[2] == 0
+        a2 = await limiter.check_cost("rl:ct", cost=300, budget=1000)
+        assert a2[0] and a2[1] == 400
+        # 600 used + 500 would exceed the budget -> rejected, budget unchanged
+        a3 = await limiter.check_cost("rl:ct", cost=500, budget=1000)
+        assert not a3[0]
+        assert a3[1] == 400
+        assert a3[2] >= 1
+
+    async def test_request_cost_exceeding_budget_rejected(self, limiter: RedisRateLimiter):
+        a1 = await limiter.check_cost("rl:cx", cost=2000, budget=1000)
+        assert not a1[0]
+
+    async def test_window_expiry_frees_budget(self, limiter: RedisRateLimiter):
+        import time as _time
+
+        assert (await limiter.check_cost("rl:ce", cost=900, budget=1000))[0]
+        # age the window out: wipe and re-add one stale entry (score = timestamp)
+        await limiter.client.delete("rl:ce")
+        await limiter.client.zadd("rl:ce", {"stale:abc:900": _time.time() - 120})
+        a2 = await limiter.check_cost("rl:ce", cost=500, budget=1000)
+        assert a2[0] and a2[1] == 500
+
+    async def test_fail_closed_on_redis_error(
+        self, limiter: RedisRateLimiter, monkeypatch: pytest.MonkeyPatch
+    ):
+        async def _boom(*args: object, **kwargs: object) -> list[int]:
+            raise ConnectionError("redis down")
+
+        monkeypatch.setattr(limiter, "_cost_script", _boom)
+        allowed, remaining, retry = await limiter.check_cost("rl:cf", cost=10, budget=1000)
+        assert not allowed
+        assert remaining == 0
+        assert retry == 1
+
+    async def test_tenants_isolated(self, limiter: RedisRateLimiter):
+        assert (await limiter.check_cost("rl:ca", cost=800, budget=1000))[0]
+        # other tenant unaffected
+        assert (await limiter.check_cost("rl:cb", cost=800, budget=1000))[0]
+        assert not (await limiter.check_cost("rl:ca", cost=300, budget=1000))[0]

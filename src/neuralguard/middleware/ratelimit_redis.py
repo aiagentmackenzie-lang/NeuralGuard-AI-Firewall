@@ -71,6 +71,51 @@ if remaining < 0 then remaining = 0 end
 return {1, remaining, 0}
 """
 
+# Cost-based variant (F7): score stays the TIMESTAMP (the sliding-window
+# eviction is time-based), and the per-request cost rides in the member as
+# the final colon-separated segment — the Lua sum walks members and parses
+# the trailing number (uuid members contain no colons).
+# KEYS[1] = rate-limit key
+# ARGV[1] = now (seconds, float-as-string)
+# ARGV[2] = window seconds
+# ARGV[3] = cost budget (units)
+# ARGV[4] = this request's cost (units)
+# ARGV[5] = unique member id "<now>:<uuid>:<cost>"
+_COST_WINDOW_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local budget = tonumber(ARGV[3])
+local cost = tonumber(ARGV[4])
+local member = ARGV[5]
+
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+local entries = redis.call('ZRANGE', key, 0, -1)
+local used = 0
+for i = 1, #entries do
+    local cost_str = string.match(entries[i], ':(%d+)$')
+    if cost_str ~= nil then used = used + tonumber(cost_str) end
+end
+
+if used + cost > budget then
+    local remaining = budget - used
+    if remaining < 0 then remaining = 0 end
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    local retry = window
+    if oldest[2] ~= nil then
+        retry = math.ceil(window - (now - tonumber(oldest[2])))
+    end
+    if retry < 1 then retry = 1 end
+    return {0, remaining, retry}
+end
+
+redis.call('ZADD', key, now, member)
+redis.call('PEXPIRE', key, math.floor(window * 1000) + 1000)
+local remaining = budget - used - cost
+if remaining < 0 then remaining = 0 end
+return {1, remaining, 0}
+"""
+
 
 class RedisRateLimiter:
     """Shared sliding-window rate limiter backed by Redis.
@@ -102,6 +147,7 @@ class RedisRateLimiter:
             self._owns_client = True
         # Register the script once; it loads on first call and is cached by SHA.
         self._script = self._client.register_script(_SLIDING_WINDOW_LUA)
+        self._cost_script = self._client.register_script(_COST_WINDOW_LUA)
 
     async def check(self, key: str, limit: int, burst: int) -> tuple[bool, int, int]:
         """Check and record a request against the sliding window.
@@ -131,6 +177,34 @@ class RedisRateLimiter:
             )
             return False, 0, 1
 
+        return bool(allowed_int), remaining, retry_after
+
+    async def check_cost(self, key: str, cost: int, budget: int) -> tuple[bool, int, int]:
+        """Cost-based variant (F7): charge a token-estimate against a budget.
+
+        Same fail-closed contract as :meth:`check`: Redis failures reject.
+        Returns ``(allowed, remaining_cost_units, retry_after_seconds)``.
+        """
+        now = time.time()
+        member = f"{now}:{uuid.uuid4().hex}:{cost}"
+        try:
+            result = await self._cost_script(
+                keys=[key],
+                args=[now, self._window, budget, cost, member],
+            )
+        except Exception as exc:
+            logger.error("redis_ratelimit_cost_failed", key=key, error=repr(exc))
+            return False, 0, 1
+        try:
+            allowed_int, remaining, retry_after = (int(result[0]), int(result[1]), int(result[2]))
+        except (TypeError, IndexError, ValueError) as exc:
+            logger.error(
+                "redis_ratelimit_cost_bad_response",
+                key=key,
+                response=repr(result),
+                error=repr(exc),
+            )
+            return False, 0, 1
         return bool(allowed_int), remaining, retry_after
 
     async def aclose(self) -> None:

@@ -356,7 +356,18 @@ class RateLimitSettings(BaseSettings):
     requests_per_minute: int = Field(default=60, description="Default RPM per tenant")
     burst_size: int = Field(default=10, description="Burst allowance")
     cost_based: bool = Field(
-        default=False, description="Rate limit by estimated LLM cost, not request count"
+        default=False,
+        description="Rate limit by estimated LLM cost (request bytes / 4 ≈ tokens) "
+        "instead of request count — the T-DOS cost-abuse control. In cost mode the "
+        "per-window limit is cost_units_per_minute and burst_size does not apply "
+        "(a large request consumes its own cost immediately).",
+    )
+    cost_units_per_minute: int = Field(
+        default=100_000,
+        ge=1,
+        description="Cost-based mode: per-tenant cost budget per 60s window "
+        "(1 unit ≈ 4 bytes of request body ≈ 1 token estimate). A request whose "
+        "cost exceeds the remaining budget is rejected (429) — fail-closed.",
     )
 
 
