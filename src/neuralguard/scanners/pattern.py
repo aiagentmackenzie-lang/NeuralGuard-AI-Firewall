@@ -13,6 +13,8 @@
 
 Design principles:
   - Every regex compiled with 50ms timeout (ReDoS safety)
+  - Per-text aggregate budget (pattern_budget_ms): patterns beyond the
+    budget are skipped and a PATTERN-BUDGET escalate finding is emitted
   - Possessive quantifiers (++, *+) preferred over greedy
   - All patterns fuzz-tested before merge
   - Patterns are independently toggled per-tenant
@@ -645,7 +647,8 @@ class PatternScanner(BaseScanner["ScannerSettings"]):
 
     Scans input text against 50+ compiled regex patterns across
     8 OWASP-aligned threat categories. All patterns are ReDoS-safe
-    with per-pattern timeouts.
+    with per-pattern timeouts, bounded in aggregate by a per-text
+    budget (F11).
     """
 
     layer = ScanLayer.PATTERN
@@ -656,6 +659,7 @@ class PatternScanner(BaseScanner["ScannerSettings"]):
             tuple[ThreatCategory, str, Severity, float, str, re_module.Pattern]
         ] = []
         self._timeout_s = settings.regex_timeout_ms / 1000.0
+        self._budget_s = settings.pattern_budget_ms / 1000.0
         self._compile_patterns()
 
     def _compile_patterns(self) -> None:
@@ -735,7 +739,51 @@ class PatternScanner(BaseScanner["ScannerSettings"]):
         findings: list[Finding] = []
         scan_patterns = patterns if patterns is not None else self._compiled
 
-        for category, rule_id, severity, confidence, description, compiled in scan_patterns:
+        # F11: per-text aggregate budget. The per-pattern timeout bounds each
+        # regex individually (regex_timeout_ms); this bounds the SUM across
+        # all patterns for the text. Exceeding it SKIPS the remaining patterns
+        # and emits an escalate finding — a degraded scan fails toward
+        # review, never silently weaker (the skipped patterns could have
+        # matched, so the verdict must surface the degradation).
+        deadline = time.perf_counter() + self._budget_s
+        total_patterns = len(scan_patterns)
+
+        for index, (
+            category,
+            rule_id,
+            severity,
+            confidence,
+            description,
+            compiled,
+        ) in enumerate(scan_patterns):
+            if time.perf_counter() >= deadline:
+                import structlog
+
+                structlog.get_logger(__name__).warning(
+                    "pattern_budget_exceeded",
+                    scanned=index,
+                    total=total_patterns,
+                    budget_ms=self.settings.pattern_budget_ms,
+                )
+                findings.append(
+                    Finding(
+                        category=ThreatCategory.SELF_ATTACK,
+                        severity=Severity.MEDIUM,
+                        verdict=Verdict.ESCALATE,
+                        confidence=0.90,
+                        layer=self.layer,
+                        rule_id="PATTERN-BUDGET",
+                        description=(
+                            f"Pattern scan budget exceeded after {index}/{total_patterns} "
+                            "patterns; remaining patterns skipped — manual review required"
+                        ),
+                        mitigation=(
+                            "Text needs review: pattern layer exceeded its per-text time budget "
+                            "(possible ReDoS/catastrophic-backtracking input)"
+                        ),
+                    )
+                )
+                break
             try:
                 match_obj = compiled.search(text, timeout=self._timeout_s)
                 if match_obj:
@@ -760,7 +808,11 @@ class PatternScanner(BaseScanner["ScannerSettings"]):
                             mitigation=self._get_mitigation(rule_id),
                         )
                     )
-            except re_module.TimeoutError:
+            # F21: regex (2026.4.4) raises the BUILTIN TimeoutError — the
+            # module has no TimeoutError attribute of its own, so catching
+            # re_module.TimeoutError raised AttributeError at exception time
+            # (the guard crashed instead of degrading).
+            except TimeoutError:
                 import structlog
 
                 structlog.get_logger(__name__).warning(

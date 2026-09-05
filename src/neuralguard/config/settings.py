@@ -91,6 +91,22 @@ class ScannerSettings(BaseSettings):
     regex_timeout_ms: int = Field(default=50, description="Regex compilation/execution timeout")
     max_regex_complexity: int = Field(default=20, description="Max quantifier nesting depth")
 
+    # F11: per-text aggregate deadline for the pattern layer. The per-pattern
+    # timeout (regex_timeout_ms) bounds each regex individually, but the
+    # aggregate across all compiled patterns was unbounded (~5.6s worst case
+    # per text for a crafted ReDoS-bait input: 113 patterns x 50ms). Patterns
+    # beyond this budget are SKIPPED and a SELF_ATTACK/PATTERN-BUDGET ESCALATE
+    # finding is emitted — fail toward review, never silently weaker.
+    pattern_budget_ms: int = Field(
+        default=300,
+        ge=1,
+        le=60_000,
+        description=(
+            "Per-text aggregate deadline (ms) for the pattern layer; exceeding it skips "
+            "remaining patterns and emits a PATTERN-BUDGET escalate finding"
+        ),
+    )
+
     # Semantic scanner (Phase 2)
     semantic_enabled: bool = Field(default=False, description="Enable semantic classification")
     semantic_model: str = Field(

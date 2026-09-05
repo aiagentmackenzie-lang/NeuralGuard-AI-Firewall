@@ -168,7 +168,9 @@ def _any_match(patterns: list[re_module.Pattern], text: str) -> bool:
         try:
             if p.search(text, timeout=REGEX_TIMEOUT_MS / 1000.0):
                 return True
-        except re_module.TimeoutError:  # pragma: no cover - ReDoS guard
+        except (
+            TimeoutError
+        ):  # pragma: no cover - ReDoS guard (F21: builtin, not regex.TimeoutError)
             continue
     return False
 
@@ -180,7 +182,9 @@ def _count_matches(patterns: list[re_module.Pattern], text: str) -> int:
         try:
             if p.search(text, timeout=REGEX_TIMEOUT_MS / 1000.0):
                 n += 1
-        except re_module.TimeoutError:  # pragma: no cover
+        except (
+            TimeoutError
+        ):  # pragma: no cover - ReDoS guard (F21: builtin, not regex.TimeoutError)
             continue
     return n
 
