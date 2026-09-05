@@ -1,0 +1,97 @@
+# NeuralGuard standalone appliance profile (F9).
+#
+# Deploys NeuralGuard as a self-contained guardian in front of an existing
+# LLM endpoint. The upstream LLM is NOT containerized here — point
+# NEURALGUARD_PROXY_UPSTREAM_URL at whatever serves your model (host Ollama,
+# vLLM, a cloud gateway). Posture: proxy ON, auth ON, redis-backed
+# rate-limiting + AG session store, postgres audit, semantic layer OFF by
+# default (mount models/ to enable it — see docs/runbooks/appliance.md).
+#
+# Usage:
+#   export NG_HOST_PORT=8000
+#   export NEURALGUARD_AUTH_API_KEYS="ng_appliance_key_change_me|default"
+#   export NEURALGUARD_PROXY_UPSTREAM_URL="http://host.docker.internal:11434/v1"
+#   docker compose -f docker-compose.appliance.yml up -d
+#
+# The host's Ollama is referenced, NOT containerized (models are gigabytes
+# and the appliance box usually already runs the daemon). host.docker.internal
+# resolves to the host from inside Docker Desktop/colima.
+
+services:
+  neuralguard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${NG_HOST_PORT:-8000}:8000"
+    environment:
+      - NEURALGUARD_ENVIRONMENT=${NEURALGUARD_ENVIRONMENT:-production}
+      - NEURALGUARD_LOG_LEVEL=${NEURALGUARD_LOG_LEVEL:-INFO}
+      - NEURALGUARD_AUTH_ENABLED=true
+      - NEURALGUARD_AUTH_API_KEYS=${NEURALGUARD_AUTH_API_KEYS:?set NEURALGUARD_AUTH_API_KEYS}
+      - NEURALGUARD_ALLOW_INSECURE_HTTP=${NEURALGUARD_ALLOW_INSECURE_HTTP:-false}
+      - NEURALGUARD_MAX_REQUEST_BODY_BYTES=${NEURALGUARD_MAX_REQUEST_BODY_BYTES:-1048576}
+      # ── Appliance proxy (F9) ──
+      - NEURALGUARD_PROXY_ENABLED=true
+      - NEURALGUARD_PROXY_UPSTREAM_URL=${NEURALGUARD_PROXY_UPSTREAM_URL:?set NEURALGUARD_PROXY_UPSTREAM_URL}
+      - NEURALGUARD_PROXY_UPSTREAM_API_KEY=${NEURALGUARD_PROXY_UPSTREAM_API_KEY:-}
+      - NEURALGUARD_PROXY_TIMEOUT_SECONDS=${NEURALGUARD_PROXY_TIMEOUT_SECONDS:-120}
+      # ── Detection layers ──
+      - NEURALGUARD_SCANNER_SEMANTIC_ENABLED=${SEMANTIC_ENABLED:-false}
+      - NEURALGUARD_SCANNER_JUDGE_ENABLED=${JUDGE_ENABLED:-true}
+      - NEURALGUARD_SCANNER_JUDGE_MODEL=${JUDGE_MODEL:-mistral:7b}
+      - NEURALGUARD_SCANNER_JUDGE_OLLAMA_URL=${JUDGE_OLLAMA_URL:-http://host.docker.internal:11434}
+      - NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS=${JUDGE_TIMEOUT_SECONDS:-10}
+      - NEURALGUARD_SCANNER_JUDGE_RESOLVES_ESCALATE=${JUDGE_RESOLVES_ESCALATE:-false}
+      - NEURALGUARD_SCANNER_JUDGE_ALLOW_EGRESS=${JUDGE_ALLOW_EGRESS:-false}
+      # ── Agent Guardian: shared state across workers (F4) ──
+      - NEURALGUARD_AGENT_GUARDIAN_ENABLED=true
+      - NEURALGUARD_AGENT_GUARDIAN_BACKEND=redis
+      - NEURALGUARD_AGENT_GUARDIAN_REDIS_URL=redis://redis:6379/1
+      # ── Rate limiting (shared across workers) ──
+      - NEURALGUARD_RATELIMIT_ENABLED=true
+      - NEURALGUARD_RATELIMIT_BACKEND=redis
+      - NEURALGUARD_RATELIMIT_REDIS_URL=redis://redis:6379/0
+      # ── Audit ──
+      - NEURALGUARD_AUDIT_BACKEND=${AUDIT_BACKEND:-jsonl}
+      - NEURALGUARD_AUDIT_JSONL_PATH=/data/audit
+      - NEURALGUARD_AUDIT_POSTGRES_URL=${AUDIT_POSTGRES_URL:-postgresql+asyncpg://neuralguard:${POSTGRES_PASSWORD:-change-me-appliance}@postgres:5432/neuralguard}
+      # ── Canary (system-prompt exfiltration detection) ──
+      - NEURALGUARD_CANARY_ENABLED=${CANARY_ENABLED:-true}
+      - NEURALGUARD_CANARY_SECRET=${NEURALGUARD_CANARY_SECRET:?set NEURALGUARD_CANARY_SECRET (32+ chars)}
+    volumes:
+      - audit_data:/data/audit
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=neuralguard
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-me-appliance}
+      - POSTGRES_DB=neuralguard
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neuralguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  audit_data:
+  pg_data:
