@@ -6,7 +6,8 @@ For multi-worker deployment, configure Redis backend (Phase 2+).
 Supports:
 - Requests-per-minute per tenant
 - Burst allowance
-- Cost-based limiting (future: token-count weighted)
+- Cost-based limiting (F7): each request is charged ~tokens (bytes/4)
+  against a per-window cost budget — the T-DOS cost-abuse control
 """
 
 from __future__ import annotations
@@ -43,6 +44,9 @@ class SlidingWindowCounter:
     def __init__(self, window_seconds: int = 60) -> None:
         self._window = window_seconds
         self._counters: dict[str, list[float]] = defaultdict(list)
+        # Cost-based mode store (F7): parallel to _counters but entries carry
+        # (timestamp, cost) — request-count mode never touches this.
+        self._cost_entries: dict[str, list[tuple[float, int]]] = defaultdict(list)
         self._last_cleanup: float = time.time()
         self._cleanup_interval: float = 300.0  # Cleanup every 5 minutes
 
@@ -57,8 +61,20 @@ class SlidingWindowCounter:
             for key, timestamps in self._counters.items()
             if not timestamps or now - timestamps[-1] > self._window
         ]
+        inactive_keys = [
+            key
+            for key, timestamps in self._counters.items()
+            if not timestamps or now - timestamps[-1] > self._window
+        ]
         for key in inactive_keys:
             del self._counters[key]
+        inactive_cost_keys = [
+            key
+            for key, entries in self._cost_entries.items()
+            if not entries or now - entries[-1][0] > self._window
+        ]
+        for key in inactive_cost_keys:
+            del self._cost_entries[key]
 
     def check(self, key: str, limit: int, burst: int) -> tuple[bool, int, int]:
         """Check if request is within limits.
@@ -90,6 +106,34 @@ class SlidingWindowCounter:
         self._counters[key].append(now)
         remaining = max(0, (limit + burst) - current - 1)
         return True, remaining, 0
+
+    def check_cost(self, key: str, cost: int, limit: int) -> tuple[bool, int, int]:
+        """Cost-based variant (F7): charge a token-estimate, not a request.
+
+        Each request contributes ``cost`` units (bytes/4 ≈ tokens) against a
+        per-window COST budget. ``burst_size`` does not apply in cost mode —
+        a large request consumes its own cost immediately, which IS the burst
+        behavior a cost budget wants. A request whose cost exceeds the
+        remaining budget is rejected (fail-closed: oversized payloads cannot
+        ride through a nearly-empty window).
+
+        Returns: (allowed, remaining_cost_units, retry_after_seconds)
+        """
+        now = time.time()
+        entries = self._cost_entries[key]
+        entries[:] = [(ts, c) for (ts, c) in entries if now - ts < self._window]
+
+        # Periodic cleanup of inactive tenants
+        self._cleanup_inactive()
+
+        used = sum(c for _, c in entries)
+        if used + cost > limit:
+            oldest = entries[0][0] if entries else now
+            retry_after = int(self._window - (now - oldest)) + 1
+            return False, max(0, limit - used), max(retry_after, 1)
+
+        entries.append((now, cost))
+        return True, max(0, limit - used - cost), 0
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -149,12 +193,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         auth_tenant = getattr(request.state, "auth_tenant", None)
         tenant_id = auth_tenant or request.headers.get("X-Tenant-ID", "default")
 
-        # Use tenant-specific limits (future: per-tenant config)
+        # Tenant-specific limits (request-count mode only — in cost mode the
+        # limit is the global cost budget; per-tenant cost budgets are a P2
+        # follow-up).
         rpm = self.settings.requests_per_minute
         burst = self.settings.burst_size
+        limit_header = str(rpm)
 
         registry = self._tenant_registry
-        if registry is not None and registry.enabled:
+        cost_units: int | None = None
+        if self.settings.cost_based:
+            # F7 cost-based mode: charge ~tokens (bytes/4) against the per-tenant
+            # cost budget instead of counting requests.
+            body = await request.body()
+            cost_units = max(1, len(body) // 4)
+            limit_header = str(self.settings.cost_units_per_minute)
+        elif registry is not None and registry.enabled:
             # Resolve per-tenant overrides; None/unknown tenant -> global default
             # (fail-open: a config miss never denies a request). The registry is
             # designed to never raise, but defend-in-depth: if it ever does, fall
@@ -176,7 +230,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         allowed: bool
         remaining: int
         retry_after: int
-        if self._redis is not None:
+        if cost_units is not None:
+            if self._redis is not None:
+                allowed, remaining, retry_after = await self._redis.check_cost(
+                    key=f"rl:{tenant_id}",
+                    cost=cost_units,
+                    budget=self.settings.cost_units_per_minute,
+                )
+            else:
+                assert self._counter is not None
+                allowed, remaining, retry_after = self._counter.check_cost(
+                    key=f"rl:{tenant_id}",
+                    cost=cost_units,
+                    limit=self.settings.cost_units_per_minute,
+                )
+        elif self._redis is not None:
             allowed, remaining, retry_after = await self._redis.check(
                 key=f"rl:{tenant_id}",
                 limit=rpm,
@@ -209,6 +277,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         response = cast("Response", await call_next(request))
-        response.headers["X-RateLimit-Limit"] = str(rpm)
+        response.headers["X-RateLimit-Limit"] = limit_header
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response

@@ -91,6 +91,22 @@ class ScannerSettings(BaseSettings):
     regex_timeout_ms: int = Field(default=50, description="Regex compilation/execution timeout")
     max_regex_complexity: int = Field(default=20, description="Max quantifier nesting depth")
 
+    # F11: per-text aggregate deadline for the pattern layer. The per-pattern
+    # timeout (regex_timeout_ms) bounds each regex individually, but the
+    # aggregate across all compiled patterns was unbounded (~5.6s worst case
+    # per text for a crafted ReDoS-bait input: 113 patterns x 50ms). Patterns
+    # beyond this budget are SKIPPED and a SELF_ATTACK/PATTERN-BUDGET ESCALATE
+    # finding is emitted — fail toward review, never silently weaker.
+    pattern_budget_ms: int = Field(
+        default=300,
+        ge=1,
+        le=60_000,
+        description=(
+            "Per-text aggregate deadline (ms) for the pattern layer; exceeding it skips "
+            "remaining patterns and emits a PATTERN-BUDGET escalate finding"
+        ),
+    )
+
     # Semantic scanner (Phase 2)
     semantic_enabled: bool = Field(default=False, description="Enable semantic classification")
     semantic_model: str = Field(
@@ -340,7 +356,18 @@ class RateLimitSettings(BaseSettings):
     requests_per_minute: int = Field(default=60, description="Default RPM per tenant")
     burst_size: int = Field(default=10, description="Burst allowance")
     cost_based: bool = Field(
-        default=False, description="Rate limit by estimated LLM cost, not request count"
+        default=False,
+        description="Rate limit by estimated LLM cost (request bytes / 4 ≈ tokens) "
+        "instead of request count — the T-DOS cost-abuse control. In cost mode the "
+        "per-window limit is cost_units_per_minute and burst_size does not apply "
+        "(a large request consumes its own cost immediately).",
+    )
+    cost_units_per_minute: int = Field(
+        default=100_000,
+        ge=1,
+        description="Cost-based mode: per-tenant cost budget per 60s window "
+        "(1 unit ≈ 4 bytes of request body ≈ 1 token estimate). A request whose "
+        "cost exceeds the remaining budget is rejected (429) — fail-closed.",
     )
 
 

@@ -20,7 +20,10 @@ set -euo pipefail
 PORT="${NEURALGUARD_SMOKE_PORT:-8765}"
 BASE="http://127.0.0.1:${PORT}"
 KEY="smoke-key-0123456789abcdef0123456789abcdef"
-AUDIT_DIR="$(mktemp -d -t neuralguard-smoke-audit)"
+# GNU mktemp (Linux CI) requires at least three X's in the template; BSD
+# mktemp's `-t prefix` form auto-appends them (which is why this only broke
+# in CI). Use an explicit trailing-X template that both mktemp variants accept.
+AUDIT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/neuralguard-smoke-audit.XXXXXXXX")"
 SERVER_PID=""
 
 cleanup() {
