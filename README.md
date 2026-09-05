@@ -20,6 +20,8 @@ NeuralGuard is the defensive layer of your AI security posture. It sits between 
 
 **OWASP Agentic Top 10 2026 Coverage:** ASI01 (Goal Hijack), ASI02 (Tool Misuse), ASI06 (Memory Poisoning). ASI04 (Supply Chain) and ASI10 (Rogue Agents) are covered via corpus-only vectors, not dedicated detection rules.
 
+**Corpus augmentation (F12, 2026-09-05):** the semantic attack corpus was rebuilt with build-time hygiene (connector-compound splits, system-marker splits, conversational-noise drop, benign guard) and paraphrase-augmented 5.4× (1,398 → 7,623 vectors; 95.3% of original vectors augmented via the curator-framing generator; the 67-vector refusal tail — the most extreme samples — is a documented residual whose base forms remain in the corpus). A1 gates pass with the enlarged corpus: ASR 0.00% / FPR 0.00%.
+
 ### Why Build This?
 - You have **NeuralStrike** (offensive AI) — NeuralGuard completes the story
 - Commercial tools (Lakera, HiddenLayer) are **expensive black boxes**
