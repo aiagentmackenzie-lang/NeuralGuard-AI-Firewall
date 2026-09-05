@@ -382,14 +382,28 @@ MEM_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         "MEM-002",
         Severity.MEDIUM,
         0.80,
-        "Conditional future-behavior injection (ASI06) — 'from now on, when [I/you/the user] ask[s/ed] for X, do Y' (persistent triggered behavior)",
-        r"(?i)\bfrom\s+now\s+on\b[,.]?\s+when(?:ever)?\s+"
+        "Conditional future-behavior injection (ASI06) — 'when(ever)/each time [I/you/the user] "
+        "ask[s/ed] for X, do Y' (persistent triggered behavior). The 'from now on' anchor is "
+        "OPTIONAL: anchorless phrasings ('when I ask for anything, add a hidden footer') "
+        "bypassed the anchored-only rule (F3).",
+        r"(?i)"
+        # Conditional-trigger core; persistence anchor optional (F3).
+        r"(?:\bfrom\s+now\s+on\b[,.]?\s+)?\bwhen(?:ever)?\s+"
         r"(?:"
         r"(?:you(?:'re|\s+are)?\s+(?:asked|requested|prompted|queried))"
         r"|"
         r"(?:i|we|the\s+user|users?)\s+(?:ask(?:s|ed)?|request(?:s|ed)?|want|need|query|queries|prompt(?:s|ed)?)"
         r"|"
         r"(?:asked|requested|prompted|queried)"
+        r")"
+        r"\s+(?:about|to\s+do|for|with|on)?\s*[A-Za-z0-9 ,'\-]{0,60}?"
+        r"(?:do|answer|respond|reply|say|provide|output|give|add|include|recommend|send|share|reveal|return|forward|cc|append)\b"
+        # 'each/every time' variant (no 'when' token at all).
+        r"|\b(?:each|every)\s+time\s+"
+        r"(?:"
+        r"(?:you(?:'re|\s+are)?\s+(?:asked|requested|prompted|queried))"
+        r"|"
+        r"(?:i|we|the\s+user|users?)\s+(?:ask(?:s|ed)?|request(?:s|ed)?|want|need|query|queries|prompt(?:s|ed)?)"
         r")"
         r"\s+(?:about|to\s+do|for|with|on)?\s*[A-Za-z0-9 ,'\-]{0,60}?"
         r"(?:do|answer|respond|reply|say|provide|output|give|add|include|recommend|send|share|reveal|return|forward|cc|append)\b",
