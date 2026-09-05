@@ -9,8 +9,13 @@ Uses pydantic-settings for layered configuration:
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -47,8 +52,9 @@ class ServerSettings(BaseSettings):
     )
     allow_insecure_http: bool = Field(
         default=False,
-        description="Allow serving plain HTTP in production. MUST be set explicitly; otherwise "
-        "production startup fails. Intended only behind a TLS-terminating reverse proxy.",
+        description="Allow serving plain HTTP in production. When false (default), the "
+        "production lifespan logs a loud TLS notice on every boot. Set true only behind "
+        "a TLS-terminating reverse proxy.",
     )
 
     @field_validator("port")
@@ -469,3 +475,56 @@ def load_config(config_path: Path | None = None) -> NeuralGuardConfig:
     # Future: support YAML overlay via config_path
     _ = config_path
     return NeuralGuardConfig()
+
+
+# ── Unknown-key detection (F5) ────────────────────────────────────────────
+# F5 root cause: NEURALGUARD_SERVER_* was used by every config surface while
+# the real names are NEURALGUARD_* (env_prefix NEURALGUARD_ + bare field
+# names) — and pydantic-settings' extra="ignore" made the dead names SILENT.
+# This detector turns that failure class loud: any NEURALGUARD_* key that
+# maps to no settings field is reported (production refuses to start).
+
+
+def _iter_settings_classes() -> Iterator[tuple[str, type[BaseSettings]]]:
+    """Yield (env_prefix, cls) for every settings class in this module."""
+    for obj in vars(sys.modules[__name__]).values():
+        if isinstance(obj, type) and issubclass(obj, BaseSettings) and obj is not BaseSettings:
+            yield str(obj.model_config.get("env_prefix", "")), obj
+
+
+def known_env_keys() -> set[str]:
+    """Every NEURALGUARD_* env key the settings classes actually read (uppercase)."""
+    keys: set[str] = set()
+    for prefix, cls in _iter_settings_classes():
+        for name in cls.model_fields:
+            keys.add(f"{prefix}{name}".upper())
+    return keys
+
+
+def _iter_candidate_env_keys() -> Iterator[str]:
+    """NEURALGUARD_* keys from the real environment AND the repo-root .env file."""
+    for key in os.environ:
+        if key.upper().startswith("NEURALGUARD_"):
+            yield key
+    env_file = Path(".env")
+    if env_file.is_file():
+        try:
+            for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key = line.split("=", 1)[0].strip()
+                if key.upper().startswith("NEURALGUARD_"):
+                    yield key
+        except OSError:  # pragma: no cover - unreadable file -> env-only check
+            return
+
+
+def unknown_env_keys() -> list[str]:
+    """NEURALGUARD_* keys present (env or .env) that map to NO settings field.
+
+    These are silent no-ops today — typos, stale names (NEURALGUARD_SERVER_*),
+    or removed knobs. Sorted for deterministic logs/tests.
+    """
+    known = known_env_keys()
+    return sorted({key.upper() for key in _iter_candidate_env_keys()} - known)

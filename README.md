@@ -399,7 +399,7 @@ cannot act on behalf of another tenant.
 
 **TLS.** Terminate TLS at a reverse proxy (nginx / Caddy / Traefik / a cloud
 load balancer) in front of NeuralGuard. If you run uvicorn directly in
-production, set `NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=true` only when a
+production, set `NEURALGUARD_ALLOW_INSECURE_HTTP=true` only when a
 TLS-terminating proxy is in front — otherwise the startup log warns loudly.
 Never expose prompts over plain HTTP. See
 [`docs/runbooks/tls_termination.md`](docs/runbooks/tls_termination.md).
@@ -411,7 +411,7 @@ AWS Secrets Manager). `POSTGRES_PASSWORD` has no insecure default in
 zero-downtime dual-key API-key rotation and Postgres password rotation.
 
 **Rate limiting (multi-worker).** The in-memory limiter is per-process. For
-`NEURALGUARD_SERVER_WORKERS>1`, set `NEURALGUARD_RATELIMIT_BACKEND=redis` and
+`NEURALGUARD_WORKERS>1`, set `NEURALGUARD_RATELIMIT_BACKEND=redis` and
 `NEURALGUARD_RATELIMIT_REDIS_URL` — the production lifespan refuses to start
 otherwise (a per-process limiter would let a tenant exceed the limit by the
 worker count). `docker-compose.yml` ships a `redis` service.
@@ -431,7 +431,7 @@ backup, restore, and chain verification.
 
 **Resource limits.** `docker-compose.yml` sets container memory/CPU limits so a
 decompression or regex bomb cannot OOM the host. The request body size is
-capped (`NEURALGUARD_SERVER_MAX_REQUEST_BODY_BYTES`, default 1 MiB) and 413s
+capped (`NEURALGUARD_MAX_REQUEST_BODY_BYTES`, default 1 MiB) and 413s
 before JSON parsing.
 
 **Observability.** `GET /v1/metrics` exposes Prometheus counters/histograms

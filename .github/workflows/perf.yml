@@ -40,13 +40,13 @@ jobs:
           export NEURALGUARD_AUTH_ENABLED=true
           export NEURALGUARD_AUTH_API_KEYS="perf-key-0123456789abcdef0123456789abcdef|perf"
           export NEURALGUARD_AUTH_ENFORCE_TENANT_FROM_KEY=true
-          export NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=true
+          export NEURALGUARD_ALLOW_INSECURE_HTTP=true
           export NEURALGUARD_AUDIT_BACKEND=jsonl
           export NEURALGUARD_AUDIT_JSONL_PATH=/tmp/ng-perf-audit
           export NEURALGUARD_RATELIMIT_ENABLED=false
-          export NEURALGUARD_SERVER_WORKERS=1
-          export NEURALGUARD_SERVER_HOST=127.0.0.1
-          export NEURALGUARD_SERVER_PORT=8000
+          export NEURALGUARD_WORKERS=1
+          export NEURALGUARD_HOST=127.0.0.1
+          export NEURALGUARD_PORT=8000
           export NEURALGUARD_SCANNER_SEMANTIC_ENABLED=false
           export NEURALGUARD_SCANNER_JUDGE_ENABLED=false
           mkdir -p /tmp/ng-perf-audit

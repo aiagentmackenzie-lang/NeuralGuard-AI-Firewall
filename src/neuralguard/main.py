@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from neuralguard.api.routes import router
-from neuralguard.config.settings import NeuralGuardConfig, load_config
+from neuralguard.config.settings import NeuralGuardConfig, load_config, unknown_env_keys
 from neuralguard.logging.audit import AuditLogger
 from neuralguard.metrics import metrics
 from neuralguard.middleware.auth import AuthMiddleware
@@ -76,6 +76,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         host=config.server.host,
         port=config.server.port,
     )
+
+    # Unknown NEURALGUARD_* env keys (F5): a typo'd or stale key is a silent
+    # no-op today. Production refuses to start; dev/staging logs a loud
+    # warning with the offending keys.
+    unknown = unknown_env_keys()
+    if unknown:
+        if config.environment == "production":
+            raise RuntimeError(
+                "Production startup refused: unknown NEURALGUARD_* environment "
+                f"keys {unknown} — they map to no settings field and would "
+                "silently do nothing. Fix the names (see .env.example) or "
+                "remove them."
+            )
+        structlog.get_logger("neuralguard").warning(
+            "unknown_neuralguard_env_keys",
+            keys=unknown,
+            msg="These NEURALGUARD_* keys map to no settings field and silently "
+            "do nothing (typo or stale name?). Production would refuse to start.",
+        )
 
     # Initialize PostgreSQL engine if audit backend is postgres
     if config.audit.backend == "postgres" and config.audit.postgres_url:
@@ -221,7 +240,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             structlog.get_logger("neuralguard").warning(
                 "production_tls_notice",
                 msg="Production mode active. Terminate TLS at a reverse proxy (nginx/Caddy/Traefik) "
-                "or set --ssl-keyfile/--ssl-certfile. Set NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=true "
+                "or set --ssl-keyfile/--ssl-certfile. Set NEURALGUARD_ALLOW_INSECURE_HTTP=true "
                 "ONLY if a TLS-terminating proxy is in front.",
             )
         else:

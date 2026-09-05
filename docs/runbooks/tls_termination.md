@@ -2,7 +2,7 @@
 
 NeuralGuard must not receive prompts over plain HTTP in production. The
 application lifespan refuses to start in `production` unless
-`NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=true` is set — and that flag must
+`NEURALGUARD_ALLOW_INSECURE_HTTP=true` is set — and that flag must
 ONLY be set when a TLS-terminating reverse proxy is in front.
 
 ## Option A — TLS at a reverse proxy (recommended)
@@ -55,9 +55,9 @@ server {
 
 ```bash
 NEURALGUARD_ENVIRONMENT=production
-NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=true   # OK: TLS terminated upstream
-NEURALGUARD_SERVER_HOST=127.0.0.1             # bind loopback only
-NEURALGUARD_SERVER_PORT=8000
+NEURALGUARD_ALLOW_INSECURE_HTTP=true   # OK: TLS terminated upstream
+NEURALGUARD_HOST=127.0.0.1             # bind loopback only
+NEURALGUARD_PORT=8000
 ```
 
 Verify: `curl -sk https://neuralguard.example.com/v1/health` returns 200;
@@ -78,7 +78,7 @@ uv run uvicorn neuralguard.main:create_app --factory \
 
 ```bash
 NEURALGUARD_ENVIRONMENT=production
-NEURALGUARD_SERVER_ALLOW_INSECURE_HTTP=false
+NEURALGUARD_ALLOW_INSECURE_HTTP=false
 ```
 
 Verify: `curl -sk https://host:8443/v1/health` → 200; plain HTTP on 8443
