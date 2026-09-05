@@ -73,7 +73,10 @@ class SiemRouter:
         self._recent_blocks: deque[bool] = deque(maxlen=settings.spike_window)
         self._block_count: int = 0
         self._in_spike: bool = False
-        self._last_alert_ts: float = 0.0
+        # None = never alerted. (0.0 would make a fresh process — CI VMs boot
+        # with time.monotonic() near zero — treat itself as in-cooldown and
+        # swallow the FIRST spike alert for `cooldown_seconds`.)
+        self._last_alert_ts: float | None = None
         self._drops: int = 0
 
     # ── Public API (request-path safe) ────────────────────────────────────
@@ -118,7 +121,9 @@ class SiemRouter:
         window_full = len(self._recent_blocks) == self.settings.spike_window
         ratio = self._block_count / len(self._recent_blocks) if self._recent_blocks else 0.0
         over = window_full and ratio >= self.settings.spike_block_threshold
-        cooled = (now - self._last_alert_ts) >= self.settings.spike_cooldown_seconds
+        cooled = self._last_alert_ts is None or (
+            now - self._last_alert_ts
+        ) >= self.settings.spike_cooldown_seconds
 
         if over and not self._in_spike and cooled:
             self._in_spike = True
