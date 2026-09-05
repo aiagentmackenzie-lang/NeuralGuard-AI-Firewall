@@ -121,9 +121,10 @@ class SiemRouter:
         window_full = len(self._recent_blocks) == self.settings.spike_window
         ratio = self._block_count / len(self._recent_blocks) if self._recent_blocks else 0.0
         over = window_full and ratio >= self.settings.spike_block_threshold
-        cooled = self._last_alert_ts is None or (
-            now - self._last_alert_ts
-        ) >= self.settings.spike_cooldown_seconds
+        cooled = (
+            self._last_alert_ts is None
+            or (now - self._last_alert_ts) >= self.settings.spike_cooldown_seconds
+        )
 
         if over and not self._in_spike and cooled:
             self._in_spike = True
