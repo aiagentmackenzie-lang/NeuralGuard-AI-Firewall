@@ -159,7 +159,7 @@ def _build_audit_dir(
 
 class TestVerifyWithPubkey:
     def test_signed_chain_valid_with_pubkey(self, tmp_path: Any, keypair: tuple[str, str]) -> None:
-        seed, pubkey = keypair
+        _seed, pubkey = keypair
         audit_dir = _build_audit_dir(tmp_path, keypair, sign=True)
         report = verify_audit_files(audit_dir, pubkey_hex=pubkey)
         assert report.all_valid
@@ -176,13 +176,12 @@ class TestVerifyWithPubkey:
 
     def test_forged_chain_detected(self, tmp_path: Any, keypair: tuple[str, str]) -> None:
         """THE threat signing exists for: internally-consistent forged file."""
-        seed, pubkey = keypair
+        _seed, pubkey = keypair
         audit_dir = _build_audit_dir(tmp_path, keypair, sign=True, tamper=True)
         report = verify_audit_files(audit_dir, pubkey_hex=pubkey)
         assert not report.all_valid
 
     def test_foreign_key_broken(self, tmp_path: Any, keypair: tuple[str, str]) -> None:
-        seed, _ = keypair
         _, other_pub = generate_signing_keypair()
         audit_dir = _build_audit_dir(tmp_path, keypair, sign=True)
         report = verify_audit_files(audit_dir, pubkey_hex=other_pub)
@@ -212,7 +211,7 @@ class TestCli:
     def test_audit_verify_pubkey_flag_end_to_end(
         self, tmp_path: Any, keypair: tuple[str, str]
     ) -> None:
-        seed, pubkey = keypair
+        _seed, pubkey = keypair
         audit_dir = _build_audit_dir(tmp_path, keypair, sign=True)
         result = subprocess.run(
             [
