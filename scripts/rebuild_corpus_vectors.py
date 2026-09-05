@@ -134,6 +134,7 @@ def rebuild(
     engine: EmbeddingEngineLike,
     benign_probe_texts: list[str],
     block_threshold: float,
+    batch_size: int = 256,
 ) -> tuple[Any, list[dict[str, Any]], dict[str, int]]:
     """Produce (vectors, metadata, stats) from tracked sources.
 
@@ -142,11 +143,22 @@ def rebuild(
     """
     import numpy as np
 
+    def embed_chunked(texts: list[str]) -> Any:
+        # Embed in bounded chunks: a single embed_batch over ~5k texts OOMs a
+        # 16 GB GitHub runner (measured 2026-09-05 — the runner agent gets
+        # killed ~100 s into the batch). Per-text embeddings are independent,
+        # so chunking changes nothing about the values.
+        chunks = [
+            engine.embed_batch(texts[i : i + batch_size]).astype(np.float32)
+            for i in range(0, len(texts), batch_size)
+        ]
+        return np.vstack(chunks) if chunks else np.zeros((0, 384), np.float32)
+
     stats: dict[str, int] = {}
 
     # 1. Originals: embed all, no re-hygiene (the tracked rows ARE the
     #    post-hygiene stage-1 output).
-    orig_embs = engine.embed_batch([o["text"] for o in originals]).astype(np.float32)
+    orig_embs = embed_chunked([o["text"] for o in originals])
 
     # 2. Paraphrase candidates: dedup against originals + each other.
     candidates, dropped_dupes = build_paraphrase_candidates(originals, checkpoint)
@@ -158,11 +170,7 @@ def rebuild(
 
     # 4. Embed the surviving candidates (full texts).
     texts = [c["text"] for c in candidates]
-    cand_embs = (
-        engine.embed_batch(texts).astype(np.float32)
-        if texts
-        else np.zeros((0, orig_embs.shape[1]), np.float32)
-    )
+    cand_embs = embed_chunked(texts) if texts else np.zeros((0, orig_embs.shape[1]), np.float32)
 
     # 5. Benign guard over the paraphrase candidates (parents were guarded at
     #    build time; finalize() guarded new rows only).
@@ -174,9 +182,7 @@ def rebuild(
 
     kept_texts = [c["text"] for c in kept]
     kept_embs = (
-        engine.embed_batch(kept_texts).astype(np.float32)
-        if kept_texts
-        else np.zeros((0, orig_embs.shape[1]), np.float32)
+        embed_chunked(kept_texts) if kept_texts else np.zeros((0, orig_embs.shape[1]), np.float32)
     )
 
     vectors = np.vstack([orig_embs, kept_embs]).astype(np.float32)
