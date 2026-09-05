@@ -58,3 +58,6 @@ tenants/*.yaml
 tenants/*.yml
 tenants/*.json
 !tenants/example.yaml
+
+# local dev secrets — never commit
+.env
