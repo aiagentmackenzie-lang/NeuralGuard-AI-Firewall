@@ -113,7 +113,29 @@ class EvaluateRequest(BaseModel):
     output_only: bool = Field(
         default=False, description="Only run output-relevant patterns (e.g., PII detection)"
     )
+    scan_all_roles: bool = Field(
+        default=False,
+        description="F6: scan ALL message roles (default: user-role turns only). "
+        "The defender's own system prompt ('You are X, you must never...') fires "
+        "PI-D/JB patterns on itself when role-blind — harmless for user-turn "
+        "traffic, catastrophic in proxy mode where full chat payloads flow. "
+        "Opt in only when you understand the false-block tradeoff.",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Optional request metadata")
+
+    def input_texts(self) -> list[str]:
+        """Texts to scan: user-role turns only by default (F6).
+
+        ``scan_all_roles=True`` opts back into every role. The pattern layer
+        (PI-D/JB) and structural scanner both use this; Agent Guardian always
+        filtered roles itself; output scanning uses the completion text, not
+        this helper.
+        """
+        if self.messages:
+            if self.scan_all_roles:
+                return [m.content for m in self.messages]
+            return [m.content for m in self.messages if m.role == "user"]
+        return [self.prompt] if self.prompt else []
 
     @field_validator("tenant_id")
     @classmethod

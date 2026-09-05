@@ -686,12 +686,11 @@ class PatternScanner(BaseScanner["ScannerSettings"]):
         start = time.perf_counter()
         findings: list[Finding] = []
 
-        # Get input texts
-        if request.messages:
-            texts = [m.content for m in request.messages]
-        elif request.prompt:
-            texts = [request.prompt]
-        else:
+        # Get input texts (F6: user-role turns only unless scan_all_roles)
+        texts = request.input_texts()
+        if not texts:
+            if request.messages:
+                return self._result(Verdict.ALLOW, [], start)
             return self._result(Verdict.BLOCK, [], start)
 
         # Use sanitized input from structural scanner if available

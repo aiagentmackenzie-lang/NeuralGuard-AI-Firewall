@@ -257,12 +257,11 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
         return self._result(overall_verdict, findings, start)
 
     def _extract_text(self, request: EvaluateRequest) -> str:
-        """Extract text content from the request."""
-        if request.messages:
-            return " ".join(m.content for m in request.messages)
-        if request.prompt:
-            return request.prompt
-        return ""
+        """Extract text content from the request (F6: user-role turns only by
+        default — the judge must not verdict the defender's own system prompt
+        against itself; scan_all_roles opts into the full conversation)."""
+        texts = request.input_texts()
+        return " ".join(texts)
 
     def _similarity_to_verdict(self, similarity: float) -> Verdict:
         """Map similarity score to verdict using config thresholds.

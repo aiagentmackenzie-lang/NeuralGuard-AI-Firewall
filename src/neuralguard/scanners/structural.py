@@ -150,13 +150,14 @@ class StructuralScanner(BaseScanner["ScannerSettings"]):
         findings: list[Finding] = []
         sanitized_parts: list[str] = []
 
-        # Get the input text
-        if request.messages:
-            texts = [m.content for m in request.messages]
-        elif request.prompt:
-            texts = [request.prompt]
-        else:  # pragma: no cover — defense-in-depth; validation rejects this at schema level
-            return self._result(
+        # Get the input text (F6: user-role turns only unless scan_all_roles)
+        texts = request.input_texts()
+        if not texts:
+            if request.messages:
+                # Messages exist but no user turns (e.g. a system-only or
+                # assistant-only payload in proxy mode): nothing to scan.
+                return self._result(Verdict.ALLOW, [], start)
+            return self._result(  # pragma: no cover — validation rejects this at schema level
                 Verdict.BLOCK,
                 [
                     Finding(
