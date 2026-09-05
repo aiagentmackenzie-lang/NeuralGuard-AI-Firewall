@@ -18,7 +18,7 @@ import hmac
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 # Runtime import at bottom of module is avoided — jwtauth imports nothing
@@ -27,10 +27,7 @@ from neuralguard.auth.jwtauth import AuthRuntimeState
 from neuralguard.metrics import metrics
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from starlette.requests import Request
-    from starlette.responses import Response
+    from starlette.types import Receive, Send
 
     from neuralguard.config.settings import AuthSettings
 
@@ -69,7 +66,7 @@ def _constant_time_lookup(candidate: str, key_map: dict[str, str]) -> str | None
     return matched_tenant
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
+class AuthMiddleware:
     """Enforce API-key auth and bind requests to the authenticated tenant.
 
     P2-4: when JWT auth is enabled, a Bearer token that is NOT a static key
@@ -85,44 +82,55 @@ class AuthMiddleware(BaseHTTPMiddleware):
         jwt_manager: Any | None = None,  # neuralguard.auth.jwtauth.JwtManager
         runtime_state: Any | None = None,  # neuralguard.auth.jwtauth.AuthRuntimeState
     ) -> None:
-        super().__init__(app)
+        self.app = app
         self.settings = settings
         # Shared live-key state: rotated keys (rotation API) are visible here
         # because routes and middleware hold the SAME AuthRuntimeState.
         self._state = runtime_state if runtime_state is not None else AuthRuntimeState(settings)
         self._jwt_manager = jwt_manager
 
-    async def dispatch(
+    async def __call__(
         self,
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
+        scope: dict[str, Any],
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope, receive)
+
         if not self.settings.enabled:
             # Auth disabled (development). Mark unauthenticated for downstream
-            # middleware that may key on the principal.
-            request.state.authenticated = False
-            request.state.auth_tenant = None
-            return await call_next(request)
+            # middleware that may key on the principal. State lives in the
+            # scope dict, so this is visible to every later layer.
+            scope.setdefault("state", {})["authenticated"] = False
+            scope["state"]["auth_tenant"] = None
+            await self.app(scope, receive, send)
+            return
 
-        path = request.url.path
+        path = scope.get("path", "")
 
         # Public endpoints bypass auth (kept minimal: health only by default).
         if path in self.settings.public_endpoints:
-            request.state.authenticated = False
-            request.state.auth_tenant = None
-            return await call_next(request)
+            scope.setdefault("state", {})["authenticated"] = False
+            scope["state"]["auth_tenant"] = None
+            await self.app(scope, receive, send)
+            return
 
         # Only protect API paths; leave non-API (e.g. /docs) to FastAPI.
         if not path.startswith("/v1/"):
-            request.state.authenticated = False
-            request.state.auth_tenant = None
-            return await call_next(request)
+            scope.setdefault("state", {})["authenticated"] = False
+            scope["state"]["auth_tenant"] = None
+            await self.app(scope, receive, send)
+            return
 
         candidate = _extract_key(request)
         if candidate is None:
             logger.warning("auth_missing_key", path=path)
             metrics.record_auth_rejection("missing_key")
-            return self._unauthorized("Missing API key")
+            await self._unauthorized(scope, receive, send, "Missing API key")
+            return
 
         tenant = self._state.lookup(candidate)
         if tenant is None and self._jwt_manager is not None:
@@ -137,10 +145,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if tenant is None:
             logger.warning("auth_invalid_key", path=path)
             metrics.record_auth_rejection("invalid_key")
-            return self._unauthorized("Invalid API key")
+            await self._unauthorized(scope, receive, send, "Invalid API key")
+            return
 
-        request.state.authenticated = True
-        request.state.auth_tenant = tenant
+        scope.setdefault("state", {})["authenticated"] = True
+        scope["state"]["auth_tenant"] = tenant
 
         # Enforce tenant binding: the body may carry a tenant_id that must
         # agree with the key's bound tenant. We cannot fully parse the JSON
@@ -148,12 +157,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # lightweight peek only for the tenant mismatch check. To avoid
         # breaking the request stream, the route layer performs the final
         # tenant enforcement after body parsing.
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
     @staticmethod
-    def _unauthorized(detail: str) -> JSONResponse:
-        return JSONResponse(
+    async def _unauthorized(
+        scope: dict[str, Any],
+        receive: Receive,
+        send: Send,
+        detail: str,
+    ) -> None:
+        response = JSONResponse(
             status_code=401,
             content={"error": "unauthorized", "message": detail},
             headers={"WWW-Authenticate": "Bearer"},
         )
+        await response(scope, receive, send)

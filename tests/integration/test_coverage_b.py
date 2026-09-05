@@ -176,11 +176,10 @@ class TestMainLifespanBranches:
 
 
 class TestBodySizeDirectASGI:
-    """Directly exercise the no-Content-Length branch via a hand-built Request."""
+    """Directly exercise the no-Content-Length branch — pure-ASGI interface (P2-8)."""
 
     @pytest.mark.asyncio
-    async def test_no_cl_over_limit_returns_413(self):
-        from starlette.requests import Request
+    async def test_no_cl_over_limit_short_circuits_413(self):
         from starlette.responses import Response
 
         scope = {
@@ -192,26 +191,30 @@ class TestBodySizeDirectASGI:
             "headers": [],  # no content-length, no transfer-encoding
         }
         body = b"A" * 200
-        sent = {"i": 0}
 
         async def receive():
-            if sent["i"] == 0:
-                sent["i"] += 1
-                return {"type": "http.request", "body": body, "more_body": False}
-            return {"type": "http.disconnect"}
+            return {"type": "http.request", "body": body, "more_body": False}
 
-        req = Request(scope, receive)
+        statuses: list[int] = []
 
-        async def call_next(r):
-            return Response("ok", status_code=200)
+        async def send(message):
+            if message["type"] == "http.response.start":
+                statuses.append(message["status"])
 
-        mw = BodySizeMiddleware(app=None, max_bytes=16)  # type: ignore[arg-type]
-        resp = await mw.dispatch(req, call_next)
-        assert resp.status_code == 413
+        forwarded = {"called": False}
+
+        async def app(scope, receive, send):
+            forwarded["called"] = True
+            resp = Response("ok", status_code=200)
+            await resp(scope, receive, send)
+
+        mw = BodySizeMiddleware(app=app, max_bytes=16)
+        await mw(scope, receive, send)
+        assert statuses == [413]
+        assert not forwarded["called"]  # short-circuited before the app
 
     @pytest.mark.asyncio
-    async def test_no_cl_under_limit_passes(self):
-        from starlette.requests import Request
+    async def test_no_cl_under_limit_forwards(self):
         from starlette.responses import Response
 
         scope = {
@@ -223,19 +226,28 @@ class TestBodySizeDirectASGI:
             "headers": [],
         }
         body = b"hi"
-        sent = {"i": 0}
 
         async def receive():
-            if sent["i"] == 0:
-                sent["i"] += 1
-                return {"type": "http.request", "body": body, "more_body": False}
-            return {"type": "http.disconnect"}
+            return {"type": "http.request", "body": body, "more_body": False}
 
-        req = Request(scope, receive)
+        statuses: list[int] = []
+        bodies: list[bytes] = []
 
-        async def call_next(r):
-            return Response("ok", status_code=200)
+        async def send(message):
+            if message["type"] == "http.response.start":
+                statuses.append(message["status"])
+            elif message["type"] == "http.response.body":
+                bodies.append(message.get("body", b""))
 
-        mw = BodySizeMiddleware(app=None, max_bytes=64)  # type: ignore[arg-type]
-        resp = await mw.dispatch(req, call_next)
-        assert resp.status_code == 200
+        async def app(inner_scope, inner_receive, inner_send):
+            # The drained body must be replayed for downstream consumers.
+            from starlette.requests import Request
+
+            req = Request(inner_scope, inner_receive)
+            resp = Response(await req.body(), status_code=200)
+            await resp(inner_scope, inner_receive, inner_send)
+
+        mw = BodySizeMiddleware(app=app, max_bytes=64)
+        await mw(scope, receive, send)
+        assert statuses == [200]
+        assert b"".join(bodies) == b"hi"  # body survived the drain+replay

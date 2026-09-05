@@ -14,16 +14,18 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse, Response
+from starlette.datastructures import MutableHeaders
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from neuralguard.metrics import metrics
+from neuralguard.middleware.asgi import replay_receive
 
 if TYPE_CHECKING:
-    from starlette.requests import Request
+    from starlette.types import Receive, Send
 
     from neuralguard.config.settings import RateLimitSettings
     from neuralguard.middleware.ratelimit_redis import RedisRateLimiter
@@ -136,7 +138,7 @@ class SlidingWindowCounter:
         return True, max(0, limit - used - cost), 0
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
+class RateLimitMiddleware:
     """Starlette middleware for per-tenant rate limiting.
 
     Backend is selected by ``RateLimitSettings.backend``:
@@ -155,7 +157,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         redis_client: Any | None = None,
         tenant_registry: TenantConfigRegistry | None = None,
     ) -> None:
-        super().__init__(app)
+        self.app = app
         self.settings = settings
         self._backend = settings.backend
         self._counter: SlidingWindowCounter | None = None
@@ -177,17 +179,29 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._counter = SlidingWindowCounter(window_seconds=60)
             logger.info("ratelimit_backend", backend="memory")
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def __call__(
+        self,
+        scope: dict[str, Any],
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope, receive)
+
         if not self.settings.enabled:
-            return cast("Response", await call_next(request))
+            await self.app(scope, receive, send)
+            return
 
         # Skip non-API paths
         if not request.url.path.startswith("/v1/"):
-            return cast("Response", await call_next(request))
+            await self.app(scope, receive, send)
+            return
 
         # Tenant identity: when auth is enabled, the authenticated principal
-        # (set by AuthMiddleware on request.state.auth_tenant) is authoritative.
-        # Falling back to the client-supplied X-Tenant-ID header is ONLY acceptable
+        # (set by AuthMiddleware in scope["state"]) is authoritative. Falling
+        # back to the client-supplied X-Tenant-ID header is ONLY acceptable
         # when auth is disabled (development). This prevents the rate-limit
         # tenant-spoofing bypass.
         auth_tenant = getattr(request.state, "auth_tenant", None)
@@ -203,18 +217,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         registry = self._tenant_registry
         cost_units: int | None = None
         if self.settings.cost_based:
-            # F7 cost-based mode: charge ~tokens (bytes/4) against the per-tenant
-            # cost budget instead of counting requests.
+            # F7 cost-based mode: charge ~tokens (bytes/4) against the
+            # per-tenant cost budget instead of counting requests. The body
+            # is read through a replay-wrapped receive so downstream
+            # consumers (routes) can read it again.
             body = await request.body()
+            receive = replay_receive(body, receive)
             cost_units = max(1, len(body) // 4)
             limit_header = str(self.settings.cost_units_per_minute)
         elif registry is not None and registry.enabled:
-            # Resolve per-tenant overrides; None/unknown tenant -> global default
-            # (fail-open: a config miss never denies a request). The registry is
-            # designed to never raise, but defend-in-depth: if it ever does, fall
-            # back to the global limits and log — never crash the request path
-            # with an unhandled exception (BaseHTTPMiddleware would bypass the
-            # global handler and leak a raw 500).
+            # Resolve per-tenant overrides; None/unknown tenant -> global
+            # default (fail-open: a config miss never denies a request). The
+            # registry is designed to never raise, but defense-in-depth: if
+            # it ever does, fall back to the global limits and log — never
+            # crash the request path with an unhandled exception.
             try:
                 rpm, burst = registry.effective_rate_limit(tenant_id, rpm, burst)
             except (
@@ -266,7 +282,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 path=request.url.path,
                 retry_after=retry_after,
             )
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=429,
                 content={
                     "error": "rate_limit_exceeded",
@@ -275,8 +291,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
                 headers={"Retry-After": str(retry_after)},
             )
+            await response(scope, receive, send)
+            return
 
-        response = cast("Response", await call_next(request))
-        response.headers["X-RateLimit-Limit"] = limit_header
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
-        return response
+        # Stamp the limit headers onto the downstream response by
+        # intercepting the http.response.start message (pure-ASGI equivalent
+        # of the old BaseHTTPMiddleware response-header mutation).
+        async def send_with_headers(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["X-RateLimit-Limit"] = limit_header
+                headers["X-RateLimit-Remaining"] = str(remaining)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
