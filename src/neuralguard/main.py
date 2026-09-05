@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from neuralguard.api.routes import router
+from neuralguard.api.routes_auth import router as auth_router
 from neuralguard.config.settings import NeuralGuardConfig, load_config, unknown_env_keys
 from neuralguard.logging.audit import AuditLogger
 from neuralguard.metrics import metrics
@@ -497,6 +498,27 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     audit_logger = AuditLogger(config.audit, siem_router=siem_router)
     app.state.audit_logger = audit_logger
 
+    # ── P2-4: JWT bearer auth + runtime key rotation ──
+    # JWT manager constructed only when jwt_enabled (validator guarantees the
+    # secret exists and is ≥32 chars). Key store constructed when a keys_file
+    # is configured; its keys merge into the SHARED runtime auth state that
+    # the middleware also holds — routes and middleware mutate the same map.
+    from neuralguard.auth.jwtauth import AuthRuntimeState, JwtManager, RuntimeKeyStore
+
+    jwt_manager = JwtManager(config.auth) if config.auth.jwt_enabled else None
+    app.state.jwt_manager = jwt_manager
+    key_store: RuntimeKeyStore | None = None
+    if config.auth.keys_file is not None:
+        key_store = RuntimeKeyStore(config.auth.keys_file)
+    app.state.key_store = key_store
+    auth_state = AuthRuntimeState(config.auth)
+    if key_store is not None:
+        for rt_key, rt_tenant in key_store.all_keys().items():
+            auth_state.add_key(rt_key, rt_tenant)
+    app.state.auth_state = auth_state
+    if jwt_manager is not None or key_store is not None:
+        app.include_router(auth_router)
+
     # ── Standalone appliance proxy (F9) ──
     # OFF by default; enabled = NeuralGuard becomes a transparent guardian.
     app.state.proxy_forwarder = None
@@ -561,7 +583,9 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
         redis_client=redis_client_for_mw,
         tenant_registry=app.state.tenant_registry,
     )
-    app.add_middleware(AuthMiddleware, settings=config.auth)
+    app.add_middleware(
+        AuthMiddleware, settings=config.auth, jwt_manager=jwt_manager, runtime_state=auth_state
+    )
     app.add_middleware(BodySizeMiddleware, max_bytes=config.server.max_request_body_bytes)
 
     # ── Routes ──

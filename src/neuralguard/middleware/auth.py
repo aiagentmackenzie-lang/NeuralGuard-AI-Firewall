@@ -21,6 +21,9 @@ import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+# Runtime import at bottom of module is avoided — jwtauth imports nothing
+# from middleware, so this is safe at module scope.
+from neuralguard.auth.jwtauth import AuthRuntimeState
 from neuralguard.metrics import metrics
 
 if TYPE_CHECKING:
@@ -67,12 +70,27 @@ def _constant_time_lookup(candidate: str, key_map: dict[str, str]) -> str | None
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Enforce API-key auth and bind requests to the authenticated tenant."""
+    """Enforce API-key auth and bind requests to the authenticated tenant.
 
-    def __init__(self, app: Any, settings: AuthSettings) -> None:
+    P2-4: when JWT auth is enabled, a Bearer token that is NOT a static key
+    is verified as a short-lived JWT (HS256 allowlist, exp enforced) and the
+    tenant comes from the token's ``tenant`` claim. Static keys always match
+    first (constant-time), so an API key never accidentally parses as a JWT.
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        settings: AuthSettings,
+        jwt_manager: Any | None = None,  # neuralguard.auth.jwtauth.JwtManager
+        runtime_state: Any | None = None,  # neuralguard.auth.jwtauth.AuthRuntimeState
+    ) -> None:
         super().__init__(app)
         self.settings = settings
-        self._key_map = settings.key_to_tenant()
+        # Shared live-key state: rotated keys (rotation API) are visible here
+        # because routes and middleware hold the SAME AuthRuntimeState.
+        self._state = runtime_state if runtime_state is not None else AuthRuntimeState(settings)
+        self._jwt_manager = jwt_manager
 
     async def dispatch(
         self,
@@ -106,7 +124,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
             metrics.record_auth_rejection("missing_key")
             return self._unauthorized("Missing API key")
 
-        tenant = _constant_time_lookup(candidate, self._key_map)
+        tenant = self._state.lookup(candidate)
+        if tenant is None and self._jwt_manager is not None:
+            # Not a static key — try JWT verification (P2-4). Bearer-only:
+            # an X-API-Key header is a key by definition, not a token.
+            if candidate != candidate.strip() or " " in candidate:
+                tenant = None
+            else:
+                tenant = self._jwt_manager.verify(candidate)
+                if tenant is None:
+                    metrics.record_auth_rejection("invalid_token")
         if tenant is None:
             logger.warning("auth_invalid_key", path=path)
             metrics.record_auth_rejection("invalid_key")

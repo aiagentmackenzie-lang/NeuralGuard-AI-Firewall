@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -250,6 +250,49 @@ class AuthSettings(BaseSettings):
         "a body/header tenant_id that disagrees is rejected with 403.",
     )
 
+    # ── P2-4: JWT bearer auth + runtime key rotation ──
+
+    jwt_enabled: bool = Field(
+        default=False,
+        description="Accept short-lived JWT bearer tokens (issued via POST /v1/auth/token)",
+    )
+    jwt_secret: str | None = Field(
+        default=None,
+        description="HS256 signing secret for issued tokens. Required (≥32 chars) when "
+        "jwt_enabled. Held server-side, never logged.",
+    )
+    jwt_ttl_minutes: int = Field(default=15, ge=1, le=1440, description="TTL for issued tokens")
+    admin_tenant: str = Field(
+        default="admin",
+        description="Tenant whose keys/tokens may call the rotation API",
+    )
+    keys_file: Path | None = Field(
+        default=None,
+        description=(
+            "Runtime key store (JSON) for the rotation API. Required for DURABLE "
+            "rotation: without it, rotation is runtime-only and refused in "
+            "production. Atomic writes, 0600."
+        ),
+    )
+
+    @field_validator("jwt_secret", mode="after")
+    @classmethod
+    def _validate_jwt_secret(cls, v: str | None, info: Any) -> str | None:
+        if v is None:
+            return v
+        if len(v) < 32:
+            raise ValueError(
+                "jwt_secret must be ≥32 characters (use a generated token, "
+                "e.g. `python3 -c 'import secrets; print(secrets.token_hex(32))'`)"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _jwt_requires_secret(self) -> AuthSettings:
+        if self.jwt_enabled and (not self.jwt_secret or len(self.jwt_secret) < 32):
+            raise ValueError("jwt_enabled=true requires NEURALGUARD_AUTH_JWT_SECRET (≥32 chars)")
+        return self
+
     @field_validator("api_keys", mode="before")
     @classmethod
     def parse_api_keys(cls, v: Any) -> list[str]:
@@ -325,8 +368,7 @@ class SiemSettings(BaseSettings):
     webhook_url: str | None = Field(
         default=None,
         description=(
-            "Generic JSON webhook sink (ELK webhook input, Sentinel Logic App, "
-            "any JSON collector)"
+            "Generic JSON webhook sink (ELK webhook input, Sentinel Logic App, any JSON collector)"
         ),
     )
     webhook_token: str | None = Field(

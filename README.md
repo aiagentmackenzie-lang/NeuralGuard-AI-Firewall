@@ -451,6 +451,16 @@ one alert per spike episode. Delivery is bounded (in-flight cap, drop + warn
 beyond it) and best-effort by design: routing is observability, delivery
 failures never affect verdicts.
 
+**JWT bearer auth + key rotation (P2-4).** In addition to static API keys:
+short-lived JWTs (`NEURALGUARD_AUTH_JWT_ENABLED`, HS256 with an alg
+allowlist, exp enforced) issued by `POST /v1/auth/token` in exchange for a
+valid credential — tokens are tenant-bound and flow through the same
+tenant-binding enforcement. Runtime key rotation via
+`POST /v1/auth/keys/rotate` (admin-tenant only), durable through
+`NEURALGUARD_AUTH_KEYS_FILE` (atomic 0600 writes); runtime-only rotation is
+refused in production. Residuals (documented follow-ups, not claimed):
+RS256/OIDC discovery, refresh tokens, Vault/SOPS integration.
+
 **Resource limits.** `docker-compose.yml` sets container memory/CPU limits so a
 decompression or regex bomb cannot OOM the host. The request body size is
 capped (`NEURALGUARD_MAX_REQUEST_BODY_BYTES`, default 1 MiB) and 413s
