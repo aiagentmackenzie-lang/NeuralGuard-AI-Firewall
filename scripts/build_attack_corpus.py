@@ -27,6 +27,14 @@ from pathlib import Path
 
 import numpy as np
 
+from neuralguard.semantic.hygiene import (
+    drop_benign_blocking_vectors,
+    drop_conversational_vectors,
+    load_benign_guard_probes,
+    split_benign_prefix_compounds,
+    split_system_marker_compounds,
+)
+
 # ── Custom frontier attack prompts (not in public datasets) ──────────────
 # These cover agentic attacks, MCP poisoning, memory injection, etc.
 # Aligned with OWASP Agentic Top 10 2026.
@@ -281,7 +289,11 @@ def deduplicate_corpus(
     return unique
 
 
-def build_corpus(max_samples: int, output_dir: str) -> None:
+def build_corpus(
+    max_samples: int,
+    output_dir: str,
+    benign_guard_path: str = "benchmarks/ng_vs_ns/benign_corpus.jsonl",
+) -> None:
     """Build the complete attack corpus with embeddings."""
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -308,17 +320,27 @@ def build_corpus(max_samples: int, output_dir: str) -> None:
     except Exception as exc:
         print(f"  ⚠️  deepset dataset failed: {exc}")
 
-    # 2. Deduplicate
+    # 2. F12 hygiene: split compounds, drop conversational noise (before dedup)
+    all_attacks, n_split = split_benign_prefix_compounds(all_attacks)
+    all_attacks, n_marker = split_system_marker_compounds(all_attacks)
+    all_attacks, dropped_conversational = drop_conversational_vectors(all_attacks)
+    print(
+        f"\n🧹 Hygiene: {n_split} connector compounds split, "
+        f"{n_marker} system-marker compounds split, "
+        f"{len(dropped_conversational)} conversational vectors dropped"
+    )
+    for text in dropped_conversational:
+        print(f"   dropped conversational: {text!r}")
+
+    # 2b. Deduplicate
     all_attacks = deduplicate_corpus(all_attacks)
     print(f"\n📊 After dedup: {len(all_attacks)} unique attacks")
 
     # 3. Cap at max_samples
     if len(all_attacks) > max_samples:
         # Keep frontier attacks, then sample from datasets
-        frontier = [
-            a for a in all_attacks if a["source"] != "neuralchemy" and a["source"] != "deepset"
-        ]
-        dataset_attacks = [a for a in all_attacks if a["source"] in ("neuralchemy", "deepset")]
+        frontier = [a for a in all_attacks if a.get("source") not in ("neuralchemy", "deepset")]
+        dataset_attacks = [a for a in all_attacks if a.get("source") in ("neuralchemy", "deepset")]
 
         # Shuffle dataset attacks for variety
         import random
@@ -331,14 +353,35 @@ def build_corpus(max_samples: int, output_dir: str) -> None:
 
     print(f"📊 Final corpus size: {len(all_attacks)} attacks")
 
-    # 4. Compute embeddings
-    print("\n🔄 Computing embeddings...")
+    # 3b. F12 benign guard: no vector may semantically BLOCK a known-benign
+    # probe. Mirrors the runtime regression gate at build time — corpus
+    # growth cannot reintroduce a benign BLOCK without failing the build.
     from neuralguard.config.settings import ScannerSettings
     from neuralguard.semantic.embedding import EmbeddingEngine
 
     settings = ScannerSettings()
     engine = EmbeddingEngine(settings)
     engine.load()
+
+    guard_file = Path(benign_guard_path)
+    if guard_file.exists():
+        probes = load_benign_guard_probes(guard_file)
+        probe_embs = engine.embed_batch(probes).astype(np.float32)
+        attack_embs = engine.embed_batch([a["text"] for a in all_attacks]).astype(np.float32)
+        all_attacks, dropped_guard = drop_benign_blocking_vectors(
+            all_attacks, attack_embs, probe_embs, settings.semantic_similarity_threshold
+        )
+        print(
+            f"🧹 Benign guard: dropped {len(dropped_guard)} vector(s) at "
+            f"≥{settings.semantic_similarity_threshold} similarity to known-benign probes"
+        )
+        for text, sim in dropped_guard:
+            print(f"   dropped benign-blocking ({sim:.3f}): {text!r}")
+    else:
+        print(f"⚠️  Benign guard probes not found at {guard_file} — guard skipped")
+
+    # 4. Compute embeddings
+    print("\n🔄 Computing embeddings...")
 
     # Batch embed for efficiency
     texts = [a["text"] for a in all_attacks]
@@ -408,8 +451,13 @@ def main() -> None:
         default="models",
         help="Output directory for .npy and .json files (default: models)",
     )
+    parser.add_argument(
+        "--benign-guard",
+        default="benchmarks/ng_vs_ns/benign_corpus.jsonl",
+        help="JSONL of benign probe prompts for the build-time benign guard (F12)",
+    )
     args = parser.parse_args()
-    build_corpus(args.max_samples, args.output_dir)
+    build_corpus(args.max_samples, args.output_dir, args.benign_guard)
 
 
 if __name__ == "__main__":
