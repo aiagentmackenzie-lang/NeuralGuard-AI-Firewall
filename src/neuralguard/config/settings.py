@@ -819,6 +819,82 @@ class ProxySettings(BaseSettings):
         return self.enabled and bool(self.upstream_url.strip())
 
 
+class McpGatewaySettings(BaseSettings):
+    """MCP gateway configuration (NG-7/NG-8).
+
+    OFF by default. Enabling turns NeuralGuard into an MCP gateway
+    (``POST /v1/mcp``): a JSON-RPC passthrough in front of one MCP server
+    (streamable-HTTP transport) that (a) decides per-tool intent on the
+    ``Mcp-Method`` / ``Mcp-Name`` headers BEFORE body parse (NG-8) and
+    (b) baselines the server's tool catalog and refuses rug pulls (NG-7).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NEURALGUARD_MCP_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable the MCP gateway routes. OFF by default.",
+    )
+    upstream_url: str = Field(
+        default="",
+        description="MCP server base URL (streamable-HTTP: a single JSON-RPC "
+        "endpoint). Required when enabled.",
+    )
+    timeout_seconds: float = Field(
+        default=30.0,
+        description="Upstream HTTP timeout for one forwarded JSON-RPC call.",
+    )
+    mode: Literal["strict", "advisory"] = Field(
+        default="strict",
+        description="NG-7 rug-pull posture. strict: catalog drift withholds "
+        "the changed catalog and refuses tool calls until an explicit "
+        "re-baseline. advisory: drift is alerted (audit + response header) "
+        "but the catalog passes — canary deployments only.",
+    )
+    server_id: str = Field(
+        default="default",
+        description="Logical id of the MCP server (one gateway = one upstream "
+        "in this build); audit events + baselines are keyed by it.",
+    )
+    signing_seed: str = Field(
+        default="",
+        description="Ed25519 seed (hex) used to SIGN baselines recorded by this "
+        "gateway (P2-10 crypto). Empty = unsigned baselines; drift detection "
+        "works either way — the signature makes baselines portable/verifiable "
+        "across workers. Server-side secret; never logged.",
+    )
+    verify_pubkey: str = Field(
+        default="",
+        description="Ed25519 public key (hex) pinned by the operator to VERIFY "
+        "registry-signed catalog changes. Empty = signature recovery path "
+        "disabled (operator re-baseline only).",
+    )
+    require_signature_on_change: bool = Field(
+        default=False,
+        description="When True, catalog drift resolves ONLY via a "
+        "signature-verified change — unsigned drift can never auto-recover "
+        "(the operator re-baseline remains available for planned migrations, "
+        "logged as such). Default False: drift resolves via operator action "
+        "too.",
+    )
+    headers_required: bool = Field(
+        default=True,
+        description="NG-8: require Mcp-Method (and Mcp-Name on tools/call) "
+        "headers on every gateway POST — the pre-parse Intent Gate seam. "
+        "When False the gate is bypassed by configuration (logged).",
+    )
+
+    @property
+    def is_configured(self) -> bool:
+        """Enabled AND pointed at an upstream."""
+        return self.enabled and bool(self.upstream_url.strip())
+
+
 class NeuralGuardConfig(BaseSettings):
     """Top-level configuration aggregating all sub-settings."""
 
@@ -846,6 +922,7 @@ class NeuralGuardConfig(BaseSettings):
     agent_guardian: AgentGuardianSettings = Field(default_factory=AgentGuardianSettings)
     canary: CanarySettings = Field(default_factory=CanarySettings)
     proxy: ProxySettings = Field(default_factory=ProxySettings)
+    mcp: McpGatewaySettings = Field(default_factory=McpGatewaySettings)
     siem: SiemSettings = Field(default_factory=SiemSettings)
 
 

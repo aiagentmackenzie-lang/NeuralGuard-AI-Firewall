@@ -28,6 +28,7 @@ from neuralguard.models.schemas import (
     LayerArbitrationResult,
     ScanOutputRequest,
     ScanOutputResponse,
+    Verdict,
 )
 
 if TYPE_CHECKING:
@@ -139,6 +140,44 @@ class AuditLogger:
             metadata={"canary_leaked": response.canary_leaked},
         )
 
+        self._persist(event)
+        return event
+
+    def log_mcp_event(
+        self,
+        *,
+        request_id: str,
+        tenant_id: str,
+        verdict: Verdict,
+        rule_id: str,
+        method: str | None,
+        tool: str | None,
+        details: dict[str, Any],
+        total_latency_ms: float,
+    ) -> AuditEvent:
+        """Create and persist an audit event for an MCP gateway decision (NG-7/8).
+
+        Same tamper-evident chain + SIEM routing as every other audit event —
+        rug-pull drift evidence and Intent Gate denials land in the SAME
+        hash-chained trail as scan verdicts, which is the whole point of
+        reusing the P2-10 machinery.
+        """
+        event = AuditEvent(
+            request_id=request_id,
+            tenant_id=tenant_id,
+            verdict=verdict,
+            findings_count=0,
+            threat_categories=[],
+            confidence=0.0,
+            total_latency_ms=total_latency_ms,
+            metadata={
+                "mcp": True,
+                "rule_id": rule_id,
+                "method": method,
+                "tool": tool,
+                **details,
+            },
+        )
         self._persist(event)
         return event
 
