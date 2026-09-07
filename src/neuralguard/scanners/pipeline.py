@@ -176,6 +176,22 @@ class ScannerPipeline:
                 logger.debug("hybrid_engine_unavailable", msg="semantic extra not installed")
         return self._hybrid_engine
 
+    def _tenant_semantic_block_threshold(self, request: EvaluateRequest) -> float | None:
+        """NG-6: resolve the per-tenant semantic BLOCK threshold, or None.
+
+        The tenant's sensitivity dial (FPR SLO counterpart). Returns None
+        when multi-tenant mode is off, the tenant has no config, or the
+        config inherits the global threshold. The scanner re-validates the
+        value at scan time (defense in depth against a bad tenant file).
+        """
+        registry = self._tenant_registry
+        if registry is None or not registry.enabled or request is None:
+            return None
+        overlay = registry.effective_scanner_overlay(request.tenant_id)
+        if overlay is None:
+            return None
+        return overlay.semantic_block_threshold
+
     def execute(self, request: EvaluateRequest) -> LayerArbitrationResult:
         """Run all enabled scanner layers, apply hybrid scoring, and arbitrate results."""
         start = time.perf_counter()
@@ -183,6 +199,13 @@ class ScannerPipeline:
         results: list[ScannerResult] = []
         all_findings: list[Finding] = []
         context: dict[str, Any] = {}
+
+        # NG-6: per-tenant semantic BLOCK threshold. Injected into the scan
+        # context BEFORE any scanner runs so the semantic layer maps verdicts
+        # with the tenant's own dial; every other layer ignores the key.
+        tenant_block_threshold = self._tenant_semantic_block_threshold(request)
+        if tenant_block_threshold is not None:
+            context["semantic_block_threshold"] = tenant_block_threshold
 
         logger.info(
             "pipeline_start",

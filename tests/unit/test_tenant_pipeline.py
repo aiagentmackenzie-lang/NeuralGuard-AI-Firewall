@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 from neuralguard.config.settings import (
     AgentGuardianSettings,
     NeuralGuardConfig,
+    ScannerSettings,
 )
-from neuralguard.models.schemas import EvaluateRequest, ScanLayer
+from neuralguard.models.schemas import EvaluateRequest, ScanLayer, Verdict
 from neuralguard.scanners.pipeline import ScannerPipeline
 from neuralguard.tenants.config import TenantScannerOverrides
 
@@ -122,3 +124,90 @@ class TestGetEnabledLayersTenantCeiling:
         )
         layers = pipeline.get_enabled_layers(request)
         assert layers == [ScanLayer.PATTERN]
+
+
+class TestTenantSemanticThresholdInjection:
+    """NG-6: the tenant's semantic BLOCK dial reaches the scanner via context."""
+
+    def _pipeline_with_semantic(self) -> ScannerPipeline:
+        config = NeuralGuardConfig(
+            scanner=ScannerSettings(semantic_enabled=True),
+        )
+        return ScannerPipeline(config)
+
+    def test_none_when_no_registry(self):
+        pipeline = self._pipeline_with_semantic()
+        req = EvaluateRequest(prompt="x", tenant_id="acme")
+        assert pipeline._tenant_semantic_block_threshold(req) is None
+
+    def test_none_when_tenant_has_no_override(self):
+        pipeline = self._pipeline_with_semantic()
+        pipeline.set_tenant_registry(_registry({"acme": TenantScannerOverrides()}))
+        req = EvaluateRequest(prompt="x", tenant_id="acme")
+        assert pipeline._tenant_semantic_block_threshold(req) is None
+
+    def test_override_resolved_for_tenant(self):
+        pipeline = self._pipeline_with_semantic()
+        pipeline.set_tenant_registry(
+            _registry(
+                {
+                    "acme": TenantScannerOverrides(semantic_block_threshold=0.65),
+                    "initech": TenantScannerOverrides(),
+                }
+            )
+        )
+        acme = EvaluateRequest(prompt="x", tenant_id="acme")
+        initech = EvaluateRequest(prompt="x", tenant_id="initech")
+        assert pipeline._tenant_semantic_block_threshold(acme) == 0.65
+        assert pipeline._tenant_semantic_block_threshold(initech) is None
+
+    def test_execute_injects_threshold_into_context(self):
+        """The semantic scanner's captured context carries the tenant dial."""
+        from neuralguard.models.schemas import ScannerResult
+
+        pipeline = self._pipeline_with_semantic()
+        pipeline.set_tenant_registry(
+            _registry({"acme": TenantScannerOverrides(semantic_block_threshold=0.65)})
+        )
+
+        captured: dict[str, Any] = {}
+
+        class RecordingSemanticScanner:
+            layer = ScanLayer.SEMANTIC
+
+            def safe_scan(self, request, context=None):
+                captured.update(context or {})
+                return ScannerResult(
+                    layer=ScanLayer.SEMANTIC,
+                    verdict=Verdict.ALLOW,
+                    findings=[],
+                    latency_ms=0.1,
+                )
+
+        pipeline.register_scanner(RecordingSemanticScanner())
+        result = pipeline.execute(EvaluateRequest(prompt="x", tenant_id="acme"))
+        assert result.verdict == Verdict.ALLOW
+        assert captured.get("semantic_block_threshold") == 0.65
+
+    def test_execute_no_injection_without_registry(self):
+        from neuralguard.models.schemas import ScannerResult
+
+        pipeline = self._pipeline_with_semantic()
+
+        captured: dict[str, Any] = {}
+
+        class RecordingSemanticScanner:
+            layer = ScanLayer.SEMANTIC
+
+            def safe_scan(self, request, context=None):
+                captured.update(context or {})
+                return ScannerResult(
+                    layer=ScanLayer.SEMANTIC,
+                    verdict=Verdict.ALLOW,
+                    findings=[],
+                    latency_ms=0.1,
+                )
+
+        pipeline.register_scanner(RecordingSemanticScanner())
+        pipeline.execute(EvaluateRequest(prompt="x", tenant_id="acme"))
+        assert "semantic_block_threshold" not in captured

@@ -113,6 +113,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if judge_scanner is not None:
         app.state.judge_warmup_ok = judge_scanner.warmup()
 
+    # NG-6: guarded-FPR SLO self-check. Measures how the LOADED semantic
+    # corpus treats the benign + hard-negative guard probes; logs the
+    # result loudly and stores it for /v1/info. Skipped when the semantic
+    # layer is not registered — an unavailable metric is never reported as
+    # zero. Enforcement is opt-in (semantic_fpr_slo_enforce): an SLO breach
+    # is a quality failure, not a safety failure, so the default posture is
+    # loud logging, not a boot refusal.
+    pipeline = getattr(app.state, "pipeline", None)
+    semantic_scanner = pipeline._scanners.get(ScanLayer.SEMANTIC) if pipeline else None
+    if semantic_scanner is not None:
+        fpr_log = structlog.get_logger("neuralguard").bind(component="fpr_slo")
+        try:
+            report = semantic_scanner.measured_fpr_report()
+        except Exception as exc:  # boot must not die on a metric
+            fpr_log.warning("fpr_slo_check_failed", error=str(exc))
+            report = None
+        app.state.semantic_fpr_report = report
+        if report is not None:
+            fpr_log.info(
+                "fpr_slo_measured",
+                guarded_fpr_percent=report["guarded_fpr_percent"],
+                slo_percent=report["slo_percent"],
+                slo_met=report["slo_met"],
+                benign_block_count=report["benign"]["block_count"],
+                benign_probes=report["benign"]["probes"],
+                hard_negative_block_count=report["hard_negatives"]["block_count"],
+                hard_negative_probes=report["hard_negatives"]["probes"],
+                enforced=report["enforced"],
+            )
+            if report["enforced"] and not report["slo_met"]:
+                raise RuntimeError(
+                    "FPR SLO enforcement failed: measured guarded FPR "
+                    f"{report['guarded_fpr_percent']}% exceeds the configured SLO "
+                    f"of {report['slo_percent']}% (see docs/FPR_SLO.md). Rebuild "
+                    "the corpus or raise the SLO deliberately."
+                )
+
     # Unknown NEURALGUARD_* env keys (F5): a typo'd or stale key is a silent
     # no-op today. Production refuses to start; dev/staging logs a loud
     # warning with the offending keys.

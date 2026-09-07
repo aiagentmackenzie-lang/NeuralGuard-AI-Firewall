@@ -534,8 +534,13 @@ async def info(
     Requires authentication (not in `public_endpoints`) so version/environment
     and scanner coverage are not disclosed to unauthenticated callers.
     """
-    _ = request  # auth enforced by AuthMiddleware on /v1/* (info is not public)
     from neuralguard.net.egress import is_private_endpoint
+
+    # NG-6: the guarded-FPR measurement taken at boot (None when the semantic
+    # layer is not registered or a guard file was missing — an unavailable
+    # metric is surfaced as null, never as zero). Auth-protected: reveals
+    # detection posture.
+    fpr_info: dict[str, Any] | None = getattr(request.app.state, "semantic_fpr_report", None)
 
     # F9/F10.3 posture: where does data go? Surfaced so nobody is surprised.
     proxy_info: dict[str, Any] | None = None
@@ -583,6 +588,8 @@ async def info(
         "api_version": "v1",
         "judge_egress": judge_egress,
         "proxy": proxy_info,
+        # NG-6: published guarded-FPR SLO + the boot measurement against it.
+        "semantic_fpr_slo": fpr_info,
     }
 
 

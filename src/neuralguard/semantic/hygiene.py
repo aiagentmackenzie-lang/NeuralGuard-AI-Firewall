@@ -145,6 +145,33 @@ def drop_conversational_vectors(
     return kept, dropped
 
 
+def drop_vectors_blocking_probes(
+    attacks: list[dict[str, Any]],
+    attack_embs: np.ndarray,
+    probe_embs: np.ndarray,
+    block_threshold: float,
+) -> tuple[list[dict[str, Any]], np.ndarray, list[tuple[str, float]]]:
+    """Drop any vector that would semantically BLOCK any guard probe.
+
+    Core guard used for BOTH probe sets (F12 benign corpus and the NG-6
+    NotInject-style hard negatives): no corpus vector may reach the runtime
+    BLOCK threshold (default 0.75) against a probe known to be benign —
+    such a vector is a pure false-positive generator.
+
+    Returns ``(kept, kept_embs, dropped)`` with ``kept_embs`` aligned to the
+    kept rows so callers never re-embed a large corpus after filtering.
+    """
+    # similarities: (n_attacks, n_probes); embeddings are L2-normalized
+    sims = attack_embs @ probe_embs.T
+    worst = sims.max(axis=1)
+    keep_mask = worst < block_threshold
+    dropped = [
+        (attacks[i]["text"], float(worst[i])) for i in range(len(attacks)) if not keep_mask[i]
+    ]
+    kept = [a for a, k in zip(attacks, keep_mask, strict=True) if k]
+    return kept, attack_embs[keep_mask], dropped
+
+
 def drop_benign_blocking_vectors(
     attacks: list[dict[str, Any]],
     attack_embs: np.ndarray,
@@ -157,19 +184,62 @@ def drop_benign_blocking_vectors(
     threshold (default 0.75) against any benign probe. This is the
     corpus-side mirror of the benign regression gate.
     """
-    # similarities: (n_attacks, n_probes); embeddings are L2-normalized
-    sims = attack_embs @ benign_embs.T
-    worst = sims.max(axis=1)
-    keep_mask = worst < block_threshold
-    dropped = [
-        (attacks[i]["text"], float(worst[i])) for i in range(len(attacks)) if not keep_mask[i]
-    ]
-    kept = [a for a, k in zip(attacks, keep_mask, strict=True) if k]
+    kept, _embs, dropped = drop_vectors_blocking_probes(
+        attacks, attack_embs, benign_embs, block_threshold
+    )
     return kept, dropped
 
 
+def blocking_report(
+    probe_texts: list[str],
+    probe_embs: np.ndarray,
+    corpus_embs: np.ndarray,
+    block_threshold: float,
+    escalate_floor: float,
+) -> dict[str, Any]:
+    """Probe-centric view of a guard set against a corpus (NG-6 FPR check).
+
+    The mirror image of ``drop_vectors_blocking_probes``: instead of asking
+    which corpus vectors to drop, ask how a FIXED corpus treats each guard
+    probe. This is what the runtime FPR SLO check measures — share of guard
+    probes the semantic layer would fail to cleanly ALLOW.
+
+    Returns a dict with ``probes`` count, ``block_count`` (worst corpus
+    similarity >= block threshold — an outright false positive),
+    ``escalate_count`` (in the ambiguous [escalate_floor, block) zone —
+    judge-resolvable, counted as pre-judge FPR), ``max_similarity``, and a
+    ``blockers`` list of the offending probes with their worst similarity.
+    """
+    sims = probe_embs @ corpus_embs.T  # (n_probes, n_corpus)
+    if sims.shape[1] == 0:
+        # Empty corpus: nothing can match — an all-ALLOW report, not an error.
+        return {
+            "probes": len(probe_texts),
+            "block_count": 0,
+            "escalate_count": 0,
+            "max_similarity": 0.0,
+            "blockers": [],
+        }
+    worst = sims.max(axis=1)
+    block_mask = worst >= block_threshold
+    escalate_mask = (worst >= escalate_floor) & ~block_mask
+    offenders = [
+        {"prompt": probe_texts[i], "max_similarity": float(worst[i])}
+        for i in range(len(probe_texts))
+        if block_mask[i]
+    ]
+    return {
+        "probes": len(probe_texts),
+        "block_count": int(block_mask.sum()),
+        "escalate_count": int(escalate_mask.sum()),
+        "max_similarity": float(worst.max()) if len(worst) else 0.0,
+        "blockers": offenders,
+    }
+
+
 def load_benign_guard_probes(path: Path) -> list[str]:
-    """Load the benign probe texts for the build-time benign guard."""
+    """Load benign probe texts (F12 benign corpus AND NG-6 hard negatives —
+    both files share the ``{"prompt": ...}`` row schema)."""
     probes: list[str] = []
     with open(path) as f:
         for line in f:
