@@ -65,6 +65,10 @@ tenants/*.yml
 tenants/*.json
 !tenants/example.yaml
 
+# Internal research ledgers are machine-local working documents (same policy as
+# PRODUCTION_HARDENING_PLAN.md); durable conclusions graduate into tracked docs.
+docs/RESEARCH_FRONTIER_2026.md
+
 # local dev secrets — never commit
 .env
 
