@@ -62,6 +62,24 @@ ZERO_WIDTH_CHARS = {
 
 ZW_PATTERN = re.compile("[" + "".join(ZERO_WIDTH_CHARS) + "]+")
 
+
+def _strip_marks_after_ascii(text: str) -> str:
+    """Remove combining marks (Mn) that directly follow an ASCII letter.
+
+    Detection-copy normalization only (NG-5): restores keyword integrity
+    under diacritic/combining-mark mutations without touching load-bearing
+    marks on non-ASCII bases (Devanagari, Arabic, Hangul, etc.).
+    """
+    out: list[str] = []
+    prev_ascii_letter = False
+    for ch in text:
+        if unicodedata.category(ch) == "Mn" and prev_ascii_letter:
+            continue  # drop the mark; the ASCII base keeps prev_ascii_letter True
+        out.append(ch)
+        prev_ascii_letter = ("a" <= ch <= "z") or ("A" <= ch <= "Z")
+    return "".join(out)
+
+
 # ── Encoding evasion patterns ────────────────────────────────────────────
 
 # Cap the length of a single base64 match we will attempt to decode. Longer
@@ -237,6 +255,19 @@ class StructuralScanner(BaseScanner["ScannerSettings"]):
 
         # 3. NFKD normalization
         normalized = unicodedata.normalize("NFKD", text)
+
+        # 3b. Latin-script combining-mark fold (NG-5 mutation-gate finding):
+        # NFKD("é") = "e" + U+0301, and a stray combining mark between ASCII
+        # letters breaks every literal keyword regex ("i\u0301gnore" no longer
+        # matches (?i)\bignore\b) — the diacritics mutation sailed through at
+        # 96.3% ASR on the NG-5 baseline run. Fold marks that directly follow
+        # an ASCII letter ONLY (precomposed Latin diacritics become their base
+        # letter). Marks after NON-ASCII bases (Devanagari viramas, Arabic
+        # harakat, Hangul jamo) are linguistically load-bearing and are kept —
+        # a blanket Mn-category strip would destroy legitimate non-Latin text.
+        # Detection-copy normalization only: the delivered payload is untouched.
+        if any(unicodedata.category(ch) == "Mn" for ch in normalized):
+            normalized = _strip_marks_after_ascii(normalized)
 
         # 4. Zero-width character detection and removal
         zw_matches = ZW_PATTERN.findall(normalized)
