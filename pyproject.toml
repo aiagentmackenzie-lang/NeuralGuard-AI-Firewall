@@ -1,6 +1,6 @@
 [project]
 name = "neuralguard"
-version = "0.2.0"
+version = "0.2.1"
 description = "LLM Guard / AI Application Firewall — defensive middleware for prompt injection, jailbreak detection, and agentic security"
 readme = "README.md"
 license = { text = "MIT" }
@@ -157,7 +157,7 @@ branch = true
 # suite with the semantic layer: the ONNX model is regenerated in CI
 # (scripts/export_onnx.py) and the 5.4x corpus is rebuilt from tracked
 # sources (scripts/rebuild_corpus_vectors.py) — the semantic tests no longer
-# skip. Measured 91.49% locally with the full model + corpus (P2-9 headroom
+# skip. Measured 91.50% locally with the full model + corpus (P2-9 headroom
 # tests landed the same day); 90% gates real regressions with margin for
 # shared-runner variance.
 fail_under = 90

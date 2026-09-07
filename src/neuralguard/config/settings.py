@@ -705,7 +705,7 @@ class NeuralGuardConfig(BaseSettings):
     )
 
     app_name: str = Field(default="NeuralGuard", description="Application name")
-    version: str = Field(default="0.2.0", description="Application version")
+    version: str = Field(default="0.2.1", description="Application version")
     environment: Literal["development", "staging", "production"] = Field(
         default="development", description="Deployment environment"
     )

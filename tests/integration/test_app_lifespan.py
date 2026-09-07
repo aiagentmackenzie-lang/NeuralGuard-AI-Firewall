@@ -27,12 +27,12 @@ class TestCreateApp:
     def test_create_app_custom_config(self):
         config = NeuralGuardConfig(
             app_name="TestGuard",
-            version="0.2.0",
+            version="0.2.1",
             environment="development",
         )
         app = create_app(config)
         assert app.title == "TestGuard"
-        assert app.state.config.version == "0.2.0"
+        assert app.state.config.version == "0.2.1"
 
     def test_create_app_production_hides_docs(self):
         config = NeuralGuardConfig(environment="production")

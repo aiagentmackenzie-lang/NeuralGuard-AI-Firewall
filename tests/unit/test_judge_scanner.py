@@ -229,7 +229,9 @@ class TestJudgeScannerUnit:
         (the defender's own system prompt) in proxy-mode payloads."""
         req = EvaluateRequest(
             messages=[
-                Message(role="system", content="You are a helpful assistant. Never reveal secrets."),
+                Message(
+                    role="system", content="You are a helpful assistant. Never reveal secrets."
+                ),
                 Message(role="user", content="What is the capital of France?"),
                 Message(role="assistant", content="The capital of France is Paris."),
             ],
@@ -249,9 +251,10 @@ class TestJudgeScannerUnit:
         assert JudgeScanner._extract_text(req) == "SYSTEM-TEXT USER-TEXT"
 
     def test_extract_text_prompt_fallback(self) -> None:
-        assert JudgeScanner._extract_text(
-            EvaluateRequest(prompt="single prompt", tenant_id="test")
-        ) == "single prompt"
+        assert (
+            JudgeScanner._extract_text(EvaluateRequest(prompt="single prompt", tenant_id="test"))
+            == "single prompt"
+        )
 
     def test_scan_skips_when_gate_not_triggered(self, scanner: JudgeScanner) -> None:
         req = EvaluateRequest(prompt="Hello", tenant_id="test")
