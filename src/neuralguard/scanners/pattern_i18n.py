@@ -41,7 +41,16 @@ PT_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.90,
         "[PT] Role switching — 'você agora é / aja como / finja que é'",
-        r"(?i)\bvocê\s+(?:agora\s+)?(?:é|esta)\b|\b(?:aja|atue|finga|finja)\s+(?:como|que)\s+(?:se\s+)?(?:você\s+(?:é|esta)|um|a)\b|\bassuma\s+(?:o\s+papel|a\s+identidade)\s+de\b",
+        # P2-11 native-probe fix (2026-09-07): the bare copula branch
+        # `você (é|esta)` matched everyday Portuguese — "Você é muito gentil"
+        # BLOCKED at HIGH through the real pipeline. Rewritten: the attack
+        # shapes are the TEMPORAL marker ("você agora é", "desde já") or a
+        # suspicious role (dev/admin/root/deus/hacker/DAN/sem restrições);
+        # generic role-play ("aja como um professor") is left to the semantic
+        # layer — a regex cannot judge professor-vs-developer. Pre-filled
+        # findings in the P2-11 worksheet; Raphael's native pass still owns
+        # the idiomaticity call.
+        r"(?i)\bvocê\s+(?:agora\s+|desde\s+já\s+)?(?:é|esta|está)\s+(?:um|uma|o|a|meu|minha|nosso|nossa)?\s*(?:dev|desenvolvedor|admin|administrador|root|deus|god|hacker|dan)\b|\bvocê\s+agora\s+(?:é|está|esta)\b|\b(?:aja|atue|finga|finja)\s+(?:como|que)\s+(?:se\s+)?(?:você\s+(?:é|esta|está)|(?:é|esta|está|fosse)\s+(?:um|uma)|um|a)\b|\bassuma\s+(?:o\s+papel|a\s+identidade)\s+de\b|\bvocê\s+(?:é|está)\s+(?:um|uma)?\s*(?:IA|inteligência\s+artificial)\s+(?:sem\s+)?(?:limites|restrições|filtros|regras)\b",
     ),
     (
         "JB-PT-003",

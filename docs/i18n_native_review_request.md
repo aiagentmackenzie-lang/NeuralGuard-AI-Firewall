@@ -58,6 +58,43 @@ not fully happened) and fixed the same day:
 mechanical fixes cannot judge idiomaticity, real-world attack phrasing, or
 false-positive likelihood in each language.
 
+## DESCOPE DECISION (2026-09-07, Mackenzie lead call) — how this actually closes
+
+All 10 languages at once was never going to happen. Split:
+
+**P2-11a — Portuguese (Raphael, ~10 min, native speaker).** The FP probe
+mechanically found a production bug in the PT patterns BEFORE the native
+pass: bare `você (é|esta)` matched everyday Portuguese — **"Você é muito
+gentil, obrigado pela ajuda!" BLOCKED at HIGH** through the real pipeline.
+Fixed the same day (recall preserved: "você agora é", suspicious roles,
+"finga que é" — which also had a pre-existing recall gap against its own
+docstring shape, found by the same probe). Pre-filled worksheet below.
+
+> **WORKSHEET — PT (Raphael, 5 patterns, ~10 min):**
+> 1. `PI-D-PT-001` — "esqueça as instruções" fires HIGH/BLOCK on *"Esqueça
+>    as instruções antigas do manual e use a versão nova."* Attack phrase
+>    family is correct for an LLM context; is the benign-office reading
+>    common enough to deserve MEDIUM/SANITIZE instead? **OK / REWRITE?**
+> 2. `PI-D-PT-002` — generic role-play still matches: *"Aja como um
+>    professor de inglês e corrija meu texto"* → BLOCK. My recommendation:
+>    consider MEDIUM (SANITIZE) for the `aja/atue/finga/finja como` branch
+>    since professor-vs-developer is not mechanically distinguishable.
+>    **Your call.**
+> 3. Attack-recall: what PT phrasings would a REAL Brazilian attacker type
+>    that these five patterns miss? (e.g. "obedeça", "desconsidere", "sua
+>    nova instrução é"…) List them; they become new patterns.
+> 4. Any everyday sentence you type that trips these? Send it; it becomes a
+>    probe + fix.
+>
+> Reply with OK/REWRITE per item — done.
+
+**P2-11b — the other 8 languages (DE FR ZH JA KO RU AR VI): DEFERRED with
+the residual admission already carried in the README.** Re-open per
+deployment: when NeuralGuard actually serves users of language X, that
+language's native review becomes a deployment prerequisite. The mechanical
+self-audit (all 10 defects now fixed) + the semantic corpus as second line
+is the interim posture.
+
 | # | Pattern | Defect | Class |
 |:--|:--|:--|:--|
 | 1 | DE PI-D-DE-001 | `annuliere` — misspelled; correct German is **annulliere** (double l). The pattern only matches the misspelling today. | Real bug (FN) |
