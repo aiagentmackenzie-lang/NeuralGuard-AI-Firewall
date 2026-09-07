@@ -618,6 +618,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
                 "have nowhere to forward. Set NEURALGUARD_MCP_UPSTREAM_URL."
             )
         from neuralguard.mcp.baseliner import McpBaseliner
+        from neuralguard.mcp.provenance import ProvenanceGate
         from neuralguard.mcp.transport import McpTransport
 
         app.state.mcp_transport = McpTransport(config.mcp)
@@ -628,6 +629,12 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             verify_pubkey_hex=config.mcp.verify_pubkey or None,
             require_signature_on_change=config.mcp.require_signature_on_change,
         )
+        app.state.mcp_provenance = ProvenanceGate(
+            mode=config.mcp.provenance_mode,
+            ttl_seconds=config.mcp.provenance_ttl_seconds,
+            max_sessions=config.mcp.provenance_max_sessions,
+            require_session=config.mcp.provenance_require_session,
+        )
         structlog.get_logger("neuralguard").info(
             "mcp_gateway_enabled",
             server_id=config.mcp.server_id,
@@ -636,6 +643,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             headers_required=config.mcp.headers_required,
             signed_baselines=bool(config.mcp.signing_seed),
             require_signature_on_change=config.mcp.require_signature_on_change,
+            provenance_mode=config.mcp.provenance_mode,
             msg="MCP gateway ENABLED (NG-7/NG-8). Intent Gate on headers "
             "pre-body-parse; tool-catalog rug-pull detection "
             f"({config.mcp.mode} mode).",

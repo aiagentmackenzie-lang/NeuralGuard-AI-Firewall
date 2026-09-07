@@ -889,6 +889,36 @@ class McpGatewaySettings(BaseSettings):
         "When False the gate is bypassed by configuration (logged).",
     )
 
+    # NG-9: provenance-lite egress binding (opt-in; off by default).
+    provenance_mode: Literal["off", "warn", "block"] = Field(
+        default="off",
+        description="NG-9: when on, tool-result content passing through the "
+        "gateway taints the session window and egress-capable tool calls "
+        "(tenant-classified) have their arguments checked for tainted "
+        "content before forwarding. warn = alert + allow (audit event); "
+        "block = refuse the call (fail-closed). Normalized exact-copy "
+        "detection — paraphrase evasion is CaMeL-class, out of scope.",
+    )
+    provenance_ttl_seconds: int = Field(
+        default=3600,
+        ge=1,
+        le=86400,
+        description="NG-9: taint window TTL per session.",
+    )
+    provenance_max_sessions: int = Field(
+        default=1000,
+        ge=1,
+        le=100_000,
+        description="NG-9: LRU cap on tracked sessions (bounded memory).",
+    )
+    provenance_require_session: bool = Field(
+        default=False,
+        description="NG-9 fail-closed edge: when True (and mode != off), an "
+        "egress tool call with no Mcp-Session-Id is REFUSED — the gateway "
+        "cannot attribute taint, so it does not guess. Session-less clients "
+        "otherwise share the tenant-level taint window (documented).",
+    )
+
     @property
     def is_configured(self) -> bool:
         """Enabled AND pointed at an upstream."""

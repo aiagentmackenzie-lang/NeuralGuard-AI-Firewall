@@ -79,6 +79,17 @@ class McpToolPolicy(BaseModel):
         default=ToolAction.ALLOW,
         description="Action for a method with no explicit rule.",
     )
+    egress_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "NG-9: tools this tenant classifies as EGRESS-CAPABLE (send data "
+            "outside the trust boundary: email, HTTP post, upload, ...). "
+            "Provenance checks apply only to these; internal tools pass "
+            "regardless. The operator chooses the mode globally "
+            "(NEURALGUARD_MCP_PROVENANCE_MODE) — the tenant knows its own "
+            "tools."
+        ),
+    )
 
     def action_for(self, method: str, tool: str | None) -> ToolAction:
         """Most-restrictive-wins resolution for one intent.
@@ -110,6 +121,7 @@ class McpToolPolicy(BaseModel):
             "method_rules": {k: v.value for k, v in sorted(self.method_rules.items())},
             "default_tool_action": self.default_tool_action.value,
             "default_method_action": self.default_method_action.value,
+            "egress_tools": sorted(self.egress_tools),
         }
 
 

@@ -71,6 +71,44 @@ When strict mode poisons the gateway (drift detected):
 3. **Unexpected change**: treat as an incident. The baseline state machine
    refused every tool call in the meantime — containment was automatic.
 
+## NG-9 — Provenance-lite egress binding (opt-in)
+
+The final frontier control: tool-result content passing through the gateway
+TAINTS the session window (keyed on the spec's `Mcp-Session-Id` header), and
+calls to tenant-classified **egress tools** get their arguments checked for
+tainted content BEFORE forwarding.
+
+- Classification is per-tenant (`mcp.egress_tools` in the tenant file — the
+  tenant knows its own tools); the posture is operator-global:
+  `NEURALGUARD_MCP_PROVENANCE_MODE` = `off` (default) | `warn` | `block`.
+- Matching is over **normalized 4-word shingles** + long-token (≥32 char)
+  prefix fingerprints — partial quotes of ≥4 contiguous words and verbatim
+  base64/hex blobs are caught; case/whitespace/zero-width tricks do not
+  evade (the comparison form strips them).
+- `warn` = alert + allow (audit event `provenance_warned` +
+  `X-NeuralGuard-Mcp-Provenance: tainted-warn`); `block` = 403
+  `MCP-PROV-001` (tainted arguments never leave the trust boundary).
+- Fail-closed edge: `NEURALGUARD_MCP_PROVENANCE_REQUIRE_SESSION=true` +
+  mode on → an egress call with NO session header is REFUSED
+  (`MCP-PROV-002`) — un-attributable calls do not bypass taint attribution.
+  Without it, session-less clients share the tenant-level taint window.
+- Sessions are LRU-bounded (`PROVENANCE_MAX_SESSIONS`) and TTL'd
+  (`PROVENANCE_TTL_SECONDS`); in-memory per worker (same posture as the
+  baselines).
+
+**Detection boundary (honest):** word-order scrambling that breaks every
+contiguous 4-word sequence, and paraphrase generally, are NOT caught — that
+is CaMeL-class data-flow enforcement, deliberately out of scope for a
+middleware. What NG-9 stops is the dominant real shape: tool-output content
+(p planted instructions, secrets, dumped configs) flowing verbatim into an
+outbound tool call.
+
+**Ordering guarantee (hardened after the NG-9 integration tests caught a
+route-ordering regression):** tools/call baseline + provenance checks run
+BEFORE the upstream forward — a refused call is never executed. Only
+`tools/list` forwards before its check (you cannot baseline a catalog you
+have not fetched).
+
 ## Honest limits (documented, not hidden)
 
 - **In-memory baselines per worker.** Restart → `BASELINE_RECREATED_RESTART`
@@ -80,9 +118,9 @@ When strict mode poisons the gateway (drift detected):
   gateway per MCP server (compose service) meanwhile.
 - **JSON responses only.** SSE/streaming MCP sessions are refused (422
   posture parity with the chat proxy) — unscanned streams must not pass.
-- **Tool RESULT content** is forwarded as-is in this build; scanning tool
-  output through the existing output-scan semantics is the immediate
-  follow-up (the indirect-injection-in-tool-results class).
+- **Tool RESULT content** is taint-fingerprinted (NG-9) but not yet
+  scanned through the output-scan pattern semantics — that remains the
+  immediate follow-up for the indirect-injection-in-tool-results class.
 - **ESCALATE = refuse + audit** in this build. A human-approval callback
   flow is future work.
 
