@@ -1,12 +1,14 @@
 """Tests for JudgeScanner — Layer 4 LLM-as-Judge.
 
 Unit tests mock Ollama calls. Integration tests require a running
-Ollama instance with the configured model.
+Ollama instance with the configured model (default mistral:7b — the
+settings default; override with NEURALGUARD_TEST_JUDGE_MODEL).
 """
 
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -24,13 +26,20 @@ from neuralguard.models.schemas import (
 )
 from neuralguard.semantic.judge import CircuitBreaker, CircuitState, JudgeScanner
 
+# Judge model for the live integration tests. Captured at MODULE IMPORT time
+# (before the conftest hermetic fixture purges NEURALGUARD_* per-test — same
+# pattern as NEURALGUARD_TEST_PG_URL in test_audit_verify_pg.py). Defaults to
+# the settings default (mistral:7b); override when the local roster changes.
+JUDGE_TEST_MODEL = os.environ.get("NEURALGUARD_TEST_JUDGE_MODEL", "mistral:7b")
+OLLAMA_BASE_URL = "http://localhost:11434"
+
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
 def settings() -> ScannerSettings:
     """Default settings with judge enabled."""
-    return ScannerSettings(judge_enabled=True, judge_model="gemma3:4b")
+    return ScannerSettings(judge_enabled=True, judge_model=JUDGE_TEST_MODEL)
 
 
 @pytest.fixture
@@ -426,23 +435,40 @@ class TestJudgeScannerUnit:
 class TestJudgeScannerIntegration:
     """Integration tests requiring a running Ollama instance.
 
-    Run `ollama serve` and `ollama pull gemma3:4b` first.
+    Run `ollama serve` and `ollama pull mistral:7b` first (or set
+    NEURALGUARD_TEST_JUDGE_MODEL to any model present in the daemon).
     """
 
     @pytest.fixture
     def live_scanner(self) -> JudgeScanner:
         s = ScannerSettings(
             judge_enabled=True,
-            judge_model="gemma3:4b",
+            judge_model=JUDGE_TEST_MODEL,
             judge_timeout_seconds=10,  # real model inference needs headroom (F10.1)
         )
         scanner = JudgeScanner(s)
-        # Verify Ollama is reachable
+        # Skip-guard: Ollama must be reachable AND the configured model must
+        # actually exist. The old guard only checked daemon reachability, so a
+        # changed model roster turned every live test into a hard failure.
+        # Query /api/tags and match the model name exactly.
         try:
             with httpx.Client(timeout=3) as client:
-                client.get("http://localhost:11434/api/tags")
+                tags = client.get(f"{OLLAMA_BASE_URL}/api/tags")
+                tags.raise_for_status()
+            present = {m.get("name", "") for m in tags.json().get("models", [])}
+            if JUDGE_TEST_MODEL not in present:
+                pytest.skip(
+                    f"judge model {JUDGE_TEST_MODEL!r} not in the Ollama roster "
+                    f"(available: {sorted(present)}) — pull it or set "
+                    "NEURALGUARD_TEST_JUDGE_MODEL"
+                )
         except Exception:
             pytest.skip("Ollama not running or model not available")
+        # Warm the model once (mirrors the production lifespan warmup, F10.5):
+        # a cold model load otherwise counts toward the first test's latency
+        # and can flake the timeout assertion. Non-fatal — failures skip below
+        # via the same per-test guard the scanner applies.
+        scanner.warmup()
         return scanner
 
     def test_judge_blocks_attack(self, live_scanner: JudgeScanner) -> None:
