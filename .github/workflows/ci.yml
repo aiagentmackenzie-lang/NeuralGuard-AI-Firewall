@@ -79,6 +79,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [test]
+    services:
+      # P2-10 close-out: the pg audit-verify live-fire tests run in CI too —
+      # "tested live on the dev Mac" is not enforcement; per-PR enforcement is.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: drillpg
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      NEURALGUARD_TEST_PG_URL: postgresql+asyncpg://postgres:drillpg@127.0.0.1:55432/postgres
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
