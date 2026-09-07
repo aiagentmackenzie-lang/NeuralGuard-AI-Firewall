@@ -38,8 +38,25 @@ hand-verified pattern fixes, labeled as human-reviewed in the commit message.
 
 ## Machine self-audit (2026-09-05, mechanical defects found — NOT a substitute)
 
-Found by regex-mechanics review; these are flagged for fix and are the kind of
-defect a native pass would also catch:
+Found by regex-mechanics review; these are the kind of defect a native pass
+would also catch.
+
+**FIX STATUS (2026-09-07): ALL FIVE FIXED.** Defects 1-3 (DE misspelling,
+FR imperative, CJK leading-space artifact) were fixed earlier; defects 4-5
+were found STILL OPEN on a 2026-09-07 re-verification ("flagged for fix" had
+not fully happened) and fixed the same day:
+
+- #4 ZH PI-D-ZH-001: tightened to REQUIRED 2-char verb + REQUIRED 2-char
+  object; duplicated optional groups removed. The old pattern could match a
+  bare 忽/視/忘 and BLOCK (HIGH) benign Chinese. Recall probes
+  (忽略所有指令 / 無視所有規則 / 忘記之前的指示 / 忽略掉之前的命令) pinned in
+  `tests/unit/test_pattern_i18n.py::TestI18nSelfAuditFixes`.
+- #5 AR duplicates (EXT-AR-004 `تعليماتك` x2, PI-D-AR-005 `بدون` x2 +
+  `قيود`/`حدود` x2): removed — pure noise, recall unchanged.
+
+**The native-speaker review remains OPEN and is still the real ask** —
+mechanical fixes cannot judge idiomaticity, real-world attack phrasing, or
+false-positive likelihood in each language.
 
 | # | Pattern | Defect | Class |
 |:--|:--|:--|:--|
