@@ -14,6 +14,7 @@ jobs:
   lint:
     name: Lint (ruff + mypy)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -39,6 +40,7 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +77,7 @@ jobs:
   coverage:
     name: Coverage gate (90%, full semantic layer)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -118,6 +121,7 @@ jobs:
   security:
     name: Security scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -147,6 +151,7 @@ jobs:
   sbom:
     name: Generate SBOM (CycloneDX)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [test]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -192,6 +197,7 @@ jobs:
   sbom-sign:
     name: Sign + attest SBOM (keyless cosign)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [sbom]
     permissions:
       contents: read
@@ -251,6 +257,7 @@ jobs:
   boot-smoke:
     name: Boot smoke (uvicorn + HTTP)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [lint, test]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -282,6 +289,7 @@ jobs:
   semantic-smoke:
     name: Semantic extra smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [test]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0

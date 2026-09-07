@@ -19,6 +19,7 @@ jobs:
   bench-a1:
     name: A1 deterministic regression gate (ASR=0, FPR<2%)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -57,6 +58,7 @@ jobs:
   bench-a2-live:
     name: A2 live NeuralStrike (pattern_only, informational)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     continue-on-error: true
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -122,6 +124,7 @@ jobs:
   bench-b4-deterministic:
     name: B4 deterministic multi-turn gate (no model)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
