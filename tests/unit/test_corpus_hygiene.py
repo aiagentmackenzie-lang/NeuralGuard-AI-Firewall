@@ -329,9 +329,7 @@ class TestBlockingReport:
         probes = ["p1", "p2", "p3"]
         # p1 aligns with c_block (sim 1.0 → BLOCK); p2 lands at 0.7071 with
         # c_amb (escalate zone); p3 is orthogonal to both (clean ALLOW).
-        probe_embs = np.array(
-            [[1, 0], [0, 1], [-0.7071, 0.7071]], dtype=np.float32
-        )
+        probe_embs = np.array([[1, 0], [0, 1], [-0.7071, 0.7071]], dtype=np.float32)
         corpus_embs = np.array([[1, 0], [0.7071, 0.7071]], dtype=np.float32)
         report = blocking_report(probes, probe_embs, corpus_embs, 0.75, 0.60)
         assert report["probes"] == 3
