@@ -38,19 +38,19 @@ data:
   # JUDGE_MODEL: "mistral:7b"
   # JUDGE_TIMEOUT_SECONDS: "10"
   # ── Agent Guardian (F4: shared state via redis) ──
+  # NEURALGUARD_AGENT_GUARDIAN_REDIS_URL and NEURALGUARD_RATELIMIT_REDIS_URL
+  # are set on the Deployment (they embed the redis credential from the
+  # Secret — non-secret config lives here, credentials do not).
   NEURALGUARD_AGENT_GUARDIAN_ENABLED: "true"
   NEURALGUARD_AGENT_GUARDIAN_BACKEND: "redis"
-  NEURALGUARD_AGENT_GUARDIAN_REDIS_URL: "redis://redis:6379/1"
   # ── Rate limiting (shared across replicas via redis) ──
   NEURALGUARD_RATELIMIT_ENABLED: "true"
   NEURALGUARD_RATELIMIT_BACKEND: "redis"
-  NEURALGUARD_RATELIMIT_REDIS_URL: "redis://redis:6379/0"
   NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE: "120"
   NEURALGUARD_RATELIMIT_BURST_SIZE: "20"
   # ── Audit ── (postgres backend; password from Secret)
   NEURALGUARD_AUDIT_BACKEND: "postgres"
   NEURALGUARD_AUDIT_JSONL_PATH: "/data/audit"
-  # ── SIEM routing (P2-7) — off by default, see siem.py for all knobs ──
+  # ── SIEM routing (P2-7) — off by default; see SiemSettings for all knobs ──
   # NEURALGUARD_SIEM_ENABLED: "true"
-  # NEURALGUARD_SIEM_SINKS: "scarletai"
   # NEURALGUARD_SIEM_SCARLETAI_URL: "http://scarletai-api.other-namespace.svc:8000"

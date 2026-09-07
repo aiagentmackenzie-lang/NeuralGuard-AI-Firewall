@@ -76,6 +76,20 @@ spec:
                 secretKeyRef:
                   name: neuralguard-secrets
                   key: postgres-password
+            # Redis shared-state backends (rate limit + AG) — the URLs embed
+            # the requirepass credential, so they live HERE (Secret-driven
+            # $(VAR) interpolation), not in the non-secret ConfigMap. The
+            # password ref must be defined EARLIER in this list than its
+            # consumers.
+            - name: NEURALGUARD_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: neuralguard-secrets
+                  key: redis-password
+            - name: NEURALGUARD_AGENT_GUARDIAN_REDIS_URL
+              value: "redis://:$(NEURALGUARD_REDIS_PASSWORD)@redis:6379/1"
+            - name: NEURALGUARD_RATELIMIT_REDIS_URL
+              value: "redis://:$(NEURALGUARD_REDIS_PASSWORD)@redis:6379/0"
             # K8s $(VAR) interpolation resolves from env defined EARLIER in
             # this same list — the password ref above is deliberately first.
             - name: NEURALGUARD_AUDIT_POSTGRES_URL

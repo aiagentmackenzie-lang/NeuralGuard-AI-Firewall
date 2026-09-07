@@ -24,10 +24,27 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
-          args: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
-          # noeviction: dropping rate-limit or AG keys silently would weaken
-          # the controls; bounded maxmemory + persistence-free is the honest
-          # tradeoff for this state class.
+          # requirepass: the rate-limit and AG-state backends are shared
+          # security state (mirrors the appliance compose posture) — the
+          # password comes from neuralguard-secrets (redis-password key).
+          args:
+            - "redis-server"
+            - "--maxmemory"
+            - "256mb"
+            - "--maxmemory-policy"
+            - "noeviction"
+            - "--requirepass"
+            - "$(REDIS_PASSWORD)"
+          # REDISCLI_AUTH authenticates the probes without the password on a
+          # process command line.
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: neuralguard-secrets
+                  key: redis-password
+            - name: REDISCLI_AUTH
+              value: "$(REDIS_PASSWORD)"
           ports:
             - containerPort: 6379
               name: redis

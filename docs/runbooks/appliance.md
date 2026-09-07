@@ -12,12 +12,15 @@ verdict-shaped response.
 - **Auth ON** — callers authenticate with NeuralGuard API keys (`NEURALGUARD_AUTH_API_KEYS`,
   format `<key>|<tenant>`, comma-separated). The UPSTREAM key
   (`NEURALGUARD_PROXY_UPSTREAM_API_KEY`) is held server-side, never logged.
-- **Agent Guardian + rate limiting share state via Redis** (multi-worker safe).
+- **Agent Guardian + rate limiting share state via Redis** (multi-worker safe,
+  requirepass-authenticated — `REDIS_PASSWORD` is required; use hex so it
+  embeds URL-safely).
 - **Audit**: JSONL (`/data/audit`, hash-chained per worker — verify with
   `uv run neuralguard audit-verify /data/audit` inside the container — the
   script lives in the venv, not on PATH: `docker compose
   -f docker-compose.appliance.yml exec neuralguard uv run neuralguard
-  audit-verify /data/audit`) or Postgres.
+  audit-verify /data/audit`) or Postgres (`POSTGRES_PASSWORD` required —
+  no insecure default; the old `change-me-appliance` fallback is dead).
 - **Judge**: local Ollama (`mistral:7b` default). RAM sizing: judge model + 1
   GB per worker + redis + postgres. `qwen3.8:27b` needs ~20 GB and a raised
   `NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS` (~30-60 s; it evaluates in
@@ -30,6 +33,8 @@ export NG_HOST_PORT=8000
 export NEURALGUARD_AUTH_API_KEYS="ng_appliance_key_change_me|default"
 export NEURALGUARD_CANARY_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export NEURALGUARD_PROXY_UPSTREAM_URL="http://host.docker.internal:11434/v1"
+export POSTGRES_PASSWORD="$(openssl rand -hex 24)"   # required — no insecure default
+export REDIS_PASSWORD="$(openssl rand -hex 24)"      # required; hex = URL-safe in redis:// URLs
 docker compose -f docker-compose.appliance.yml up -d
 curl -s "http://127.0.0.1:8000/v1/health"
 ```
