@@ -101,9 +101,42 @@ class TestAuditEventORM:
             "worker_id",
             "prev_hash",
             "event_hash",
+            "event_sig",
         }
         actual_columns = {c.name for c in AuditEventORM.__table__.columns}
         assert expected_columns == actual_columns
+
+    def test_orm_event_sig_accepts_signature_hex(self):
+        """P2-10: the postgres row carries the Ed25519 signature at rest.
+
+        The pg insert previously dropped event_sig (JSONL kept it) — a
+        postgres-audit deployment could never signature-verify its events.
+        """
+        sig_hex = "ab" * 64  # 64-byte Ed25519 signature, hex-encoded = 128 chars
+        orm = AuditEventORM(
+            event_id=uuid.uuid4(),
+            request_id=str(uuid.uuid4()),
+            tenant_id="acme",
+            timestamp=datetime.now(UTC),
+            verdict="block",
+            worker_id="w1",
+            prev_hash="c" * 64,
+            event_hash="d" * 64,
+            event_sig=sig_hex,
+        )
+        assert orm.event_sig == sig_hex
+        # Nullable: unsigned deployments (no NEURALGUARD_AUDIT_SIGNING_KEY)
+        # must still insert cleanly.
+        assert (
+            AuditEventORM(
+                event_id=uuid.uuid4(),
+                request_id=str(uuid.uuid4()),
+                tenant_id="acme",
+                timestamp=datetime.now(UTC),
+                verdict="allow",
+            ).event_sig
+            is None
+        )
 
     def test_orm_composite_index_exists(self):
         """Verify the tenant+timestamp composite index is defined."""

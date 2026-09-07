@@ -50,6 +50,10 @@ class AuditEventORM(Base):
     worker_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     event_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    # P2-10: Ed25519 signature (hex, 128 chars) over event_hash. Persisted so a
+    # postgres-audit deployment keeps its signatures at rest; previously only
+    # the JSONL path carried event_sig (the pg insert dropped it).
+    event_sig: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (Index("ix_audit_tenant_timestamp", "tenant_id", "timestamp"),)
 

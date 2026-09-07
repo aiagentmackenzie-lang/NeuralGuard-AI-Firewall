@@ -142,6 +142,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # Create tables if they don't exist (dev/staging convenience)
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                # P2-10: event_sig was added to the ORM after the first
+                # release — create_all does NOT alter existing tables, so add
+                # the column idempotently (existing postgres-audit deployments
+                # would otherwise fail every INSERT with "column does not
+                # exist" and silently fall back to JSONL).
+                from sqlalchemy import text as _text
+
+                await conn.execute(
+                    _text(
+                        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS event_sig VARCHAR(128)"
+                    )
+                )
             structlog.get_logger("neuralguard").info("db_tables_created", backend="postgres")
         except ImportError:
             structlog.get_logger("neuralguard").warning(

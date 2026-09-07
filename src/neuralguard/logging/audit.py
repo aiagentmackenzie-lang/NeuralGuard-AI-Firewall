@@ -234,6 +234,10 @@ class AuditLogger:
                 worker_id=event.worker_id,
                 prev_hash=event.prev_hash,
                 event_hash=event.event_hash,
+                # P2-10: persist the Ed25519 signature at rest — previously
+                # only the JSONL path carried event_sig; the DB row could not
+                # be signature-verified later.
+                event_sig=event.event_sig,
             )
 
             # Schedule the async insert — fire-and-forget WITH backpressure.
