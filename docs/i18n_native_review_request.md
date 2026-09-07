@@ -38,8 +38,62 @@ hand-verified pattern fixes, labeled as human-reviewed in the commit message.
 
 ## Machine self-audit (2026-09-05, mechanical defects found — NOT a substitute)
 
-Found by regex-mechanics review; these are flagged for fix and are the kind of
-defect a native pass would also catch:
+Found by regex-mechanics review; these are the kind of defect a native pass
+would also catch.
+
+**FIX STATUS (2026-09-07): ALL FIVE FIXED.** Defects 1-3 (DE misspelling,
+FR imperative, CJK leading-space artifact) were fixed earlier; defects 4-5
+were found STILL OPEN on a 2026-09-07 re-verification ("flagged for fix" had
+not fully happened) and fixed the same day:
+
+- #4 ZH PI-D-ZH-001: tightened to REQUIRED 2-char verb + REQUIRED 2-char
+  object; duplicated optional groups removed. The old pattern could match a
+  bare 忽/視/忘 and BLOCK (HIGH) benign Chinese. Recall probes
+  (忽略所有指令 / 無視所有規則 / 忘記之前的指示 / 忽略掉之前的命令) pinned in
+  `tests/unit/test_pattern_i18n.py::TestI18nSelfAuditFixes`.
+- #5 AR duplicates (EXT-AR-004 `تعليماتك` x2, PI-D-AR-005 `بدون` x2 +
+  `قيود`/`حدود` x2): removed — pure noise, recall unchanged.
+
+**The native-speaker review remains OPEN and is still the real ask** —
+mechanical fixes cannot judge idiomaticity, real-world attack phrasing, or
+false-positive likelihood in each language.
+
+## DESCOPE DECISION (2026-09-07, Mackenzie lead call) — how this actually closes
+
+All 10 languages at once was never going to happen. Split:
+
+**P2-11a — Portuguese (Raphael, ~10 min, native speaker).** The FP probe
+mechanically found a production bug in the PT patterns BEFORE the native
+pass: bare `você (é|esta)` matched everyday Portuguese — **"Você é muito
+gentil, obrigado pela ajuda!" BLOCKED at HIGH** through the real pipeline.
+Fixed the same day (recall preserved: "você agora é", suspicious roles,
+"finga que é" — which also had a pre-existing recall gap against its own
+docstring shape, found by the same probe). Pre-filled worksheet below.
+
+> **WORKSHEET — PT (Raphael, 5 patterns, ~10 min):**
+> 1. `PI-D-PT-001` — "esqueça as instruções" fires HIGH/BLOCK on *"Esqueça
+>    as instruções antigas do manual e use a versão nova."* Attack phrase
+>    family is correct for an LLM context; is the benign-office reading
+>    common enough to deserve MEDIUM/SANITIZE instead? **OK / REWRITE?**
+> 2. `PI-D-PT-002` — generic role-play still matches: *"Aja como um
+>    professor de inglês e corrija meu texto"* → BLOCK. My recommendation:
+>    consider MEDIUM (SANITIZE) for the `aja/atue/finga/finja como` branch
+>    since professor-vs-developer is not mechanically distinguishable.
+>    **Your call.**
+> 3. Attack-recall: what PT phrasings would a REAL Brazilian attacker type
+>    that these five patterns miss? (e.g. "obedeça", "desconsidere", "sua
+>    nova instrução é"…) List them; they become new patterns.
+> 4. Any everyday sentence you type that trips these? Send it; it becomes a
+>    probe + fix.
+>
+> Reply with OK/REWRITE per item — done.
+
+**P2-11b — the other 8 languages (DE FR ZH JA KO RU AR VI): DEFERRED with
+the residual admission already carried in the README.** Re-open per
+deployment: when NeuralGuard actually serves users of language X, that
+language's native review becomes a deployment prerequisite. The mechanical
+self-audit (all 10 defects now fixed) + the semantic corpus as second line
+is the interim posture.
 
 | # | Pattern | Defect | Class |
 |:--|:--|:--|:--|

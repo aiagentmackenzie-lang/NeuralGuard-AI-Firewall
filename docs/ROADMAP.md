@@ -355,8 +355,7 @@ register. Highlights landed on `main`:
   (pure-ASGI middleware — the global exception handler genuinely backstops,
   proven by test) · P2-9 (coverage headroom) · P2-10 (Ed25519 signing +
   JSONL/pg chain verification, live-fire proven; pg INSERT ship-blocker
-  found and fixed) · P2-11 (i18n machine self-audit done; HUMAN sign-off
-  pending — `docs/i18n_native_review_request.md`).
+  found and fixed) · P2-11 (i18n machine self-audit done + ALL 5 defects fixed on 2026-09-07 re-verification, incl. a production FP the PT probe found — bare `você (é|esta)` BLOCKED "Você é muito gentil" — and the "finga que é" recall gap; HUMAN sign-off descoped: **P2-11a** = PT native review (Raphael, ~10 min, pre-filled worksheet in `docs/i18n_native_review_request.md`) · **P2-11b** = other 8 languages deferred with the README residual admission, re-opened per deployment demand — `docs/i18n_native_review_request.md`).
 - **v0.2.1 fix batch (2026-09-07):** F23 scarletai sink gate, postgres
   event_sig at rest + INSERT fix, `.env.example` full operator surface, CI
   timeout-minutes everywhere, hardened appliance/K8s secrets, judge scope
