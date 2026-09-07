@@ -35,6 +35,7 @@ from neuralguard.models.schemas import (
 from neuralguard.scanners.base import BaseScanner
 from neuralguard.semantic.corpus import AttackCorpus
 from neuralguard.semantic.embedding import EmbeddingEngine
+from neuralguard.semantic.overflow import chunk_windows, contiguity_gate
 
 if TYPE_CHECKING:
     from neuralguard.config.settings import ScannerSettings
@@ -202,10 +203,6 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
                 error=f"Corpus search failed: {exc!r}",
             )
 
-        if not matches:
-            logger.debug("similarity_scanner_no_matches", threshold=threshold)
-            return self._result(Verdict.ALLOW, [], start)
-
         # Convert matches to findings
         findings: list[Finding] = []
         max_similarity = 0.0
@@ -242,6 +239,37 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
                     },
                 )
             )
+
+        # Overall verdict from the full-text pass (pre-windowing).
+        overall_verdict = self._findings_to_verdict(findings)
+
+        # NG-4: overflow-resistant windowed pass for long inputs. Prompt
+        # Overflow fragments a malicious instruction across an overlong
+        # prompt; the full-text embedding gets diluted below threshold while
+        # the LLM reads the fragments together. The windowed pass restores
+        # the per-window evidence and aggregates it with the contiguity
+        # gate. Skipped when the full-text pass already BLOCKed (nothing new
+        # to learn at extra latency) and for short inputs (single window).
+        if (
+            self.settings.semantic_overflow_detection
+            and overall_verdict is not Verdict.BLOCK
+            and len(text) > self.settings.semantic_overflow_window_chars
+        ):
+            try:
+                overflow_findings = self._overflow_scan(text)
+            except Exception as exc:
+                logger.error("semantic_overflow_scan_failed", error=str(exc))
+                return self._result(
+                    Verdict.BLOCK,
+                    [*findings, self._overflow_error_finding(str(exc))],
+                    start,
+                    error=f"Overflow scan failed: {exc!r}",
+                )
+            findings.extend(overflow_findings)
+
+        if not findings:
+            logger.debug("similarity_scanner_no_matches", threshold=threshold)
+            return self._result(Verdict.ALLOW, [], start)
 
         # Overall verdict: strictest from all matches
         overall_verdict = self._findings_to_verdict(findings)
@@ -280,6 +308,133 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
             return Verdict.ESCALATE
         return Verdict.ALLOW
 
+    def _overflow_scan(self, text: str) -> list[Finding]:
+        """NG-4: windowed overflow-resistant pass over a long input.
+
+        Embeds overlapping windows in a single batch call, searches the
+        corpus per window, and aggregates with the contiguity gate:
+        - a single window matching at/above the BLOCK floor emits the same
+          finding class the main path would (dilution must not save an
+          attack that would block if concentrated);
+        - accumulated sub-floor risk across a contiguous run of windows
+          (summed excess above the benign background) emits one ESCALATE
+          finding — ambiguous-zone evidence for the judge, never a silent
+          pass.
+
+        Callers wrap this in try/except and fail closed (BLOCK) on any
+        engine/corpus error, same contract as the main path.
+        """
+        window_chars = self.settings.semantic_overflow_window_chars
+        windows = chunk_windows(text, window_chars, self.settings.semantic_overflow_max_windows)
+        if len(windows) < 2:
+            return []
+
+        embeddings = self._engine.embed_batch(windows)
+        threshold = self.settings.semantic_similarity_threshold
+        search_threshold = min(threshold, ESCALATE_FLOOR)
+
+        per_window_max: list[float] = []
+        findings: list[Finding] = []
+        best_category: ThreatCategory | None = None
+        best_match_text = ""
+        best_match_sim = 0.0
+
+        for w_idx, emb in enumerate(embeddings):
+            window_matches = self._corpus.search(emb, threshold=search_threshold, top_k=3)
+            w_max = max((m["similarity"] for m in window_matches), default=0.0)
+            per_window_max.append(w_max)
+
+            for m in window_matches:
+                # Concentrated match: a single window at/above the BLOCK
+                # floor gets the same verdict treatment as the main path —
+                # fragment dilution across the full text must not save it.
+                if m["similarity"] >= threshold and m["similarity"] == w_max:
+                    category = self._map_category(m.get("category", "T-PI-D"))
+                    findings.append(
+                        Finding(
+                            category=category,
+                            severity=self._map_severity(m.get("severity", "medium")),
+                            verdict=Verdict.BLOCK,
+                            confidence=m["similarity"],
+                            layer=self.layer,
+                            rule_id=f"{_SEMANTIC_RULE_PREFIX}-W-{w_idx:03d}",
+                            description=(
+                                "Semantic match in analysis window "
+                                f"{w_idx + 1}/{len(windows)} "
+                                f"({m['similarity']:.2f}): {m.get('text', '')[:80]}"
+                            ),
+                            evidence=(
+                                f"category={m.get('category', '?')} "
+                                f"source={m.get('source', '?')} window={w_idx + 1}"
+                            ),
+                            mitigation=(
+                                "Review prompt for concentrated attack content in a long input"
+                            ),
+                            metadata={
+                                "similarity": m["similarity"],
+                                "window_index": w_idx,
+                                "matched_category": m.get("category"),
+                                "matched_source": m.get("source"),
+                                "overflow": True,
+                            },
+                        )
+                    )
+
+            # Representative category/text for the gate finding: the strongest
+            # window match seen so far (deterministic tie-break: first seen).
+            if window_matches and window_matches[0]["similarity"] > best_match_sim:
+                best_match_sim = window_matches[0]["similarity"]
+                best_category = self._map_category(window_matches[0].get("category", "T-PI-D"))
+                best_match_text = str(window_matches[0].get("text", ""))[:80]
+
+        gate = contiguity_gate(
+            per_window_max,
+            self.settings.semantic_overflow_benign_threshold,
+            self.settings.semantic_overflow_decision_threshold,
+            self.settings.semantic_overflow_min_run,
+        )
+        if gate.flagged:
+            findings.append(
+                Finding(
+                    category=best_category or ThreatCategory.PROMPT_INJECTION_DIRECT,
+                    severity=Severity.HIGH,
+                    verdict=Verdict.ESCALATE,
+                    confidence=min(0.95, max(gate.max_run_sum, 0.30)),
+                    layer=self.layer,
+                    rule_id="SEM-OVERFLOW-001",
+                    description=(
+                        "Overflow-resistant aggregation flagged a contiguous run "
+                        f"of {gate.max_run_len} windows with summed excess risk "
+                        f"{gate.max_run_sum:.2f} above the benign background "
+                        "(Prompt Overflow shape: sub-threshold fragments that "
+                        "assemble downstream)."
+                    ),
+                    evidence=(
+                        f"windows={len(per_window_max)} run_len={gate.max_run_len} "
+                        f"run_sum={gate.max_run_sum:.3f}"
+                        + (f" sample={best_match_text}" if best_match_text else "")
+                    ),
+                    mitigation=(
+                        "Escalate for review/judge; do not reconstruct intent from "
+                        "fragments in a single window alone"
+                    ),
+                    metadata={
+                        "overflow": True,
+                        "run_len": gate.max_run_len,
+                        "run_sum": gate.max_run_sum,
+                        "windows": len(per_window_max),
+                    },
+                )
+            )
+            logger.info(
+                "semantic_overflow_flagged",
+                windows=len(per_window_max),
+                run_len=gate.max_run_len,
+                run_sum=f"{gate.max_run_sum:.3f}",
+            )
+
+        return findings
+
     def _findings_to_verdict(self, findings: list[Finding]) -> Verdict:
         """Strictest verdict from findings."""
         if not findings:
@@ -304,6 +459,20 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
                 highest = f.verdict
 
         return highest
+
+    @staticmethod
+    def _overflow_error_finding(error: str) -> Finding:
+        """Finding for overflow-pass failure (fail-closed, NG-4)."""
+        return Finding(
+            category=ThreatCategory.SELF_ATTACK,
+            severity=Severity.HIGH,
+            verdict=Verdict.BLOCK,
+            confidence=1.0,
+            layer=ScanLayer.SEMANTIC,
+            rule_id="SEM-OVERFLOW-ERR",
+            description=f"Overflow windowed scan failed: {error}",
+            mitigation="Verify embedding engine and attack corpus health",
+        )
 
     @staticmethod
     def _map_category(corpus_category: str) -> ThreatCategory:

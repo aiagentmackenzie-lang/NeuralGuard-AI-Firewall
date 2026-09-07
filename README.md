@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed, P2 enterprise track landed, v0.2.1 tagged).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS posture, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1–B4 (multi-turn detection + static template analysis + dedicated ASI06 rules + canary token verification + multi-turn benchmark + scanner gap closure), Sprint C C1 per-tenant config + C2 production-readiness sweep, **the standalone appliance proxy (F9: `POST /v1/proxy/chat/completions`, hardened compose profile + runbook, boot-drill verified)**, **SIEM routing + BLOCK-spike alerting incl. SecurityScarletAI (P2-7)**, **JWT bearer auth + runtime key rotation (P2-4)**, **Ed25519 audit-event signing + JSONL *and* Postgres chain verification (P2-10, live-fire proven)**, **pure-ASGI middleware stack (P2-8)**, and **dedicated ASI04 Supply Chain + ASI10 Rogue Agents rules (P2-3)** are shipped. **1063 tests collected on `main`** (1055 pass locally with Ollama up; the live judge-integration tests run against the `mistral:7b` default — override with `NEURALGUARD_TEST_JUDGE_MODEL` — and skip cleanly when the model is absent; 5 Postgres live-fire tests + 3 others skip without their services), ruff + `ruff format` + mypy strict clean (61 files), **90% coverage floor — CI regenerates the ONNX model + rebuilds the semantic corpus from tracked sources so the gate runs the FULL suite (90.59% measured locally without a live Postgres; ≥91% in CI with the pg service container)**. Also shipped: **cosign SBOM signing + attestation (P2-5, keyless in CI / key-based locally)**, **Kubernetes manifests + HPA (P2-6, schema-validated offline — cluster drill pending)**. Remaining open items: i18n native-speaker review (P2-11 — pending HUMAN review, machine self-audit done; see `docs/i18n_native_review_request.md`) and the K8s cluster drill — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed, P2 enterprise track landed, v0.2.1 tagged).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS posture, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1–B4 (multi-turn detection + static template analysis + dedicated ASI06 rules + canary token verification + multi-turn benchmark + scanner gap closure), Sprint C C1 per-tenant config + C2 production-readiness sweep, **the standalone appliance proxy (F9: `POST /v1/proxy/chat/completions`, hardened compose profile + runbook, boot-drill verified)**, **SIEM routing + BLOCK-spike alerting incl. SecurityScarletAI (P2-7)**, **JWT bearer auth + runtime key rotation (P2-4)**, **Ed25519 audit-event signing + JSONL *and* Postgres chain verification (P2-10, live-fire proven)**, **pure-ASGI middleware stack (P2-8)**, and **dedicated ASI04 Supply Chain + ASI10 Rogue Agents rules (P2-3)** are shipped. **1122 tests collected on `main`** (1114 pass locally with Ollama up; the live judge-integration tests run against the `mistral:7b` default — override with `NEURALGUARD_TEST_JUDGE_MODEL` — and skip cleanly when the model is absent; 5 Postgres live-fire tests + 3 others skip without their services), ruff + `ruff format` + mypy strict clean (62 files), **90% coverage floor — CI regenerates the ONNX model + rebuilds the semantic corpus from tracked sources so the gate runs the FULL suite (90.67% measured locally without a live Postgres; ≥91% in CI with the pg service container)**. Also shipped: **cosign SBOM signing + attestation (P2-5, keyless in CI / key-based locally)**, **Kubernetes manifests + HPA (P2-6, schema-validated offline — cluster drill pending)**, and the **2026-09-07 research-frontier controls (NG-1/2/3/4/5 — see the threat-model section, the NG-5 mutation gate, and the decision register in docs/ROADMAP.md)**. Remaining open items: i18n native-speaker review (P2-11 — pending HUMAN review, machine self-audit done; see `docs/i18n_native_review_request.md`) and the K8s cluster drill — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -72,6 +72,54 @@ LLM Provider / Local Model / Agent Framework
 
 ---
 
+## Threat model: what input filtering can and cannot do
+
+**Input-side detection has a provable ceiling — and we say so.** Ball et al. (2025) proved that no
+input filter running significantly faster than the model it protects can universally distinguish
+adversarial prompts from benign ones ([arXiv:2507.07341](https://arxiv.org/abs/2507.07341)).
+Fairoze, Garg, Lee & Wang turned that theory into a production attack (**controlled-release
+prompting**, [USENIX Security 2026](https://www.usenix.org/system/files/usenixsecurity26-fairoze.pdf)):
+jailbreaks encoded as substitution ciphers scored **92–100% attack success against Google Gemini,
+DeepSeek Chat, xAI Grok and Mistral Le Chat in production**, while the same paper measured 14
+open-weight prompt guards with benchmark ROC-AUCs of 0.84–0.998 detecting those same attacks at
+**0.00–0.23** — benchmark aggregates do not predict deployment security.
+
+NeuralGuard's honest position, and what we ship for it:
+
+- **Input layers are an efficiency + defense-in-depth control, not a security boundary.** The
+  layered pipeline (structural → pattern → semantic → judge → output validation) is the posture
+  the research recommends; input filtering is one layer of it, and the README will not claim
+  otherwise.
+- **Output-side scanning is the theoretically strongest remaining layer.** The decode step of a
+  controlled-release attack emits the malicious payload as intermediate model output, which
+  output validation can catch. Thinking-enabled models add a corollary risk: reasoning tokens
+  can carry the full payload even when the final answer is clean —
+  `NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN` (NG-1, opt-in, fail-closed on unscannable payloads)
+  scans the upstream's reasoning payload with the same output semantics and canary detection.
+- **Detect the decode-then-activate shape, don't ban encodings.** Blocking cipher/decode work
+  would be an FPR machine (CTFs, students, i18n are legitimate). Agent Guardian (NG-3) fires
+  only when a decode/extraction step combines with a directive to follow the decoded content,
+  session-scoped and deterministic (`AG-DECODE-001`).
+- **Overflow-resistant aggregation.** Prompt Overflow
+  ([arXiv:2605.23196](https://arxiv.org/html/2605.23196)) fragments one instruction across an
+  overlong prompt and beat every guard tested (~100% bypass of Llama Prompt Guard 2 with
+  interleaving; sliding-window + max-pooling both fail). For long inputs the semantic layer
+  additionally runs a windowed pass with the paper's contiguity-gated excess-risk aggregation
+  (NG-4): fragments that individually stay sub-threshold but accumulate across contiguous
+  windows are flagged (`SEM-OVERFLOW-001`), while a concentrated window match at the BLOCK
+  floor blocks outright (`SEM-W-***`).
+- **Publish per-attack-class results, never aggregates alone** — the A1/A2 tables below report
+  per-config results; the USENIX finding that benchmark scores mislead is a result we can own.
+
+What NeuralGuard explicitly is NOT: not a substitute for model-level alignment (the
+resource-asymmetry result bounds any faster-than-the-model input filter, including ours), and
+not a control-flow-integrity system — see CaMeL ([arXiv:2503.18813](https://arxiv.org/abs/2503.18813))
+for the by-design end of the spectrum. The full research synthesis and the v0.3+ decision
+register (mutation-robustness gate, per-tenant FPR SLOs, signed MCP tool-inventory baselining)
+live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+---
+
 ## Project Status
 
 | Phase | Name | Status |
@@ -83,8 +131,8 @@ LLM Provider / Local Model / Agent Framework
 | Phase 3 | Agent Guardian | ✅ B1+B2+B3+B4 + gap closure shipped |
 | Enterprise track (P2) | JWT/rotation · SIEM · K8s · cosign · Ed25519 signing · pure-ASGI stack · 90% gate · ASI04/ASI10 rules | ✅ Landed (v0.2.0/v0.2.1) — residuals documented below |
 
-**Current (`main` @ v0.2.1, 2026-09-07):** all P0/P1 items, Sprints A/B/C, and the P2 enterprise track are merged. The v0.2.1 release closed the read-through sweep's findings: the SIEM enabled-without-sink gate now knows the SecurityScarletAI sink (F23), the Postgres audit INSERT bug (every row silently lost — caught live-fire) is fixed with a JSONL-fallback contract, `event_sig` is persisted in Postgres rows, `neuralguard audit-verify --pg-url` verifies DB chains by link-walk, the pg live-fire tests run in CI against a real Postgres service on every push, every CI job carries `timeout-minutes`, the appliance/K8s secret posture is hardened (required `POSTGRES_PASSWORD`/`REDIS_PASSWORD`, redis requirepass), and the judge judges the same scope the other layers scan. Gate as run 2026-09-07: ruff + format + mypy strict clean (61 files), **1055 passed / 8 skipped (0 failures), coverage 90.50% (90 floor)**, A1 regression gate PASS (ASR 0.00% / FPR 0.00%), B4 deterministic gate PASS, boot smoke PASSED, kubeconform 10/10. CI: lint, matrix tests (3.11/3.12), full-suite coverage gate with pg service, blocking pip-audit + security scan, SBOM + keyless cosign sign/attest, boot-smoke, semantic-smoke, nightly perf + bench gates.
-**Next (open register):** i18n native-speaker sign-off (P2-11 — the only human-blocked item; machine self-audit complete, see `docs/i18n_native_review_request.md`), the K8s cluster drill (manifests are schema-valid but never applied to a real cluster), SSE hold-back streaming (streaming is refused 422 fail-closed by design), RS256/OIDC discovery + refresh tokens + Vault/SOPS for JWT (documented residuals), and cross-worker audit ordering (signing authenticates each per-worker chain; global ordering needs a WORM sink / DB sequence). The ContextPoison `exhaust_context` DoS gap stays documented-and-mitigated-by-limits (cost-based rate limiting is the control; a "repetitive filler" regex was evaluated and rejected as an FPR machine).
+**Current (`main` @ v0.2.1, 2026-09-07):** all P0/P1 items, Sprints A/B/C, and the P2 enterprise track are merged. The v0.2.1 release closed the read-through sweep's findings: the SIEM enabled-without-sink gate now knows the SecurityScarletAI sink (F23), the Postgres audit INSERT bug (every row silently lost — caught live-fire) is fixed with a JSONL-fallback contract, `event_sig` is persisted in Postgres rows, `neuralguard audit-verify --pg-url` verifies DB chains by link-walk, the pg live-fire tests run in CI against a real Postgres service on every push, every CI job carries `timeout-minutes`, the appliance/K8s secret posture is hardened (required `POSTGRES_PASSWORD`/`REDIS_PASSWORD`, redis requirepass), and the judge judges the same scope the other layers scan. **Research-frontier controls (2026-09-07 sweep, decision register in ROADMAP):** NG-4 overflow-resistant windowed aggregation in the semantic layer (Prompt Overflow defense), NG-3 decode-then-activate Agent Guardian signal (AG-DECODE-001, session-scoped), NG-1 opt-in reasoning-token output scan on the proxy (`NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN`, fail-closed on unscannable payloads), NG-2 threat-model honesty section, and the NG-5 16-operator mutation gate (both directions, calibrated baseline + the Latin combining-mark fold it exposed). Gate as run 2026-09-07: ruff + format + mypy strict clean (62 files), **1114 passed / 8 skipped (0 failures), coverage 90.67% (90 floor)**, A1 regression gate PASS (ASR 0.00% / FPR 0.00%), NG-5 mutation gate PASS (Unsafe-ASR 56.94% ≤ baseline+1%, Safe-ASR 12.50% < 13%, 0 hard BLOCKs), boot smoke PASSED. CI: lint, matrix tests (3.11/3.12), full-suite coverage gate with pg service, blocking pip-audit + security scan, SBOM + keyless cosign sign/attest, boot-smoke, semantic-smoke, nightly perf + bench gates.
+**Next (open register):** i18n native-speaker sign-off (P2-11 — the only human-blocked item; machine self-audit complete, see `docs/i18n_native_review_request.md`), the K8s cluster drill (manifests are schema-valid but never applied to a real cluster), SSE hold-back streaming (streaming is refused 422 fail-closed by design), RS256/OIDC discovery + refresh tokens + Vault/SOPS for JWT (documented residuals), and cross-worker audit ordering (signing authenticates each per-worker chain; global ordering needs a WORM sink / DB sequence). Research-frontier items (register in [`docs/ROADMAP.md`](docs/ROADMAP.md)): NG-6 published per-tenant FPR SLOs, NG-7/NG-8 MCP gateway with signed tool-inventory baselining + header-based Intent Gate, NG-9 provenance-lite egress binding, and the NG-5 follow-up detector work (context-aware cross-script homoglyph folding — measured 96.3% gap, deliberately not blanket-folded). The ContextPoison `exhaust_context` DoS gap stays documented-and-mitigated-by-limits (cost-based rate limiting is the control; a "repetitive filler" regex was evaluated and rejected as an FPR machine).
 
 ---
 
@@ -124,6 +172,39 @@ signal.
 | Attack Success Rate (ASR) | **0.00%** (0 of 27 attacks allowed) |
 | False Positive Rate (FPR) | **0.00%** (0 of 45 benign over-blocked) |
 | Exact verdict match | 100.00% |
+
+### NG-5 — 16-operator mutation gate (both directions)
+
+Companion to A1: every character-level mutation operator (Cyrillic/Greek
+homoglyphs, fullwidth, leetspeak, diacritics, zero-width, token splitting,
+alternating case, dot interleave, word reversal, char duplication, NBSP
+swap, emoji interleave, soft hyphen, vowel stretch, homoglyph+accent combo)
+applied INDEPENDENTLY to the A1 corpora through the same pattern-only
+baseline — 432 mutated attack evals + 720 mutated benign evals, fully
+deterministic (no model, no network). Measures **both directions** of the
+mutation-robustness problem (HF robustness study, 2026-05): mutated attacks
+allowed through (Unsafe-ASR) AND mutated benign wrongly caught (Safe-ASR,
+mutation-induced over-blocking). CI-able hard gate
+(`tests/benchmarks/test_ng5_mutation_gate.py`) + nightly bench job.
+
+**Day-one measurement (2026-09-07, deterministic layers):**
+
+| Direction | Measured | Gate |
+|:--|--:|:--|
+| Unsafe-ASR (mutated attacks through) | 56.94% | regress → fail (≤ baseline+1%) |
+| Safe-ASR (mutated benign caught) | 12.50% | ceiling 13% — and 100% of it is the DESIGNED STRUCT-004 invisible-char strip-and-sanitize posture, zero hard BLOCKs (gate-pinned) |
+
+The measured Unsafe-ASR is the honest coverage map, not a target:
+normalizer-covered operators are at 0.00% (fullwidth, NBSP, **diacritics —
+0.96→0.00 via a combining-mark fold the gate itself exposed and shipped**:
+NFKD kept stray marks between ASCII letters, breaking every literal keyword
+regex; the fold is ASCII-follower-only so Devanagari/Arabic marks are never
+touched). The de-mutation-class gaps (word reversal / dot interleave 100%,
+homoglyphs / leetspeak / duplication / vowel-stretch ~96%) are documented —
+blanket cross-script folding would corrupt legitimate mixed-script text, so
+that work is context-aware and feeds the i18n/normalizer item; the semantic
+layer (A2) is the designed second line. Full table:
+`uv run python -m benchmarks.ng_vs_ns.mutation_harness`.
 
 ### A2 — live NeuralStrike attacker across 3 defender configs
 

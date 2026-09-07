@@ -47,6 +47,43 @@ jobs:
           name: bench-a1-summary
           path: /tmp/a1_summary.json
 
+  # ── NG-5: 16-operator mutation gate (deterministic, hard-fail) ─────────
+  # Applies every character-level mutation operator independently to the A1
+  # corpora and measures BOTH directions (HF robustness study, 2026-05):
+  # Unsafe-ASR (mutated attacks through — gate at calibrated baseline +
+  # margin) and Safe-ASR (mutated benign wrongly caught — ceiling + zero
+  # hard BLOCKs). Same determinism contract as A1 (no model, no network).
+  bench-ng5-mutation:
+    name: NG-5 mutation gate (16 operators, both directions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra db
+
+      - name: Run NG-5 mutation gate
+        # Fails (non-zero exit) if Unsafe-ASR regresses past baseline+margin,
+        # Safe-ASR exceeds the ceiling, or ANY mutated benign prompt is
+        # hard-BLOCKed. The per-operator table is the coverage map.
+        run: |
+          uv run python -m benchmarks.ng_vs_ns.mutation_harness --json-out /tmp/ng5_summary.json
+          cat /tmp/ng5_summary.json
+
+      - name: Upload NG-5 summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bench-ng5-summary
+          path: /tmp/ng5_summary.json
+
   # ── A2: live NeuralStrike attacker (informational; pattern_only in CI) ──
   # The ONNX semantic model is gitignored, so the semantic/judge configs
   # cannot run honestly on a runner. This job runs the pattern_only config

@@ -16,6 +16,12 @@ and detects cross-turn attacks that no single-turn scanner can see:
     that together cross a threshold -- gradual system-prompt extraction, or
     gradual persistent-memory poisoning ("remember that...", "from now on
     when asked X, do Y").
+  - **Decode-then-activate** (NG-3, USENIX Security 2026 controlled-release
+    shape): a decode/extraction step (base64/cipher/decrypt task — current
+    turn or anywhere in the session window) combined with a directive to
+    follow/execute the decoded content. Encoding itself is NEVER the signal
+    (CTFs, students, i18n are legitimate); the co-occurring
+    follow-the-decoded-content directive is what fires.
 
 Design:
   - Deterministic + heuristic (regex + state). No LLM call in B1.
@@ -142,6 +148,49 @@ _MEMORY_INJECTION = [
     ),
 ]
 
+# Decode/extraction step (NG-3 controlled-release signal): the turn asks the
+# model to decode, decrypt, or otherwise extract hidden content. Legitimate
+# on its own (CTFs, homework, i18n) — it only matters in combination with an
+# activation directive below (AG-DECODE-001).
+_DECODE_STEP = [
+    re_module.compile(
+        r"(?i)\b(?:"
+        r"decode\s+(?:this|the|that|it|the\s+following|everything|all)"
+        r"|(?:base64|b64|base32|hex|rot13|rot-?13|rot-?47)\s*(?:decode|decod\w+|string|text|message|blob)"
+        r"|decod\w+\s+(?:the\s+)?(?:base64|b64|base32|hex|cipher|encoded|payload)"
+        r"|(?:caesar|atbash|vigen[eè]re|substitution|simple)\s+cipher"
+        r"|apply\s+the\s+cipher|solve\s+(?:this|the)\s+(?:cipher|code|puzzle)"
+        r"|decrypt\b|unscramble\b"
+        r"|reverse\s+the\s+(?:text|string|letters?|message)"
+        r"|(?:shift|replace|move)\s+each\s+letter"
+        r"|what\s+does\s+(?:this|it)\s+(?:spell|say|decode\s+to)"
+        r"|hidden\s+message|extract\s+the\s+(?:hidden\s+)?(?:message|text|instructions?|content)"
+        r"|what\s+is\s+(?:the\s+)?(?:hidden|secret)\s+message"
+        r"|translate\s+this\s+(?:cipher|code)"
+        r")\b"
+    ),
+]
+
+# Directive to follow/execute instructions found in decoded content (NG-3).
+# This is the activation half of decode-then-activate; it is the dangerous
+# half — decoding is legitimate, obeying extracted content is not.
+_ACTIVATE_FOLLOW = [
+    re_module.compile(
+        r"(?i)\b(?:"
+        r"follow\s+the\s+(?:instructions?|directives?|commands?)\s+(?:you\s+find|found|inside|contained|in\s+(?:the\s+)?(?:it|that|the\s+decoded|the\s+result|the\s+text|the\s+message))"
+        r"|follow\s+any\s+instructions?\s+(?:you\s+)?(?:find|found|discover|see)"
+        r"|then\s+follow\s+(?:them|the\s+instructions?|any\s+instructions?|what\s+it\s+says)"
+        r"|do\s+what(?:ever)?\s+(?:it|the\s+(?:decoded\s+)?(?:text|message|result|content|instructions?))\s+says"
+        r"|(?:execute|carry\s+out|act\s+on|obey|comply\s+with|perform)\s+(?:the\s+)?(?:decoded|extracted|hidden|result(?:ing)?|output)\s+(?:instructions?|directives?|commands?|text|message|content)"
+        r"|treat\s+(?:the\s+)?(?:result|decoded|output|it|that)\s+as\s+(?:your\s+)?instructions?"
+        r"|follow\s+(?:the\s+|any\s+)?instructions?\s+(?:you\s+)?(?:that\s+are\s+)?(?:hidden|contained|embedded)\s+(?:in|within|inside)"
+        r"|instructions?\s+(?:contained|hidden|embedded)\s+(?:in|within|inside)\s+.{0,40}\b(?:follow|execute|perform|carry\s+out|obey|do|act\s+on)\b"
+        r"|act\s+on\s+(?:the\s+)?(?:decoded|result|contents?|it|that|what\s+you\s+find)"
+        r"|execute\s+(?:the\s+)?(?:decoded|result|contents?|what\s+you\s+find)"
+        r")\b"
+    ),
+]
+
 # Back-reference to prior conversation (delayed-injection assembly signal).
 _BACK_REFERENCE = [
     re_module.compile(
@@ -189,8 +238,9 @@ def _count_matches(patterns: list[re_module.Pattern], text: str) -> int:
     return n
 
 
-def _turn_flags(text: str) -> tuple[int, int, int]:
-    """Per-turn binary signal flags (role-drift, extraction, memory-injection).
+def _turn_flags(text: str) -> tuple[int, int, int, int]:
+    """Per-turn binary signal flags (role-drift, extraction, memory-injection,
+    decode-step).
 
     The state stores keep ONLY these flags — never raw turn text (F4 privacy
     sub-item). The flags carry everything the accumulation analysis needs;
@@ -201,6 +251,7 @@ def _turn_flags(text: str) -> tuple[int, int, int]:
         int(_count_matches(_ROLE_DRIFT, text) > 0),
         int(_count_matches(_EXTRACTION_PROBE, text) > 0),
         int(_count_matches(_MEMORY_INJECTION, text) > 0),
+        int(_count_matches(_DECODE_STEP, text) > 0),
     )
 
 
@@ -215,21 +266,23 @@ class _SessionWindow:
     current turn's text arrives with each request) and a retention liability.
     """
 
-    __slots__ = ("_max", "extraction", "memory_inj", "role_drift", "signals")
+    __slots__ = ("_max", "decode", "extraction", "memory_inj", "role_drift", "signals")
 
     def __init__(self, max_turns: int) -> None:
-        self.signals: list[tuple[int, int, int]] = []  # (r, e, m) per turn, capped
+        self.signals: list[tuple[int, int, int, int]] = []  # (r, e, m, d) per turn, capped
         self.role_drift: int = 0
         self.extraction: int = 0
         self.memory_inj: int = 0
+        self.decode: int = 0
         self._max = max_turns
 
-    def record(self, flags: tuple[int, int, int]) -> None:
+    def record(self, flags: tuple[int, int, int, int]) -> None:
         """Append a turn's signal flags; evict the oldest past the cap."""
         self.signals.append(flags)
         self.role_drift += flags[0]
         self.extraction += flags[1]
         self.memory_inj += flags[2]
+        self.decode += flags[3]
         if len(self.signals) > self._max:
             # Evict the oldest turn's flags; the cumulative counters decrement
             # exactly — no re-regex of retained text needed (there is none).
@@ -237,6 +290,7 @@ class _SessionWindow:
             self.role_drift -= evicted[0]
             self.extraction -= evicted[1]
             self.memory_inj -= evicted[2]
+            self.decode -= evicted[3]
 
 
 class ConversationState:
@@ -261,7 +315,7 @@ class ConversationState:
                 self._sessions.move_to_end(session_id)
             return win
 
-    def record_turn(self, session_id: str, flags: tuple[int, int, int]) -> _SessionWindow:
+    def record_turn(self, session_id: str, flags: tuple[int, int, int, int]) -> _SessionWindow:
         """Record a turn's signal flags; return the updated window."""
         win = self.get_or_create(session_id)
         with self._lock:
@@ -278,9 +332,11 @@ class ConversationState:
 
 
 # Atomic per-session signal record (F4). KEYS[1] = session key,
-# ARGV[1] = "<r><e><m>" flags string, ARGV[2] = window (max turns),
-# ARGV[3] = TTL seconds. LPUSH newest-first + LTRIM to the window, then
-# count the retained flags server-side and (re)arm the TTL.
+# ARGV[1] = "<r><e><m><d>" flags string (4 positions since NG-3; legacy
+# 3-char entries from a pre-NG-3 worker read as decode=0 — graceful),
+# ARGV[2] = window (max turns), ARGV[3] = TTL seconds. LPUSH newest-first +
+# LTRIM to the window, then count the retained flags server-side and
+# (re)arm the TTL.
 _SESSION_SIGNALS_LUA = """
 local key = KEYS[1]
 local flags = ARGV[1]
@@ -291,15 +347,16 @@ redis.call('LPUSH', key, flags)
 redis.call('LTRIM', key, 0, window - 1)
 local entries = redis.call('LRANGE', key, 0, -1)
 local n = #entries
-local r, e, m = 0, 0, 0
+local r, e, m, d = 0, 0, 0, 0
 for i = 1, n do
     local f = entries[i]
     if string.sub(f, 1, 1) == '1' then r = r + 1 end
     if string.sub(f, 2, 2) == '1' then e = e + 1 end
     if string.sub(f, 3, 3) == '1' then m = m + 1 end
+    if string.sub(f, 4, 4) == '1' then d = d + 1 end
 end
 redis.call('EXPIRE', key, ttl)
-return {n, r, e, m}
+return {n, r, e, m, d}
 """
 
 
@@ -345,17 +402,19 @@ class RedisSessionStore:
             self._owns_client = True
         self._script = self._client.register_script(_SESSION_SIGNALS_LUA)
 
-    def record(self, session_key: str, flags: tuple[int, int, int]) -> tuple[int, int, int, int]:
-        """Record one turn's flags; return (n_turns, role, extraction, memory).
+    def record(
+        self, session_key: str, flags: tuple[int, int, int, int]
+    ) -> tuple[int, int, int, int, int]:
+        """Record one turn's flags; return (n_turns, role, extraction, memory, decode).
 
         The counts cover the RETAINED window only (post-LTRIM), matching the
         in-memory eviction semantics exactly.
         """
         result = self._script(
             keys=[f"{self.KEY_PREFIX}{session_key}"],
-            args=[f"{flags[0]}{flags[1]}{flags[2]}", self._window, self._ttl],
+            args=[f"{flags[0]}{flags[1]}{flags[2]}{flags[3]}", self._window, self._ttl],
         )
-        return (int(result[0]), int(result[1]), int(result[2]), int(result[3]))
+        return (int(result[0]), int(result[1]), int(result[2]), int(result[3]), int(result[4]))
 
     def raw_key(self, session_key: str) -> str:
         """The Redis key backing a session key (introspection/tests)."""
@@ -443,7 +502,7 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
         # F4: stores keep ONLY per-turn signal flags, never raw turn text.
         session_id = self._session_key(request)
         flags_list = [_turn_flags(text) for text in user_texts]
-        redis_counts: tuple[int, int, int, int] | None = None
+        redis_counts: tuple[int, int, int, int, int] | None = None
         if session_id is not None:
             if self._ag.backend == "redis" and self._redis_store is not None:
                 for flags in flags_list:
@@ -461,15 +520,17 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
             role_count = self._count_across(_ROLE_DRIFT, user_texts)
             ext_count = self._count_across(_EXTRACTION_PROBE, user_texts)
             mem_count = self._count_across(_MEMORY_INJECTION, user_texts)
+            decode_count = self._count_across(_DECODE_STEP, user_texts)
             has_prior = len(user_texts) >= 2
         elif redis_counts is not None:
-            n_window, role_count, ext_count, mem_count = redis_counts
+            n_window, role_count, ext_count, mem_count, decode_count = redis_counts
             has_prior = n_window >= 2
         elif session_id is not None and self._state is not None:
             window = self._state.get_or_create(session_id)
             role_count = window.role_drift
             ext_count = window.extraction
             mem_count = window.memory_inj
+            decode_count = window.decode
             has_prior = len(window.signals) >= 2
         else:
             # No session: the current request's user turns are the whole
@@ -477,6 +538,7 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
             role_count = self._count_across(_ROLE_DRIFT, user_texts)
             ext_count = self._count_across(_EXTRACTION_PROBE, user_texts)
             mem_count = self._count_across(_MEMORY_INJECTION, user_texts)
+            decode_count = self._count_across(_DECODE_STEP, user_texts)
             has_prior = len(user_texts) >= 2
 
         findings: list[Finding] = []
@@ -565,6 +627,40 @@ class AgentGuardianScanner(BaseScanner["AgentGuardianSettings"]):
                     ),
                     mitigation="Escalate; do not persist directives injected "
                     "across turns into long-term memory.",
+                )
+            )
+
+        # 5. Decode-then-activate (NG-3, USENIX Security 2026 controlled-release
+        # shape): a decode/extraction step anywhere in the session window (the
+        # current turn's flags were just recorded, so decode_count covers it)
+        # plus a directive to follow/execute the decoded content in the latest
+        # turn. Deliberately does NOT fire on decoding alone (CTFs, students,
+        # and i18n are legitimate) — only the co-occurring activation
+        # directive is the signal. Session-scoped, deterministic, no LLM call.
+        if (
+            self._ag.decode_activation_enabled
+            and decode_count > 0
+            and _any_match(_ACTIVATE_FOLLOW, latest)
+        ):
+            findings.append(
+                self._finding(
+                    category=ThreatCategory.ENCODING_EVASION,
+                    severity=Severity.HIGH,
+                    verdict=Verdict.BLOCK,
+                    confidence=0.86,
+                    rule_id="AG-DECODE-001",
+                    description=(
+                        "Decode-then-activate: a decode/extraction step "
+                        "(current turn or within the session window) combined "
+                        "with a directive to follow/execute the decoded content "
+                        "-- the controlled-release pattern where the payload is "
+                        "delivered encoded and activated by instruction."
+                    ),
+                    mitigation=(
+                        "Block the turn; do not treat decoded content as "
+                        "instructions. Encoding/decoding itself remains allowed "
+                        "-- only the follow-the-decoded-content directive fires."
+                    ),
                 )
             )
 
