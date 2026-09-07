@@ -95,6 +95,19 @@ class Metrics:
             "Requests rejected by rate limiter",
             registry=self.registry,
         )
+        # NG-7/NG-8: MCP gateway decisions.
+        self.mcp_gate: Counter = Counter(
+            "neuralguard_mcp_gate_total",
+            "MCP Intent Gate decisions by action (NG-8)",
+            labelnames=("action",),
+            registry=self.registry,
+        )
+        self.mcp_baseline: Counter = Counter(
+            "neuralguard_mcp_baseline_total",
+            "MCP tool-catalog baseline outcomes (NG-7)",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
 
     # No-op-safe recording helpers -------------------------------------------
 
@@ -137,6 +150,16 @@ class Metrics:
     def record_rate_limit_hit(self) -> None:
         if self.available:
             self.rate_limit_hits.inc()
+
+    def record_mcp_gate(self, action: str) -> None:
+        """NG-8: one Intent Gate decision."""
+        if self.available:
+            self.mcp_gate.labels(action=action).inc()
+
+    def record_mcp_baseline(self, outcome: str) -> None:
+        """NG-7: one tool-catalog baseline outcome."""
+        if self.available:
+            self.mcp_baseline.labels(outcome=outcome).inc()
 
     def expose(self) -> tuple[bytes, str]:
         """Return (payload_bytes, content_type) for the /metrics endpoint."""

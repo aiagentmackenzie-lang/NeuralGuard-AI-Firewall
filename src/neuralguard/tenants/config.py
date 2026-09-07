@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from neuralguard.mcp.intent_gate import McpToolPolicy  # noqa: TC001 - runtime pydantic field type
+
 # Tenant id rules: lowercase ascii + digits + ``-``/``_``/``.``, 1..64 chars.
 # Matches the constraint on ``EvaluateRequest.tenant_id`` in schemas.py.
 _TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -97,6 +99,14 @@ class TenantConfig(BaseModel):
         default_factory=TenantScannerOverrides,
         description="Per-tenant scanner enable/disable overlay (optional layers only).",
     )
+    mcp: McpToolPolicy | None = Field(
+        default=None,
+        description=(
+            "NG-8 per-tenant MCP Intent Gate policy (per-tool/per-method "
+            "allow/deny/escalate). None = no tenant policy; the global "
+            "defaults apply (allow-all with NG-7 baseline backstop)."
+        ),
+    )
 
     @field_validator("tenant_id")
     @classmethod
@@ -131,4 +141,5 @@ class TenantConfig(BaseModel):
             "requests_per_minute": self.requests_per_minute,
             "burst_size": self.burst_size,
             "scanners": self.scanners.model_dump(),
+            "mcp": self.mcp.to_effective_dict() if self.mcp else None,
         }

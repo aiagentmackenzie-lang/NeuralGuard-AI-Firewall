@@ -542,6 +542,21 @@ async def info(
     # detection posture.
     fpr_info: dict[str, Any] | None = getattr(request.app.state, "semantic_fpr_report", None)
 
+    # NG-7/NG-8: MCP gateway posture (None when disabled).
+    mcp_info: dict[str, Any] | None = None
+    if config.mcp.enabled:
+        mcp_info = {
+            "enabled": True,
+            "mode": config.mcp.mode,
+            "upstream_egress": (
+                "local" if is_private_endpoint(config.mcp.upstream_url) else "cloud"
+            ),
+            "headers_required": config.mcp.headers_required,
+            "signed_baselines": bool(config.mcp.signing_seed),
+            "registry_signature_verification": bool(config.mcp.verify_pubkey),
+            "require_signature_on_change": config.mcp.require_signature_on_change,
+        }
+
     # F9/F10.3 posture: where does data go? Surfaced so nobody is surprised.
     proxy_info: dict[str, Any] | None = None
     if config.proxy.enabled:
@@ -590,6 +605,8 @@ async def info(
         "proxy": proxy_info,
         # NG-6: published guarded-FPR SLO + the boot measurement against it.
         "semantic_fpr_slo": fpr_info,
+        # NG-7/NG-8: MCP gateway posture.
+        "mcp_gateway": mcp_info,
     }
 
 

@@ -396,6 +396,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         with contextlib.suppress(Exception):
             await proxy_forwarder.aclose()
 
+    # Close the MCP transport's HTTP client (NG-7/8).
+    mcp_transport = getattr(app.state, "mcp_transport", None)
+    if mcp_transport is not None:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await mcp_transport.aclose()
+
     structlog.get_logger("neuralguard").info("shutdown")
 
 
@@ -597,6 +605,42 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             f"Upstream egress: {egress}. The upstream API key is held server-side.",
         )
 
+    # ── MCP gateway (NG-7/NG-8) ──
+    # OFF by default; enabled = NeuralGuard becomes an MCP gateway: the
+    # Intent Gate decides per-tool intent on headers BEFORE body parse
+    # (NG-8) and the baseliner refuses rug pulls (NG-7).
+    app.state.mcp_transport = None
+    app.state.mcp_baseliner = None
+    if config.mcp.enabled:
+        if not config.mcp.upstream_url.strip():
+            raise RuntimeError(
+                "mcp.enabled=true but upstream_url is empty: the gateway would "
+                "have nowhere to forward. Set NEURALGUARD_MCP_UPSTREAM_URL."
+            )
+        from neuralguard.mcp.baseliner import McpBaseliner
+        from neuralguard.mcp.transport import McpTransport
+
+        app.state.mcp_transport = McpTransport(config.mcp)
+        app.state.mcp_baseliner = McpBaseliner(
+            server_id=config.mcp.server_id,
+            mode=config.mcp.mode,
+            signing_seed_hex=config.mcp.signing_seed or None,
+            verify_pubkey_hex=config.mcp.verify_pubkey or None,
+            require_signature_on_change=config.mcp.require_signature_on_change,
+        )
+        structlog.get_logger("neuralguard").info(
+            "mcp_gateway_enabled",
+            server_id=config.mcp.server_id,
+            mode=config.mcp.mode,
+            upstream_egress=("local" if is_private_endpoint(config.mcp.upstream_url) else "cloud"),
+            headers_required=config.mcp.headers_required,
+            signed_baselines=bool(config.mcp.signing_seed),
+            require_signature_on_change=config.mcp.require_signature_on_change,
+            msg="MCP gateway ENABLED (NG-7/NG-8). Intent Gate on headers "
+            "pre-body-parse; tool-catalog rug-pull detection "
+            f"({config.mcp.mode} mode).",
+        )
+
     # ── Middleware ──
     # Order matters: outermost first. Body-size limit must run BEFORE the app
     # parses JSON, so it is added first (outermost). Auth runs before rate
@@ -649,6 +693,12 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
         from neuralguard.api.routes_proxy import router as proxy_router
 
         app.include_router(proxy_router)
+
+    # MCP gateway routes mount only when enabled (NG-7/NG-8).
+    if config.mcp.enabled:
+        from neuralguard.api.routes_mcp import router as mcp_router
+
+        app.include_router(mcp_router)
 
     # ── Global exception handler: request_id correlation + sanitized 500 ──
     @app.exception_handler(Exception)
