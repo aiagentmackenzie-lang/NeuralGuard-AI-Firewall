@@ -142,7 +142,7 @@ in both configs, sequence verdict escalates to `sanitize`.
 
 ```bash
 # Deterministic (CI-able; no Ollama / no NeuralStrike needed):
-uv run pytest tests/benchmarks/test_b4_multiturn.py::TestB4Deterministic -v -s
+uv run pytest tests/benchmarks/test_b4_multiturn.py::TestB4MultiturnDeterministic -v -s
 
 # Live (needs local Ollama + NeuralStrike editable):
 uv pip install -e ../NeuralStrike

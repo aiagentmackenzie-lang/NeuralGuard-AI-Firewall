@@ -22,7 +22,10 @@ verdict-shaped response.
   audit-verify /data/audit`) or Postgres (`POSTGRES_PASSWORD` required —
   no insecure default; the old `change-me-appliance` fallback is dead;
   DB rows verifiable directly: `neuralguard audit-verify --pg-url <dsn>
-  [--pubkey <hex>]`, link-walked per-worker chains + signatures).
+  [--pubkey <hex>]`, link-walked per-worker chains + signatures — v0.2.1
+  persists the Ed25519 `event_sig` in Postgres rows too). Optional event
+  signing: set `NEURALGUARD_AUDIT_SIGNING_KEY` (generate with `neuralguard
+  audit-keygen`) and verify with `--pubkey`.
 - **Judge**: local Ollama (`mistral:7b` default). RAM sizing: judge model + 1
   GB per worker + redis + postgres. `qwen3.8:27b` needs ~20 GB and a raised
   `NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS` (~30-60 s; it evaluates in
@@ -119,8 +122,9 @@ Upstream key rotation: same pattern with `NEURALGUARD_PROXY_UPSTREAM_API_KEY`
 The ONNX model + corpus are gitignored and NOT baked into the image by
 default. To enable: bake or mount `models/` into the container (the image
 expects the repo layout; mount at `/app/models`), then set
-`SEMANTIC_ENABLED=true`. Without it the semantic/judge layers degrade
-gracefully (readiness reports `degraded`, detection stays deterministic).
+`NEURALGUARD_SCANNER_SEMANTIC_ENABLED=true`. Without it the semantic/judge
+layers degrade gracefully (readiness reports `degraded`, detection stays
+deterministic).
 
 ## RAM sizing (reference Mac mini, 48 GB)
 
@@ -137,7 +141,10 @@ gracefully (readiness reports `degraded`, detection stays deterministic).
 - Streaming (`stream: true`) is refused with 422 — SSE hold-back scanning is
   a planned follow-up. A control that silently passes unscanned chunks would
   be worse than refusing.
-- Cross-worker audit ordering + Ed25519 signing: P2-10 (chains are per-worker;
-  verify with `audit-verify`, which scopes per worker).
+- Cross-worker audit ordering: chains are per-worker (verify with
+  `audit-verify`, which scopes per worker); signatures authenticate each
+  chain but global ordering still needs a WORM sink / DB sequence. Ed25519
+  event signing itself IS shipped (P2-10) — set `NEURALGUARD_AUDIT_SIGNING_KEY`
+  and verify with `audit-verify --pubkey <hex>`.
 - The 27B judge takes ~20 s/call on the reference box — keep the default
   mistral:7b judge unless the latency budget allows it.

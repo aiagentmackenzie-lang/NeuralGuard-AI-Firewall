@@ -4,12 +4,14 @@
 > The gitignored `PRODUCTION_HARDENING_PLAN.md` is the internal ledger of
 > what already landed; this doc is what is **planned**.
 >
-> **Last updated:** 2026-06-30 · **Baseline:** `main` @ `91cd051`
-> (Sprint C C2 merge). **Sprint B (Phase 3 Agent Guardian) COMPLETE &
-> MERGED:** B1+B2 (`489b94e`), B3 (`63ec379`), B4 (`45a08d2`), B4 gap
-> closure (`41118ba`). **Sprint C COMPLETE & MERGED:** C1 per-tenant
-> config (`aadae4d`) + C2 production-readiness sweep (`7dec769`).
-> **761 passed / 1 skipped** on `main`.
+> **Last updated:** 2026-09-07 · **Status: Sprints A/B/C and the P2
+> enterprise track are ALL SHIPPED (v0.2.0/v0.2.1).** The roadmap below is
+> retained as the plan-of-record; every phase carries a status banner. What
+> ships next is driven by the open register in
+> `PRODUCTION_HARDENING_PLAN.md`: i18n native-speaker sign-off (P2-11,
+> humans), the K8s cluster drill (P2-6), SSE hold-back streaming (demand-
+> driven), RS256/OIDC + Vault/SOPS residuals (P2-4), and cross-worker audit
+> ordering (WORM/DB-sequence).
 
 The P0 + P1 production-readiness sweep is closed (see the merge commit
 `a40d6f2` and `PRODUCTION_HARDENING_PLAN.md`). What remains is the
@@ -259,8 +261,8 @@ surface, so it deserves the measurement harness first.
 
 ## Sprint C — Enterprise track (P1-2 + P2)
 
-Post-moat. Not blocking; pick these up for specific customer/enterprise
-requirements.
+Post-moat. **ALL SHIPPED** — see the per-item banners; details + residuals
+in `PRODUCTION_HARDENING_PLAN.md`.
 
 - **P1-2 — Per-tenant config.** ✅ SHIPPED & MERGED (`aadae4d`). ``tenants/<id>.yaml|json`` override files loaded into an
   in-memory `TenantConfigRegistry` keyed by tenant id; per-tenant
@@ -284,17 +286,31 @@ requirements.
   installed. Tests: +62 (config model, registry + hot-reload, pipeline
   ceiling enforcement, rate-limit per-tenant, API + lifespan gates, CLI).
   Branch gate: 759 passed / 1 skipped, ruff + mypy clean.
-- **P2-4 — JWT/OAuth2 + key rotation API.** Static API keys today; add
-  short-lived JWT/OIDC + a rotation endpoint (Vault/SOPS integration).
-- **P2-6 — Kubernetes artifacts.** Helm chart / manifests + HPA on the
-  metrics.
-- **P2-5 — SBOM/image signing (cosign).** SBOM is generated but not
-  attested; image not signed.
-- **P2 — Restore 90% CI coverage gate.** Regenerate the ONNX model in CI
-  (needs the `semantic-export` extra / torch) so the semantic tests run
-  and the full-suite coverage clears 90% honestly.
-- **P2-7 — SIEM/alert routing.** Escalation webhook exists; add
-  structured alerting on sustained BLOCK spikes to Splunk/ELK/Sentinel.
+- **P2-4 — JWT/OAuth2 + key rotation API.** ✅ SHIPPED (2026-09-05, v0.2.0).
+  HS256 short-lived JWTs (alg allowlist, exp enforced) via `POST
+  /v1/auth/token`; runtime rotation via `POST /v1/auth/keys/rotate`
+  (admin-tenant only, durable via `NEURALGUARD_AUTH_KEYS_FILE`, atomic 0600
+  writes; runtime-only rotation refused in production). Residuals (demand-
+  driven follow-ups, not claimed): RS256/OIDC discovery (JWKS infra),
+  refresh tokens, Vault/SOPS integration.
+- **P2-6 — Kubernetes artifacts.** ✅ SHIPPED (2026-09-05) — namespace,
+  ConfigMap, Secret template, Redis (requirepass via Secret), Postgres
+  StatefulSet, Deployment + Service, HPA; kubeconform 10/10 strict-valid;
+  hardened secret posture in v0.2.1. **Cluster drill PENDING** (never
+  applied to a real cluster — see `deploy/kubernetes/README.md`).
+- **P2-5 — SBOM/image signing (cosign).** ✅ SHIPPED (2026-09-05) — CI signs
+  + attests the SBOM keyless (identity-scoped verify in-job, bundles
+  uploaded); local key-based flow proven end-to-end. Registry image signing
+  documented as an ops step (`docs/runbooks/artifact_signing.md` §4) — CI
+  builds no image, so an image-signing claim would be vapor.
+- **P2 — Restore 90% CI coverage gate.** ✅ CLOSED (2026-09-05) — CI
+  regenerates the ONNX model and rebuilds the corpus from tracked sources;
+  the full suite runs and 90% is enforced (pyproject `fail_under = 90`).
+- **P2-7 — SIEM/alert routing.** ✅ SHIPPED (2026-09-05) — `SiemRouter`:
+  Splunk HEC (native), generic JSON webhook, SecurityScarletAI (ECS
+  IngestEvent mapping); BLOCK-rate spike detector (edge-triggered +
+  cooldown); enabled-without-sink refuses in production (F23 closed in
+  v0.2.1 to also cover the scarletai-only posture).
 
 ---
 
@@ -306,12 +322,50 @@ requirements.
    detection; the real moat).
 3. **Sprint C** as enterprise demand requires.
 
-Every phase gates on the existing CI bar: `ruff + mypy + pytest + 86%
-coverage + boot-smoke`. Sprint A adds a nightly bench gate; Sprint B
-extends it. No phase is "done" until the gate is green on `main` and the
-portfolio reference is re-scored.
+Every phase gated on the existing CI bar: `ruff + ruff format + mypy +
+pytest + coverage floor (86% during the sprints; 90% since P2 closed) +
+boot-smoke`. Sprint A added a nightly bench gate; Sprint B extended it.
+No phase was "done" until the gate was green on `main` and the portfolio
+reference re-scored.
+
+## Post-roadmap execution (2026-09-04 → 2026-09-07, v0.2.0/v0.2.1)
+
+Beyond the Sprints above, the production-hardening sweep executed against a
+verified issue ledger (F1–F23) — see the gitignored
+`PRODUCTION_HARDENING_PLAN.md` for the closed-items ledger and the live open
+register. Highlights landed on `main`:
+
+- **Correctness sweep (F1–F8, F13–F15):** AG-before-Pattern ordering (F2),
+  anchorless memory-poisoning regexes (F3), the Agent Guardian Redis
+  session store (F4 — was a silent no-op), the `NEURALGUARD_*` env-name
+  rename + unknown-key refuse gate (F5), user-role-only scanning with an
+  explicit `scan_all_roles` opt-in (F6), dead-knob close-outs (F7), canary
+  doc contradiction (F8), CI/workflow dedupe (F13), `audit-verify` CLI
+  (F14), verdict-header-on-200 + release tagging (F15).
+- **Judge modernization (F10):** configurable timeout, egress gate
+  (`NEURALGUARD_SCANNER_JUDGE_ALLOW_EGRESS`), random data fences around
+  judged text, concurrency semaphore, startup warmup, 27B re-measurement of
+  `judge_resolves_escalate` (A2_RESULTS). Pattern-budget (F11). Corpus
+  hygiene + 5.4× augmentation (F12; 7,623 vectors).
+- **Standalone appliance (F9):** `POST /v1/proxy/chat/completions`, compose
+  profile, runbook, boot-drill verified; streaming refused 422 fail-closed.
+- **P2 enterprise track:** P2-3 (ASI04/ASI10 dedicated rules; 123 patterns
+  total) · P2-4 (JWT + rotation API) · P2-5 (cosign keyless) · P2-6 (K8s
+  artifacts + HPA; drill pending) · P2-7 (SIEM + ScarletAI) · P2-8
+  (pure-ASGI middleware — the global exception handler genuinely backstops,
+  proven by test) · P2-9 (coverage headroom) · P2-10 (Ed25519 signing +
+  JSONL/pg chain verification, live-fire proven; pg INSERT ship-blocker
+  found and fixed) · P2-11 (i18n machine self-audit done; HUMAN sign-off
+  pending — `docs/i18n_native_review_request.md`).
+- **v0.2.1 fix batch (2026-09-07):** F23 scarletai sink gate, postgres
+  event_sig at rest + INSERT fix, `.env.example` full operator surface, CI
+  timeout-minutes everywhere, hardened appliance/K8s secrets, judge scope
+  consistency (F6), `system_prompt_hash` vapor removal (F7 close-out),
+  `neuralguard audit-verify --pg-url` + live-fire tests enforced per-PR in
+  CI.
 
 ---
 
-*Authored 2026-06-27 by Mackenzie 🔍. This is a plan, not a promise —
-scope and ordering adjust with evidence from each phase.*
+*Authored 2026-06-27 by Mackenzie 🔍. Status refreshed 2026-09-07 (v0.2.1
+docs flush). This is a plan, not a promise — scope and ordering adjust with
+evidence from each phase.*

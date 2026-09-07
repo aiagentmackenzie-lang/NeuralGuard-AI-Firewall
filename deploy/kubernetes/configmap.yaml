@@ -27,16 +27,19 @@ data:
   # ── Detection layers ──
   # Structural + Pattern are mandatory. Semantic requires the ONNX model:
   # bake models/ into a custom image or mount a PV at /app/models and set
-  # SEMANTIC_ENABLED=true (models are gitignored — the stock image ships
-  # with semantic OFF rather than pretending it's on).
-  SEMANTIC_ENABLED: "false"
-  JUDGE_ENABLED: "false"
+  # NEURALGUARD_SCANNER_SEMANTIC_ENABLED=true (models are gitignored — the
+  # stock image ships with semantic OFF rather than pretending it's on).
+  # NOTE: the NEURALGUARD_SCANNER_* names are the real settings surface —
+  # compose-style bridge names (SEMANTIC_ENABLED, JUDGE_ENABLED, JUDGE_*) map
+  # to no settings field and silently do nothing inside a pod.
+  NEURALGUARD_SCANNER_SEMANTIC_ENABLED: "false"
+  NEURALGUARD_SCANNER_JUDGE_ENABLED: "false"
   # Point the judge at an Ollama you operate, e.g. an in-cluster Ollama
   # service or a host daemon via the cluster's egress policy. Fill in and
-  # set JUDGE_ENABLED=true to use:
-  # JUDGE_OLLAMA_URL: "http://ollama.neuralguard.svc.cluster.local:11434"
-  # JUDGE_MODEL: "mistral:7b"
-  # JUDGE_TIMEOUT_SECONDS: "10"
+  # set NEURALGUARD_SCANNER_JUDGE_ENABLED=true to use:
+  # NEURALGUARD_SCANNER_JUDGE_OLLAMA_URL: "http://ollama.neuralguard.svc.cluster.local:11434"
+  # NEURALGUARD_SCANNER_JUDGE_MODEL: "mistral:7b"
+  # NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS: "10"
   # ── Agent Guardian (F4: shared state via redis) ──
   # NEURALGUARD_AGENT_GUARDIAN_REDIS_URL and NEURALGUARD_RATELIMIT_REDIS_URL
   # are set on the Deployment (they embed the redis credential from the

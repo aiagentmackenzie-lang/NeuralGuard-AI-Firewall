@@ -1,9 +1,14 @@
 # TLS Termination Runbook (P0-2)
 
 NeuralGuard must not receive prompts over plain HTTP in production. The
-application lifespan refuses to start in `production` unless
-`NEURALGUARD_ALLOW_INSECURE_HTTP=true` is set — and that flag must
-ONLY be set when a TLS-terminating reverse proxy is in front.
+application does not hard-refuse plain HTTP — it logs a loud TLS notice
+(`production_tls_notice`) on every production boot when
+`NEURALGUARD_ALLOW_INSECURE_HTTP=false` (the default), and a different loud
+warning when the flag is `true`. TLS enforcement is an OPERATOR
+responsibility: terminate TLS at a reverse proxy (Option A, recommended) or
+in uvicorn directly (Option B) — and set
+`NEURALGUARD_ALLOW_INSECURE_HTTP=true` ONLY when a TLS-terminating reverse
+proxy is actually in front.
 
 ## Option A — TLS at a reverse proxy (recommended)
 

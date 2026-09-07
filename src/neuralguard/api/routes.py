@@ -237,10 +237,13 @@ async def scan_output(
 ) -> ScanOutputResponse | JSONResponse:
     """Validate LLM output before delivery.
 
-    Checks for:
-    - PII leakage (emails, phone numbers, SSNs, API keys)
-    - Canary token leakage (if session_id provided)
-    - Schema compliance
+    Runs the pattern layer in output-only mode, which checks for:
+    - PII / credential leakage (EXF rules: emails, phone numbers, SSNs,
+      credit cards, API keys, tokens, private keys, connection strings)
+    - System-prompt extraction markers (EXT rules)
+    - Encoding-evasion patterns (ENC rules)
+    - Canary token leakage (CANARY-LEAK-001, when session_id is provided
+      and the canary feature is enabled)
     """
     # Enforce tenant binding against the authenticated API key.
     _check_tenant_binding(request, body.tenant_id)
@@ -564,11 +567,16 @@ async def info(
                 "LLM10 (Unbounded Consumption)",
                 "ASI01 (Goal Hijack)",
                 "ASI02 (Tool Misuse)",
-                "ASI06 (Memory Poisoning)",
+                "ASI04 (Supply Chain) — SC-001..005 rules",
+                "ASI06 (Memory Poisoning) — T-MEM MEM-001..004 + AG accumulation",
+                "ASI10 (Rogue Agents) — RA-001..005 rules",
             ],
-            # Corpus-assisted only: no dedicated detection rules. Tracked for
-            # honesty so customers do not rely on coverage that is incidental.
-            "corpus_assisted_only": ["ASI04 (Supply Chain)", "ASI10 (Rogue Agents)"],
+            # Honesty contract: anything with NO dedicated detection rule and
+            # only incidental corpus coverage would be listed here. Since the
+            # P2-3 SC/RA rules landed, nothing in the tracked OWASP set is
+            # corpus-assisted-only anymore — the list stays as the honesty
+            # surface for any future gap.
+            "corpus_assisted_only": [],
         },
         "api_version": "v1",
         "judge_egress": judge_egress,

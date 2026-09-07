@@ -9,7 +9,7 @@
 
 | Flow | Where | Key | Status |
 |:--|:--|:--|:--|
-| SBOM blob signing (keyless) | CI job `sbom-sign` | ephemeral Fulcio cert (GitHub OIDC) | ✅ CI-verified once pushed (first green run pending push approval) |
+| SBOM blob signing (keyless) | CI job `sbom-sign` | ephemeral Fulcio cert (GitHub OIDC) | ✅ CI-verified — green on every push since 2026-09-05 |
 | SBOM attestation (cyclonedx predicate) | CI job `sbom-sign` | same | ✅ same |
 | Local artifact signing (key-based) | operator machine (this runbook) | `~/.cosign/<prefix>.key` | ✅ locally verified (sign → verify EXIT 0, cosign v3.1.3) |
 | Container image signing | operator + registry | local key or keyless | 🟠 OPS STEP — requires a registry; not possible from CI without a push target (below) |

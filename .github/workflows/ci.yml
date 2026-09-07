@@ -291,15 +291,11 @@ jobs:
           ./scripts/smoke_test.sh
 
   # ── Semantic smoke ────────────────────────────────────────────────────
-  # The headline semantic/judge feature relies on gitignored ONNX model
-  # artifacts, so the main test job (which doesn't install [semantic]) only
-  # covers the deterministic layers. This job verifies the [semantic] extra
-  # installs and the semantic modules import cleanly, and runs the semantic
-  # unit tests. The model-dependent tests skip in CI (the ONNX model is
-  # gitignored); they run locally after `scripts/export_onnx.py`. Full-suite
-  # coverage reaches ~90%+ with the model present — see
-  # PRODUCTION_HARDENING_PLAN.md (P2: regenerate the model in CI to restore a
-  # 90% coverage gate).
+  # Fast check that the [semantic] extra installs and the semantic modules
+  # import cleanly, plus the model-independent semantic unit tests. The
+  # FULL suite with the regenerated ONNX model + rebuilt corpus runs in the
+  # `coverage` job (P2 closed 2026-09-05) — this job is the quick
+  # import/install guard, not the coverage gate.
   semantic-smoke:
     name: Semantic extra smoke
     runs-on: ubuntu-latest
@@ -327,6 +323,11 @@ jobs:
           importlib.import_module("neuralguard.semantic.hybrid")
           print("semantic modules import OK")
           PY
+
+      # This job stays as a fast extra-installs + imports check. The FULL
+      # semantic suite + coverage runs in the `coverage` job, which now
+      # regenerates the ONNX model and rebuilds the corpus from tracked
+      # sources (P2 closed 2026-09-05) — see that job for the 90% gate.
 
       - name: Run unit tests for semantic layer
         run: uv run pytest tests/unit/test_embedding.py tests/unit/test_similarity_scanner.py tests/unit/test_hybrid_scoring.py tests/unit/test_corpus.py -v --tb=short

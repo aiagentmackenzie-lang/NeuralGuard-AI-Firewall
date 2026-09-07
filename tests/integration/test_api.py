@@ -54,8 +54,11 @@ class TestInfoEndpoint:
         assert data["version"] == "0.2.1"
         assert "owasp_coverage" in data
         assert "LLM01" in data["owasp_coverage"]["dedicated_rules"][0]
-        # ASI04/ASI10 are corpus-assisted only, not dedicated rules
-        assert "ASI04" in data["owasp_coverage"]["corpus_assisted_only"][0]
+        # ASI04/ASI10 moved to dedicated rules in P2-3 (SC-001..005 /
+        # RA-001..005) — the honesty surface must never under-report them.
+        dedicated = " ".join(data["owasp_coverage"]["dedicated_rules"])
+        assert "ASI04" in dedicated
+        assert "ASI10" in dedicated
 
 
 class TestEvaluateEndpoint:

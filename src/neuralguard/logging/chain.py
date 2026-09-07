@@ -13,11 +13,13 @@ event on disk breaks that event's recorded ``event_hash`` *and* the next
 event's ``prev_hash`` — so post-hoc tampering is detectable per chain.
 
 What this is NOT (documented honestly):
+What this is NOT (documented honestly):
 - It does not prevent a privileged operator from deleting a whole chain.
 - It does not order events across workers. Cross-worker tamper-evidence
-  requires a WORM sink or a DB-level sequence (tracked as P2).
-- It does not sign events (no key material); it detects modification, not
-  forgery of an entirely new file. Add Ed25519 signing (P2) for that.
+  requires a WORM sink or a DB-level sequence (still open).
+- It does not sign events (no key material in this module) — Ed25519 signing
+  closes the forged-chain gap (P2-10, `logging/signing.py`; verify with
+  `neuralguard audit-verify --pubkey <hex>`).
 
 The canonical encoding is deterministic: fields are concatenated with a
 delimiter that cannot appear in the hashed content's boundaries, and dict

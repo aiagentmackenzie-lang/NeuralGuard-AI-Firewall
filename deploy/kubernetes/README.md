@@ -35,12 +35,13 @@ kubectl -n neuralguard rollout status deploy/neuralguard
   deliberately not shipped half-validated.
 - **Semantic layer**: OFF in the stock manifests (the ONNX model is
   gitignored). Bake `models/` into a custom image or mount a PV and set
-  `SEMANTIC_ENABLED=true`.
-- **Judge**: point `JUDGE_OLLAMA_URL` at an Ollama you operate; the egress
-  gate (`NEURALGUARD_SCANNER_JUDGE_ALLOW_EGRESS`) applies as everywhere else.
+  `NEURALGUARD_SCANNER_SEMANTIC_ENABLED=true`.
+- **Judge**: point `NEURALGUARD_SCANNER_JUDGE_OLLAMA_URL` at an Ollama you
+  operate; the egress gate (`NEURALGUARD_SCANNER_JUDGE_ALLOW_EGRESS`) applies
+  as everywhere else.
 - **Ingress/TLS**: deliberately not included — TLS termination is
   deployment-specific (see `docs/runbooks/tls_termination.md`). The Service
-  is ClusterIP; never expose it un TLS-fronted.
+  is ClusterIP; never expose it without TLS in front.
 - **Image signing**: when you push the image, sign it —
   `docs/runbooks/artifact_signing.md` §4 (registry signing, ops step).
 

@@ -112,17 +112,30 @@ archival, not enforced by NeuralGuard).
 ## Verification (after any restore)
 
 ```bash
-# 1. The restored chain verifies (see snippet above).
+# 1. The restored chain verifies — prefer the shipped CLI over ad-hoc scripts:
+#    groups events per worker, verifies each chain, exits 0/1 for cron use.
+neuralguard audit-verify ./restored
+neuralguard audit-verify ./restored --pubkey "$PUB"   # + Ed25519 signatures (P2-10)
+neuralguard audit-verify --pg-url "$PG_DSN" [--pubkey "$PUB"]   # Postgres-audit deployments
+
 # 2. Event count matches the backup manifest.
 # 3. No event_hash collisions across the restored set:
 sort audit-*.jsonl | jq -r .event_hash | sort | uniq -d   # must be empty
 ```
 
+For Postgres-audit deployments the `audit_events` table carries the full
+tamper-evidence record (worker_id / prev_hash / event_hash / event_sig), so
+`pg_dump` backups include signatures and restore with them intact; verify
+the restored table with `neuralguard audit-verify --pg-url` (per-worker
+chains reconstructed by prev_hash link-walk — SQL row order is not trusted
+as write order).
+
 ## What is NOT covered here
 
-- Cross-worker chain ordering (P2): chains are per-worker; restoring the
-  global timeline requires joining on `timestamp` across chains, which is
-  approximate, not strict.
-- WORM sink (P2): a true write-once target (object lock, S3 Object Lock in
+- Cross-worker chain ordering (residual): chains are per-worker; signing
+  (P2-10) authenticates each chain, but restoring the global timeline
+  requires joining on `timestamp` across chains, which is approximate, not
+  strict. A WORM sink / DB-level sequence is the future fix.
+- WORM sink: a true write-once target (object lock, S3 Object Lock in
   compliance mode, or a dedicated WORM appliance) is the next step beyond
   these backups for evidentiary-grade retention.
