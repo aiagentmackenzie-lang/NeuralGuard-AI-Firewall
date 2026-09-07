@@ -15,7 +15,7 @@ import pytest
 
 from neuralguard.config.settings import AuditSettings
 from neuralguard.logging.audit import AuditLogger
-from neuralguard.logging.verify import verify_audit_files
+from neuralguard.logging.verify import reconstruct_chain_order, verify_audit_files
 from neuralguard.models.schemas import EvaluateRequest, EvaluateResponse, Verdict
 
 
@@ -180,3 +180,80 @@ class TestAuditVerify:
             text=True,
         )
         assert proc.returncode == 2
+
+
+# ── Postgres link-walk reconstruction (P2-10 close-out) ────────────────────
+
+
+class TestReconstructChainOrder:
+    """The postgres verify path reconstructs chain order by WALKING
+    prev_hash links — SQL row order must not be trusted as write order
+    (microsecond ties under a write burst would otherwise false-BROKEN an
+    honest table)."""
+
+    def _chain(self, n: int, worker: str = "w1") -> list:
+        """Build a real hash-linked chain (the same stamping the writer does)."""
+        from neuralguard.logging.chain import compute_event_hash
+        from neuralguard.models.schemas import AuditEvent, Verdict
+
+        events: list = []
+        prev: str | None = None
+        for i in range(n):
+            e = AuditEvent(
+                request_id=f"r{i}",
+                tenant_id="t",
+                verdict=Verdict.ALLOW,
+                findings_count=0,
+                threat_categories=[],
+                confidence=0.0,
+                total_latency_ms=1.0,
+                worker_id=worker,
+                prev_hash=prev,
+            )
+            e.event_hash = compute_event_hash(e, prev)
+            prev = e.event_hash
+            events.append(e)
+        return events
+
+    def test_in_order_list(self) -> None:
+        events = self._chain(4)
+        assert [e.event_id for e in reconstruct_chain_order(events)] == [e.event_id for e in events]
+
+    def test_shuffled_rows_reconstruct_true_order(self) -> None:
+        """The whole point: SQL returns rows in ANY order — the walk rebuilds
+        the write order from prev_hash links."""
+        import random
+
+        events = self._chain(6)
+        shuffled = list(events)
+        random.shuffle(shuffled)
+        result = reconstruct_chain_order(shuffled)
+        assert [e.event_id for e in result] == [e.event_id for e in events]
+
+    def test_orphan_row_is_broken(self) -> None:
+        """A deleted middle event leaves an orphan — partial tables are not
+        verifiable (verify full tables, per the runbook)."""
+        events = self._chain(4)
+        result = reconstruct_chain_order(events[:2] + events[3:])
+        assert result is None
+
+    def test_fork_is_broken(self) -> None:
+        """Two events claiming the same parent — a forged branch is broken."""
+        from neuralguard.logging.chain import compute_event_hash
+
+        events = self._chain(3)
+        fork = self._chain(1)[0]
+        fork.prev_hash = events[1].event_hash
+        fork.event_hash = compute_event_hash(fork, fork.prev_hash)
+        result = reconstruct_chain_order([*events, fork])
+        assert result is None
+
+    def test_head_only_single_event(self) -> None:
+        events = self._chain(1)
+        assert [e.event_id for e in reconstruct_chain_order(events)] == [events[0].event_id]
+
+    def test_foreign_head_link_is_orphan(self) -> None:
+        """A prev_hash pointing outside the table (partial backup) is broken."""
+        events = self._chain(3)
+        events[0].prev_hash = "f" * 64  # references an event not in the table
+        assert reconstruct_chain_order(events) is None

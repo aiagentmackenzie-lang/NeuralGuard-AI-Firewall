@@ -60,11 +60,24 @@ def _cmd_audit_verify(args: argparse.Namespace) -> int:
 
     from neuralguard.logging.verify import verify_audit_files
 
-    try:
-        report = verify_audit_files(Path(args.path), pubkey_hex=args.pubkey)
-    except (OSError, ValueError) as exc:
-        print(f"audit-verify: cannot read {args.path}: {exc}", file=_sys.stderr)
-        return 2
+    if args.pg_url:
+        # P2-10 close-out: postgres audit source — same per-worker chain +
+        # signature semantics, read from the audit_events table.
+        import asyncio as _asyncio
+
+        from neuralguard.logging.verify import verify_audit_postgres
+
+        try:
+            report = _asyncio.run(verify_audit_postgres(args.pg_url, pubkey_hex=args.pubkey))
+        except Exception as exc:
+            print(f"audit-verify: cannot read postgres at {args.pg_url}: {exc}", file=_sys.stderr)
+            return 2
+    else:
+        try:
+            report = verify_audit_files(Path(args.path), pubkey_hex=args.pubkey)
+        except (OSError, ValueError) as exc:
+            print(f"audit-verify: cannot read {args.path}: {exc}", file=_sys.stderr)
+            return 2
 
     if args.json:
         print(_json.dumps(report.to_dict(), indent=2))
@@ -243,7 +256,18 @@ def main() -> None:
     )
     av.add_argument(
         "path",
-        help="An audit .jsonl file or a directory of them (e.g. /data/audit).",
+        nargs="?",
+        default=None,
+        help="An audit .jsonl file or a directory of them (e.g. /data/audit). "
+        "Omit when --pg-url is given.",
+    )
+    av.add_argument(
+        "--pg-url",
+        default=None,
+        help="Postgres audit source (e.g. postgresql+asyncpg://u:p@host:5432/db) — "
+        "verify the audit_events table instead of JSONL files (per-worker chains "
+        "reconstructed by link-walk; same --pubkey signature semantics). "
+        "Requires the [db] extra.",
     )
     av.add_argument(
         "--json",
@@ -311,6 +335,8 @@ def main() -> None:
         sys.exit(args.func(args))
 
     if args.command == "audit-verify":
+        if not args.pg_url and not args.path:
+            parser.error("audit-verify requires a path (JSONL file/dir) or --pg-url")
         sys.exit(args.func(args))
 
     if args.command == "audit-keygen":

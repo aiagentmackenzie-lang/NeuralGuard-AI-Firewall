@@ -20,7 +20,9 @@ verdict-shaped response.
   script lives in the venv, not on PATH: `docker compose
   -f docker-compose.appliance.yml exec neuralguard uv run neuralguard
   audit-verify /data/audit`) or Postgres (`POSTGRES_PASSWORD` required —
-  no insecure default; the old `change-me-appliance` fallback is dead).
+  no insecure default; the old `change-me-appliance` fallback is dead;
+  DB rows verifiable directly: `neuralguard audit-verify --pg-url <dsn>
+  [--pubkey <hex>]`, link-walked per-worker chains + signatures).
 - **Judge**: local Ollama (`mistral:7b` default). RAM sizing: judge model + 1
   GB per worker + redis + postgres. `qwen3.8:27b` needs ~20 GB and a raised
   `NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS` (~30-60 s; it evaluates in

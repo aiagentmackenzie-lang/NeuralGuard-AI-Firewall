@@ -105,7 +105,9 @@ class TestAuditInflightOverflow:
             logger._pg_available = True
 
             # Monkeypatch the inner async insert to never touch a real DB.
-            async def _fake_insert(orm_obj):
+            # Signature matches _async_insert(event, orm_obj) — assigned as a
+            # staticmethod so `self` is not bound.
+            async def _fake_insert(event, orm_obj):
                 await asyncio.sleep(0.01)
 
             logger._async_insert = staticmethod(_fake_insert)  # type: ignore[assignment]

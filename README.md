@@ -445,7 +445,12 @@ both its own hash and the next event's `prev_hash`. Optional Ed25519
 signing (P2-10): set `NEURALGUARD_AUDIT_SIGNING_KEY` (`neuralguard
 audit-keygen`) and every persisted event's chain hash is signed — forged,
 internally-consistent chains are then rejected by `neuralguard audit-verify
---pubkey <hex>`. See
+--pubkey <hex>`. Postgres-audit deployments verify the table directly:
+`neuralguard audit-verify --pg-url <dsn> [--pubkey <hex>]` (per-worker
+chains reconstructed by link-walk — SQL row order is not trusted as write
+order; signatures verified with the same `--pubkey` semantics; requires
+the `[db]` extra). A failed DB insert falls back to the JSONL audit path
+(an event is never silently lost). See
 [`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md) for
 backup, restore, and chain verification.
 

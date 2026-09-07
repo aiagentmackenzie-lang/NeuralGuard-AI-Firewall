@@ -5,10 +5,17 @@ chain (a naive single-chain verify over an interleaved multi-worker file
 FAILS BY DESIGN — hash chains are per-process, P2-10 tracks cross-worker
 ordering + signing), and verifies each chain with
 ``neuralguard.logging.chain.verify_chain``.
+
+``verify_audit_postgres`` (P2-10 close-out) does the same for the postgres
+audit backend: rows are read from the ``audit_events`` table, grouped per
+worker, and each chain is reconstructed by LINK-WALK (prev_hash links —
+SQL row order is not trusted as write order) before hash + signature
+verification.
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -125,5 +132,144 @@ def verify_audit_files(target: Path, pubkey_hex: str | None = None) -> AuditVeri
                 event_count=len(events),
                 valid=valid,
             )
+        )
+    return report
+
+
+# ── Postgres audit source (P2-10 close-out) ───────────────────────────────
+# The postgres audit backend stores the tamper-evidence chain (worker_id /
+# prev_hash / event_hash / event_sig) in the audit_events table, but until
+# now only JSONL files had a verification tool — a postgres-audit operator
+# could not verify their own chains. This path reads the table and verifies
+# the SAME semantics (per-worker chains + optional Ed25519 signatures).
+
+
+def reconstruct_chain_order(events: list[AuditEvent]) -> list[AuditEvent] | None:
+    """Order-independent chain reconstruction from prev_hash links.
+
+    SQL row order (timestamp, event_id) is only an approximation of write
+    order — microsecond ties under a write burst can reorder rows, and a
+    false-BROKEN report on an honest table is a real failure mode for an
+    operator. So the postgres path reconstructs the chain by WALKING the
+    prev_hash links: start at the chain head(s) (prev_hash None) and follow
+    event_hash -> prev_hash until the walk ends.
+
+    Returns the events in chain order, or None when the worker's events do
+    not form one coherent chain (orphan rows — a gap or fork — including a
+    partial backup whose head lives outside this table). None is reported
+    BROKEN by the caller: an unverifiable chain is not a valid one.
+    """
+    by_prev: dict[str, AuditEvent] = {}
+    for event in events:
+        if event.prev_hash is not None:
+            # A fork (two events claiming the same parent) leaves the second
+            # link unvisited by the walk — the orphan check below catches it.
+            by_prev.setdefault(event.prev_hash, event)
+    heads = [e for e in events if e.prev_hash is None]
+
+    ordered: list[AuditEvent] = []
+    seen_ids: set[str] = set()
+    for head in heads:
+        current = head
+        ordered.append(current)
+        seen_ids.add(current.event_id)
+        while True:
+            if current.event_hash is None:
+                break  # a chain event always carries a stamped hash
+            nxt = by_prev.get(current.event_hash)
+            if nxt is None or nxt.event_id in seen_ids:  # chain end / cycle guard
+                break
+            ordered.append(nxt)
+            seen_ids.add(nxt.event_id)
+            current = nxt
+
+    if len(ordered) != len(events):
+        return None  # orphan / fork / gap — the table is not one coherent chain
+    return ordered
+
+
+async def verify_audit_postgres(pg_url: str, pubkey_hex: str | None = None) -> AuditVerifyReport:
+    """Verify per-worker chains + optional signatures in the audit_events table.
+
+    Requires the ``[db]`` extra (sqlalchemy[asyncio] + asyncpg). Rows are read
+    via the ORM, grouped per ``worker_id``, and each worker's chain is
+    reconstructed by link-walk (see :func:`reconstruct_chain_order`) before
+    hash + signature verification — the same verdicts as the JSONL path.
+
+    Verification is read-only and connects with a THROWAWAY engine (it does
+    not touch the engine singleton the app lifespan manages).
+    """
+    from sqlalchemy import select
+
+    from neuralguard.db.engine import create_engine as db_create_engine
+    from neuralguard.db.models import AuditEventORM
+    from neuralguard.db.session import session_factory
+    from neuralguard.models.schemas import ThreatCategory, Verdict
+
+    engine = db_create_engine(pg_url)
+    events: list[AuditEvent] = []
+    parse_errors = 0
+    try:
+        # ORM entity results REQUIRE a session context — a bare
+        # connection.execute(select(ORM)) returns raw Row tuples (live-fire
+        # caught: .scalars() then yielded the event_id UUID column instead of
+        # entities).
+        factory = session_factory()
+        async with factory() as session:
+            rows = (await session.execute(select(AuditEventORM))).scalars().all()
+        for row in rows:
+            try:
+                events.append(
+                    AuditEvent(
+                        event_id=str(row.event_id),
+                        request_id=row.request_id or str(uuid.uuid4()),
+                        tenant_id=row.tenant_id or "unknown",
+                        timestamp=row.timestamp,
+                        verdict=Verdict(row.verdict),
+                        findings_count=row.findings_count or 0,
+                        threat_categories=[
+                            ThreatCategory(tc) for tc in (row.threat_categories or [])
+                        ],
+                        confidence=row.confidence if row.confidence is not None else 0.0,
+                        total_latency_ms=row.total_latency_ms or 0.0,
+                        scanner_details=[dict(d) for d in (row.scanner_details or [])],
+                        metadata=dict(row.metadata_ or {}),
+                        worker_id=row.worker_id,
+                        prev_hash=row.prev_hash,
+                        event_hash=row.event_hash,
+                        event_sig=row.event_sig,
+                    )
+                )
+            except Exception:
+                parse_errors += 1
+                logger.warning("audit_verify_pg_row_rejected", event_id=str(row.event_id))
+    finally:
+        await engine.dispose()
+
+    chains: dict[str, list[AuditEvent]] = {}
+    for event in events:
+        chains.setdefault(event.worker_id or "<unknown-worker>", []).append(event)
+
+    report = AuditVerifyReport(
+        files_read=1,  # one table
+        events_parsed=len(events),
+        parse_errors=parse_errors,
+        chains=[],
+    )
+    for worker_id in sorted(chains):
+        worker_events = chains[worker_id]
+        ordered = reconstruct_chain_order(worker_events)
+        valid = ordered is not None and verify_chain(ordered)
+        if valid and pubkey_hex is not None:
+            from neuralguard.logging.signing import verify_event_signature
+
+            valid = all(
+                e.event_sig is not None
+                and e.event_hash is not None
+                and verify_event_signature(e.event_hash, e.event_sig, pubkey_hex)
+                for e in worker_events
+            )
+        report.chains.append(
+            ChainReport(worker_id=worker_id, event_count=len(worker_events), valid=valid)
         )
     return report

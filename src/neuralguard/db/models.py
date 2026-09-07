@@ -43,8 +43,8 @@ class AuditEventORM(Base):
     findings_count: Mapped[int] = mapped_column(Integer, default=0)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     total_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
-    threat_categories: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    scanner_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    threat_categories: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    scanner_details: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
     # Tamper-evidence chain (P1-4). Per-worker chain; see logging.chain.
     worker_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)

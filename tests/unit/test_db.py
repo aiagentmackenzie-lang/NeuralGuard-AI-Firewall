@@ -278,8 +278,10 @@ class TestAuditLoggerPostgresPath:
         )
         audit = AuditLogger(settings)
 
-        # Monkeypatch the actual async insert to be a no-op
-        async def mock_insert(orm_obj):
+        # Monkeypatch the actual async insert to be a no-op (signature must
+        # match _async_insert(event, orm_obj) — the insert-failure fallback
+        # contract passes the event for the JSONL fallback).
+        async def mock_insert(event, orm_obj):
             pass
 
         monkeypatch.setattr(audit, "_async_insert", mock_insert)

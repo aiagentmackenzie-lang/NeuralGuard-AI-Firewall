@@ -217,9 +217,12 @@ class AuditLogger:
                 event_id=uuid.UUID(event.event_id)
                 if isinstance(event.event_id, str)
                 else event.event_id,
-                request_id=uuid.UUID(event.request_id)
-                if isinstance(event.request_id, str)
-                else event.request_id,
+                # request_id is a String(64) column — passing a UUID object
+                # makes asyncpg reject EVERY insert with "expected str, got
+                # UUID" (live-fire caught: postgres-audit deployments were
+                # silently losing their entire audit trail; the failed event
+                # was logged and dropped, never JSONL-fallen-back).
+                request_id=event.request_id,
                 tenant_id=event.tenant_id,
                 timestamp=event.timestamp,
                 verdict=event.verdict.value,
@@ -267,7 +270,7 @@ class AuditLogger:
                 self._write_jsonl(event)
                 return
 
-            task = loop.create_task(self._async_insert(orm_obj))
+            task = loop.create_task(self._async_insert(event, orm_obj))
             self._inflight.add(task)
             task.add_done_callback(self._inflight.discard)
             self._pg_available = True
@@ -290,11 +293,14 @@ class AuditLogger:
             )
             self._write_jsonl(event)
 
-    @staticmethod
-    async def _async_insert(orm_obj: Any) -> None:
+    async def _async_insert(self, event: AuditEvent, orm_obj: Any) -> None:
         """Perform the actual async database insert.
 
-        Separate method for testability and clean error handling.
+        Separate method for testability and clean error handling. On failure
+        the event is written to the JSONL fallback — a DB insert failure must
+        never silently LOSE an audit event (the engine-not-ready and
+        in-flight-cap paths already honor this contract; the insert-failure
+        path previously logged the error and dropped the event).
         """
         try:
             from neuralguard.db.session import session_factory
@@ -311,6 +317,17 @@ class AuditLogger:
                 error=str(exc),
                 event_id=str(orm_obj.event_id),
             )
+            metrics.record_audit_failure("postgres")
+            # Preserve the event: the JSONL fallback keeps the tamper-evident
+            # form (full AuditEvent incl. chain hash + signature).
+            try:
+                self._write_jsonl(event)
+            except Exception as fallback_exc:  # pragma: no cover — disk failure
+                _slog.get_logger(__name__).error(
+                    "postgres_fallback_jsonl_failed",
+                    error=str(fallback_exc),
+                    event_id=str(orm_obj.event_id),
+                )
 
     # ── JSONL Backend ──────────────────────────────────────────────────────
 
