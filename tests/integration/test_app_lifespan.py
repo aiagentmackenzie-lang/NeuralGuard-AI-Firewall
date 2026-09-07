@@ -181,3 +181,72 @@ class TestCanaryProductionGates:
         config = NeuralGuardConfig(environment="development")
         app = create_app(config)
         assert app.state.canary_manager is None
+
+
+# ── SIEM production fail-fast (P2-7 / F23) ─────────────────────────────
+
+
+class TestSiemProductionGates:
+    """F23: the enabled-without-sink gate must know EVERY sink the router
+    supports. A scarletai-only deployment (the local-SIEM posture) was
+    previously refused in production and silently unrouted in dev because the
+    gate checked only splunk/webhook."""
+
+    @staticmethod
+    def _base_config(**siem_kwargs) -> NeuralGuardConfig:
+        from neuralguard.config.settings import SiemSettings
+
+        return NeuralGuardConfig(
+            environment="production",
+            auth=AuthSettings(enabled=True, api_keys=["k|acme"]),
+            server=ServerSettings(allow_insecure_http=True, workers=1),
+            siem=SiemSettings(enabled=True, **siem_kwargs),
+        )
+
+    async def test_scarletai_only_production_boots_and_routes(self):
+        """The F23 regression: scarletai-only config is a VALID sink config."""
+        from neuralguard.siem import SiemRouter
+
+        config = self._base_config(
+            scarletai_url="http://127.0.0.1:8000/api/v1/ingest",
+            scarletai_token="tok",
+        )
+        app = create_app(config)
+        async with app.router.lifespan_context(app):
+            siem = app.state.audit_logger._siem
+        assert isinstance(siem, SiemRouter)
+        assert siem._sinks == ["scarletai"]
+
+    def test_siem_enabled_no_sink_production_refused(self):
+        # The gate fires in create_app (SIEM router construction), not lifespan.
+        config = self._base_config()
+        with pytest.raises(RuntimeError, match="no sink is configured"):
+            create_app(config)
+
+    async def test_siem_enabled_no_sink_dev_boots_unrouted(self):
+        """Dev warns and boots; the audit logger must have NO router (the
+        silent-unroute trap applied when scarletai-only was misread as empty)."""
+        from neuralguard.config.settings import SiemSettings
+
+        config = NeuralGuardConfig(
+            environment="development",
+            siem=SiemSettings(enabled=True),
+        )
+        app = create_app(config)
+        async with app.router.lifespan_context(app):
+            assert app.state.audit_logger._siem is None
+
+    async def test_all_three_sinks_production_boots(self):
+        """Multi-sink production config: router sees all three sinks."""
+        config = self._base_config(
+            splunk_hec_url="https://splunk.test:8088",
+            webhook_url="http://elk.test/ingest",
+            scarletai_url="http://127.0.0.1:8000/api/v1/ingest",
+        )
+        app = create_app(config)
+        async with app.router.lifespan_context(app):
+            assert app.state.audit_logger._siem._sinks == [
+                "splunk_hec",
+                "webhook",
+                "scarletai",
+            ]

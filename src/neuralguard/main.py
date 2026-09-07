@@ -477,10 +477,14 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     # (misconfigured observability must not boot silently dark); dev warns.
     siem_router = None
     if config.siem.enabled:
-        if not config.siem.splunk_hec_url and not config.siem.webhook_url:
+        # F23: the has-sink gate must know EVERY sink the router supports —
+        # a scarletai-only deployment (the local-SIEM posture) was previously
+        # refused in production / silently unrouted in dev.
+        if not config.siem.has_any_sink:
             msg = (
                 "siem.enabled=true but no sink is configured: set "
-                "NEURALGUARD_SIEM_SPLUNK_HEC_URL and/or NEURALGUARD_SIEM_WEBHOOK_URL"
+                "NEURALGUARD_SIEM_SPLUNK_HEC_URL, NEURALGUARD_SIEM_WEBHOOK_URL, "
+                "and/or NEURALGUARD_SIEM_SCARLETAI_URL"
             )
             if config.environment == "production":
                 raise RuntimeError(msg)

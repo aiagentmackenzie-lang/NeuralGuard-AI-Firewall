@@ -451,6 +451,18 @@ class SiemSettings(BaseSettings):
         description="Minimum seconds between spike alerts (edge-trigger re-arm)",
     )
 
+    @property
+    def has_any_sink(self) -> bool:
+        """At least one delivery sink is configured.
+
+        Must match ``SiemRouter.__init__`` sink detection EXACTLY (F23: the
+        create_app enabled-without-sink gate originally checked only splunk/
+        webhook, so a scarletai-only deployment was refused in production and
+        silently unrouted in dev). Any new sink added to the router MUST be
+        added here too — pinned by TestSiemProductionGates.
+        """
+        return bool(self.splunk_hec_url or self.webhook_url or self.scarletai_url)
+
 
 class TenantSettings(BaseSettings):
     """Multi-tenant configuration."""
