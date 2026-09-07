@@ -364,6 +364,42 @@ register. Highlights landed on `main`:
   `neuralguard audit-verify --pg-url` + live-fire tests enforced per-PR in
   CI.
 
+## v0.3+ research frontier — decision register (2026-09-07)
+
+Evidence base: the 2026-09-07 research sweep (peer-reviewed 2025–26 sources:
+USENIX Security 2026, arXiv, KDD 2026, ICLR 2025, OWASP GenAI, MCP spec —
+synthesis in the machine-local `docs/RESEARCH_FRONTIER_2026.md` ledger;
+durable conclusions graduate into this register). Three paradigm shifts:
+(1) input detection has a provable ceiling (Ball et al. 2025; controlled-release
+prompting scored 92–100% ASR against production LLMs at USENIX Security 2026);
+(2) the guard itself is the attack surface (Prompt Overflow ~100% bypass,
+arXiv:2605.23196; mutation robustness; FPR weaponization, KDD 2026);
+(3) agent security moved to protocol + provenance enforcement (CaMeL,
+MCP 2026-07-28, signed tool-manifest integrity). Every item below carries its
+evidence anchor; statuses update per the "plan, not a promise" rule.
+
+| # | Item | Priority | Effort | Evidence anchor | Status |
+|---|---|---|---|---|---|
+| NG-1 | Reasoning/intermediate-token output scanning (opt-in, fail-closed on unscannable payloads) | P1 | ~3–5 d | USENIX '26 §6.2 | ✅ Shipped 2026-09-07 (`NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN`) |
+| NG-2 | README threat-model honesty section w/ USENIX citation | P0 | ~½ d | USENIX '26 §8 | ✅ Shipped 2026-09-07 (README threat-model section) |
+| NG-3 | Decode-then-activate Agent Guardian signal (session-scoped, deterministic) | P1 | ~2–3 d | USENIX '26 §3–4 | ✅ Shipped 2026-09-07 (`AG-DECODE-001`) |
+| NG-4 | Overflow-resistant contiguity-gated windowed aggregation | **P0** | ~2–3 d | arXiv:2605.23196 §6.2 | ✅ Shipped 2026-09-07 (`SEM-OVERFLOW-001` / `SEM-W-***`) |
+| NG-5 | 16-mutation red-team gate (Unsafe-ASR + Safe-ASR, nightly, NeuralStrike pairing) | **P0** | ~2–3 d | HF study 2026-05 | ⬜ Open |
+| NG-6 | Published per-tenant FPR SLOs (corpus-hygiene hard negatives in semantic rebuild) | P1 | ~1–2 d | KDD '26; A2 history | ⬜ Open |
+| NG-7 | MCP gateway: signed tool-inventory baselining + rug-pull detect/block (reuse P2-10 Ed25519 + audit chains) | **P0** | ~1–2 wk | MCP 2026-07-28; MDPI FI 18(5):243 | ⬜ Open (differentiator) |
+| NG-8 | Header-based per-tool Intent Gate (`Mcp-Method`/`Mcp-Name` before body parse) | P0 (with NG-7) | ~1 wk | MCP 2026-07-28; OWASP ASI02 | ⬜ Open (differentiator) |
+| NG-9 | Provenance-lite egress binding (not a mini-CaMeL; fail-closed, opt-in) | P2 | ~1 wk | CaMeL 2503.18813 | ⬜ Open |
+
+Ordering guidance: NG-1–NG-4 shipped first (small, gate-provable, defend against
+attack classes that beat every tested open-weight guard). Next: NG-5 + NG-6
+(the cheap honesty gates), then NG-7 + NG-8 as the differentiator sprint. All
+additions inherit the existing CI bar (ruff + format + mypy strict + pytest +
+90% coverage floor + A1 gate + boot smoke). Calibration note (NG-4): the
+windowed pass defaults (`θ_b=0.60`, decision 0.30, min_run 2) are calibrated
+to the A2 corpus reality that benign prompts can match at 0.60–0.74; the gate
+flags ESCALATE (judge-resolvable), never a silent pass — tune via
+`NEURALGUARD_SCANNER_SEMANTIC_OVERFLOW_*` with A1/A2 measurement.
+
 ---
 
 *Authored 2026-06-27 by Mackenzie 🔍. Status refreshed 2026-09-07 (v0.2.1

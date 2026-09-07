@@ -135,6 +135,63 @@ class ScannerSettings(BaseSettings):
         description="Path to attack corpus metadata JSON",
     )
 
+    # NG-4: overflow-resistant window aggregation (Prompt Overflow defense).
+    # arXiv:2605.23196 fragments a malicious instruction into low-density
+    # pieces interleaved with benign filler across an overlong prompt; the
+    # full-text embedding gets diluted below threshold while the downstream
+    # LLM reads the fragments together. The windowed pass embeds overlapping
+    # slices, computes per-window excess risk above a benign background
+    # threshold, and flags when a contiguous run of >= min_run windows
+    # accumulates summed excess >= the decision threshold (the paper's
+    # validated contiguity-gated defense). Runs only for inputs longer than
+    # one window and when the full-text pass did not already BLOCK.
+    semantic_overflow_detection: bool = Field(
+        default=True,
+        description=(
+            "NG-4: windowed overflow-resistant aggregation for long inputs "
+            "(contiguity-gated excess risk; Prompt Overflow defense)."
+        ),
+    )
+    semantic_overflow_window_chars: int = Field(
+        default=400,
+        ge=100,
+        le=8_000,
+        description="Character size of each semantic analysis window (NG-4).",
+    )
+    semantic_overflow_max_windows: int = Field(
+        default=12,
+        ge=1,
+        le=64,
+        description="Hard cap on windows embedded per input (latency bound; stride widens to keep coverage).",
+    )
+    semantic_overflow_benign_threshold: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Benign background level (theta_b) for excess risk: per-window "
+            "similarity at/below this contributes zero excess to the "
+            "contiguity gate. Calibrated near the ESCALATE floor, below "
+            "the known benign-match tail (A2: benign prompts can match at "
+            "0.60-0.74)."
+        ),
+    )
+    semantic_overflow_decision_threshold: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Minimum summed excess risk over a contiguous run (>= min_run "
+            "windows) to flag the overflow pattern (NG-4)."
+        ),
+    )
+    semantic_overflow_min_run: int = Field(
+        default=2,
+        ge=1,
+        le=16,
+        description="Minimum consecutive above-background windows for a flaggable run.",
+    )
+
     # LLM-as-Judge (Phase 2)
     judge_enabled: bool = Field(default=False, description="Enable LLM-as-Judge")
     judge_model: str = Field(
@@ -603,6 +660,17 @@ class AgentGuardianSettings(BaseSettings):
         default=10_000,
         description="Max sessions tracked in-memory before LRU eviction. Bounds memory.",
     )
+    decode_activation_enabled: bool = Field(
+        default=True,
+        description=(
+            "NG-3: detect the decode-then-activate pattern — a decode/extraction "
+            "step (current turn or within the session window) combined with a "
+            "directive to follow/execute the decoded content (USENIX Security "
+            "2026 controlled-release shape). Deliberately does NOT block "
+            "encoding/cipher work itself (CTFs, students, i18n are legitimate); "
+            "only the co-occurring follow-the-decoded-content directive fires."
+        ),
+    )
 
 
 class CanarySettings(BaseSettings):
@@ -686,6 +754,21 @@ class ProxySettings(BaseSettings):
     timeout_seconds: float = Field(
         default=120.0,
         description="Upstream HTTP timeout for one forwarded chat completion.",
+    )
+    output_reasoning_scan: bool = Field(
+        default=False,
+        description=(
+            "NG-1: opt-in output-side scan of reasoning/intermediate tokens "
+            "(thinking tokens) in the upstream response. Thinking-enabled models "
+            "can emit the full malicious payload as intermediate output even when "
+            "the final completion is clean (USENIX Security 2026, thinking-token "
+            "leakage). When enabled, the reasoning payload is scanned with the "
+            "same output semantics as the completion (PII/exfil/extraction) plus "
+            "canary leak detection. Fail-closed: a reasoning payload that is "
+            "present but not a scannable string BLOCKS the response — an "
+            "unscannable stream must not silently pass, matching the SSE 422 "
+            "posture."
+        ),
     )
 
     @property

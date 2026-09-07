@@ -545,6 +545,8 @@ async def info(
             "upstream_egress": (
                 "local" if is_private_endpoint(config.proxy.upstream_url) else "cloud"
             ),
+            # NG-1 posture: whether thinking-token output scanning is on.
+            "output_reasoning_scan": config.proxy.output_reasoning_scan,
         }
     judge_egress: str | None = None
     if config.scanner.judge_enabled:

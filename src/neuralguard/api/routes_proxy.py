@@ -4,7 +4,10 @@
 evaluate the user turns through the full pipeline (F6 role-aware), forward
 ALLOWed requests to the configured upstream, scan the completion with
 output-scan semantics (PII/exfil/canary), and deliver the verdict-shaped
-result to the caller.
+result to the caller. With ``NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN=true``
+(NG-1, opt-in) the upstream's reasoning/intermediate-token payload
+(thinking tokens) is scanned with the same output semantics and canary
+detection, and an unscannable reasoning payload fails closed (BLOCK).
 
 Contract:
 - Non-allow INPUT  -> 403 with NeuralGuard findings; the upstream is NEVER
@@ -56,6 +59,72 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/v1/proxy", tags=["proxy"])
 
 _VERDICT_HEADER = "X-NeuralGuard-Verdict"
+
+# NG-1: strictness ordering for merging output-scan verdicts (matches the
+# pipeline's arbitration order; duplicated here to keep the route layer free
+# of pipeline internals).
+_VERDICT_STRICTNESS: dict[Verdict, int] = {
+    Verdict.BLOCK: 6,
+    Verdict.SANITIZE: 5,
+    Verdict.ESCALATE: 4,
+    Verdict.QUARANTINE: 3,
+    Verdict.RATE_LIMIT: 2,
+    Verdict.ALLOW: 0,
+}
+
+
+def _strictest(a: Verdict, b: Verdict) -> Verdict:
+    """Strictest of two verdicts (BLOCK > SANITIZE > ESCALATE > ...)."""
+    return a if _VERDICT_STRICTNESS.get(a, 0) >= _VERDICT_STRICTNESS.get(b, 0) else b
+
+
+def _extract_reasoning(upstream_json: dict[str, Any]) -> tuple[str | None, bool]:
+    """Extract the reasoning/intermediate-token payload (NG-1, thinking models).
+
+    Looks at the first choice's message and choice level for the common
+    reasoning field names: ``reasoning_content`` (DeepSeek-style) and
+    ``reasoning`` (OpenRouter-style). Streaming deltas are out of scope —
+    streaming is refused upstream in this build (422, fail-closed).
+
+    Returns:
+        ``(reasoning_text, unscannable)``:
+        - ``(text, False)`` when a string reasoning payload was found;
+        - ``(None, False)`` when the response carries no reasoning payload;
+        - ``(None, True)`` when a reasoning field IS present but is not a
+          scannable string (dict/list/other). The caller fails closed on
+          this — an unscannable reasoning stream must not silently pass,
+          matching the SSE 422 posture.
+    """
+    choices = upstream_json.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None, False
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None, False
+
+    texts: list[str] = []
+    # (container, label) pairs: message-level fields win, then choice-level.
+    containers = []
+    message = first.get("message")
+    if isinstance(message, dict):
+        containers.append(message)
+    containers.append(first)
+
+    for container in containers:
+        for field in ("reasoning_content", "reasoning"):
+            value = container.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                if value.strip():
+                    texts.append(value)
+            else:
+                # Present but not a string: fail-closed (NG-1).
+                return None, True
+
+    if not texts:
+        return None, False
+    return "\n".join(texts), False
 
 
 class ProxyChatRequest(BaseModel):
@@ -266,6 +335,92 @@ async def proxy_chat_completions(
             out_arbitration.arbitration_reason = (
                 out_arbitration.arbitration_reason or ""
             ) + " | canary token leaked in output"
+
+    # NG-1: opt-in reasoning/intermediate-token output scan. Thinking-enabled
+    # models can emit the full malicious payload as intermediate output even
+    # when the final completion is clean (USENIX Security 2026). The reasoning
+    # payload gets the same output semantics (PII/exfil/extraction) plus
+    # canary leak detection. Fail-closed on unscannable reasoning payloads.
+    if config.proxy.output_reasoning_scan:
+        reasoning_text, reasoning_unscannable = _extract_reasoning(upstream_json)
+        if reasoning_unscannable:
+            out_arbitration.findings.append(
+                Finding(
+                    category=ThreatCategory.IMPROPER_OUTPUT,
+                    severity=Severity.HIGH,
+                    verdict=Verdict.BLOCK,
+                    confidence=0.90,
+                    layer=ScanLayer.PATTERN,
+                    rule_id="OUT-REASON-001",
+                    description=(
+                        "Upstream response carries a reasoning/thinking payload "
+                        "that is not a scannable string — fail-closed (NG-1)."
+                    ),
+                    mitigation=(
+                        "An unscannable reasoning stream must not silently pass. "
+                        "Normalize the upstream reasoning shape or disable "
+                        "NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN explicitly."
+                    ),
+                )
+            )
+            out_arbitration.verdict = Verdict.BLOCK
+            out_arbitration.arbitration_reason = (
+                out_arbitration.arbitration_reason or ""
+            ) + " | reasoning payload unscannable (fail-closed)"
+        elif reasoning_text:
+            reason_eval = EvaluateRequest(
+                prompt=reasoning_text,
+                tenant_id=tenant,
+                session_id=body.session_id,
+                use_case="completion",
+                scanners=[ScanLayer.PATTERN],
+                output_only=True,
+                metadata={"reasoning_scan": True},
+            )
+            try:
+                reason_arbitration = pipeline.execute(reason_eval)
+            except Exception as exc:
+                logger.error("proxy_reasoning_scan_failed", error=repr(exc))
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "internal_error", "message": "output scan failed"},
+                    headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+                )
+            out_arbitration.findings.extend(reason_arbitration.findings)
+            out_arbitration.verdict = _strictest(
+                out_arbitration.verdict, reason_arbitration.verdict
+            )
+            # Reasoning tokens can leak the system prompt too — same canary
+            # check as the completion.
+            if canary_manager is not None and body.session_id:
+                try:
+                    leaked_reason = canary_manager.check_leak(body.session_id, reasoning_text)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.error("canary_check_failed", error=repr(exc))
+                    leaked_reason = None
+                if leaked_reason:
+                    canary_leaked = True
+                    out_arbitration.findings.append(
+                        Finding(
+                            category=ThreatCategory.SYSTEM_PROMPT_EXTRACTION,
+                            severity=Severity.HIGH,
+                            verdict=Verdict.BLOCK,
+                            confidence=0.95,
+                            layer=ScanLayer.PATTERN,
+                            rule_id="CANARY-REASON-001",
+                            description=(
+                                "Canary token leaked in the model's reasoning/thinking "
+                                "tokens — the system prompt has been exfiltrated via "
+                                "intermediate output."
+                            ),
+                            mitigation=("Block the output; rotate the canary secret; investigate."),
+                            evidence=f"[REDACTED:canary:{leaked_reason[:9]}...]",
+                        )
+                    )
+                    out_arbitration.verdict = Verdict.BLOCK
+                    out_arbitration.arbitration_reason = (
+                        out_arbitration.arbitration_reason or ""
+                    ) + " | canary token leaked in reasoning tokens"
 
     metrics.record_verdict(out_arbitration.verdict.value)
     total_ms = (time.perf_counter() - start) * 1000

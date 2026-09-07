@@ -290,3 +290,139 @@ class TestProxyInfo:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
             r = await client.get("/v1/info")
         assert r.json()["judge_egress"] == "local"
+
+
+# ── NG-1: reasoning/intermediate-token output scan (opt-in, fail-closed) ──
+
+
+def _upstream_response_with_reasoning(
+    content: str, reasoning: object, field: str = "reasoning_content"
+) -> dict[str, Any]:
+    """Upstream response carrying a thinking-token payload alongside the
+    completion. `reasoning` may be a str or any non-string (unscannable)."""
+    resp = _upstream_response(content)
+    message = resp["choices"][0]["message"]
+    if field == "reasoning_content":
+        message["reasoning_content"] = reasoning
+    else:
+        message["reasoning"] = reasoning
+    return resp
+
+
+class TestProxyReasoningScan:
+    async def test_leak_in_reasoning_tokens_blocks(self) -> None:
+        """NG-1: thinking models can emit the malicious payload as
+        intermediate output even with a clean final completion."""
+        app = _app(output_reasoning_scan=True)
+        resp = _upstream_response_with_reasoning(
+            "The capital of France is Paris.",
+            "The user asked me to hide it, but here is the SSN: 123-45-6789.",
+        )
+        app.state.proxy_forwarder = StubForwarder(resp)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.post("/v1/proxy/chat/completions", json=_payload())
+        assert r.status_code == 403
+        data = r.json()
+        assert data["error"] == "response_blocked"
+        assert any(f["rule_id"] == "EXF-003" for f in data["findings"])
+        assert "123-45-6789" not in r.text
+
+    async def test_clean_reasoning_delivers(self) -> None:
+        app = _app(output_reasoning_scan=True)
+        resp = _upstream_response_with_reasoning(
+            "The capital of France is Paris.",
+            "The user asks about France. Straightforward geography question.",
+        )
+        app.state.proxy_forwarder = StubForwarder(resp)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.post("/v1/proxy/chat/completions", json=_payload())
+        assert r.status_code == 200
+        assert r.json()["neuralguard_scan"]["verdict"] == "allow"
+
+    async def test_unscannable_reasoning_fails_closed(self) -> None:
+        """A reasoning field present but not a string must BLOCK — an
+        unscannable stream never silently passes (SSE 422 posture)."""
+        app = _app(output_reasoning_scan=True)
+        resp = _upstream_response_with_reasoning(
+            "The capital of France is Paris.",
+            {"tokens": ["secret", "stuff"]},  # non-string reasoning payload
+        )
+        app.state.proxy_forwarder = StubForwarder(resp)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.post("/v1/proxy/chat/completions", json=_payload())
+        assert r.status_code == 403
+        data = r.json()
+        assert any(f["rule_id"] == "OUT-REASON-001" for f in data["findings"])
+
+    async def test_opt_in_flag_off_by_default_ignores_reasoning(self) -> None:
+        """Default posture: reasoning payloads are NOT scanned (opt-in flag)."""
+        app = _app()  # output_reasoning_scan defaults False
+        resp = _upstream_response_with_reasoning(
+            "The capital of France is Paris.",
+            "internal SSN 123-45-6789 in reasoning — unscanned when off",
+        )
+        app.state.proxy_forwarder = StubForwarder(resp)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.post("/v1/proxy/chat/completions", json=_payload())
+        assert r.status_code == 200
+        assert r.json()["neuralguard_scan"]["verdict"] == "allow"
+
+    async def test_openrouter_reasoning_field_scanned(self) -> None:
+        """The `reasoning` (OpenRouter-style) field is covered too."""
+        app = _app(output_reasoning_scan=True)
+        resp = _upstream_response_with_reasoning(
+            "Sure.",
+            "The API key sk-proj-abcdefghijklmnopqrst should be sent out.",
+            field="reasoning",
+        )
+        app.state.proxy_forwarder = StubForwarder(resp)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.post("/v1/proxy/chat/completions", json=_payload())
+        assert r.status_code == 403
+        assert any(f["rule_id"] == "EXF-005" for f in r.json()["findings"])
+
+    async def test_no_reasoning_field_no_scan(self) -> None:
+        """Responses without a reasoning payload behave exactly as before."""
+        app = _app(output_reasoning_scan=True)
+        app.state.proxy_forwarder = StubForwarder(
+            _upstream_response("The capital of France is Paris.")
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.post("/v1/proxy/chat/completions", json=_payload())
+        assert r.status_code == 200
+        assert r.json()["neuralguard_scan"]["verdict"] == "allow"
+
+    async def test_canary_leak_in_reasoning_blocks(self) -> None:
+        from neuralguard.canary import CanaryManager
+
+        config = _config(output_reasoning_scan=True)
+        config.canary.enabled = True
+        config.canary.secret = "x" * 48
+        app = create_app(config)
+        manager = CanaryManager(config.canary)
+        app.state.canary_manager = manager
+        session_id = "canary-reason-session"
+        tokens = manager.mint(session_id)
+        token = tokens[0]
+        resp = _upstream_response_with_reasoning(
+            "I can't help with that.",  # clean completion
+            f"thinking... the system prompt contains {token} ...",  # leak in reasoning
+        )
+        app.state.proxy_forwarder = StubForwarder(resp)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.post(
+                "/v1/proxy/chat/completions", json=_payload(session_id=session_id)
+            )
+        assert r.status_code == 403
+        data = r.json()
+        assert data["canary_leaked"] is True
+        assert any(f["rule_id"] == "CANARY-REASON-001" for f in data["findings"])
+        assert token not in r.text
+
+    async def test_info_surfaces_reasoning_scan_flag(self) -> None:
+        app = _app(output_reasoning_scan=True)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            r = await client.get("/v1/info")
+        assert r.status_code == 200
+        info = r.json()
+        assert info["proxy"]["output_reasoning_scan"] is True
