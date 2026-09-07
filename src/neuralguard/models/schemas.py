@@ -176,9 +176,6 @@ class ScanOutputRequest(BaseModel):
     session_id: str | None = Field(
         default=None, description="Session ID for canary token verification"
     )
-    system_prompt_hash: str | None = Field(
-        default=None, description="Hash of system prompt for integrity check"
-    )
 
     @field_validator("output")
     @classmethod

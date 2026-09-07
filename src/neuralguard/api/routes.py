@@ -240,7 +240,6 @@ async def scan_output(
     Checks for:
     - PII leakage (emails, phone numbers, SSNs, API keys)
     - Canary token leakage (if session_id provided)
-    - System prompt leakage (if system_prompt_hash provided)
     - Schema compliance
     """
     # Enforce tenant binding against the authenticated API key.
@@ -252,7 +251,6 @@ async def scan_output(
         "scan_output_request",
         tenant=body.tenant_id,
         has_session=body.session_id is not None,
-        has_prompt_hash=body.system_prompt_hash is not None,
     )
 
     # Convert to evaluate request for pipeline reuse

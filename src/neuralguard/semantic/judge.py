@@ -540,12 +540,17 @@ class JudgeScanner(BaseScanner["ScannerSettings"]):
 
     @staticmethod
     def _extract_text(request: EvaluateRequest) -> str:
-        """Extract text from request."""
-        if request.messages:
-            return " ".join(m.content for m in request.messages)
-        if request.prompt:
-            return request.prompt
-        return ""
+        """Extract text from request.
+
+        F6 consistency: the judge evaluates the SAME text the other layers
+        scanned — user-role turns only (``input_texts()``). The previous
+        all-roles join meant a forwarded system prompt could push the judge's
+        verdict on content the pattern/semantic layers never scanned (a
+        false-positive amplifier in proxy mode, where full chat payloads
+        flow). ``scan_all_roles=True`` opts back in everywhere, consistently.
+        """
+        texts = request.input_texts()
+        return " ".join(texts) if texts else ""
 
     @staticmethod
     def _severity_for_verdict(verdict: Verdict) -> Severity:

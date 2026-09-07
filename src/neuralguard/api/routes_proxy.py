@@ -331,15 +331,6 @@ def _extract_completion(upstream_json: dict[str, Any]) -> str | None:
     return content
 
 
-def _sanitized_completion(arbitration: Any, original: str) -> str | None:
-    """The redacted completion for a SANITIZE verdict, if one was produced."""
-    results = arbitration.scanner_results or []
-    for r in results:
-        if r.sanitized_output:
-            return str(r.sanitized_output)
-    return original
-
-
 def _with_scanned_completion(
     upstream_json: dict[str, Any],
     delivered: str,

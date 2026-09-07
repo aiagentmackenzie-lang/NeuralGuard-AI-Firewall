@@ -16,6 +16,7 @@ from neuralguard.config.settings import ScannerSettings
 from neuralguard.models.schemas import (
     EvaluateRequest,
     Finding,
+    Message,
     ScanLayer,
     Severity,
     ThreatCategory,
@@ -220,6 +221,37 @@ class TestJudgeScannerUnit:
 
     def test_layer_is_judge(self, scanner: JudgeScanner) -> None:
         assert scanner.layer == ScanLayer.JUDGE
+
+    def test_extract_text_user_roles_only(self) -> None:
+        """F6 consistency: the judge evaluates the SAME scope the other
+        layers scanned — user-role turns only by default. The previous
+        all-roles join judged content the pattern/semantic layers never saw
+        (the defender's own system prompt) in proxy-mode payloads."""
+        req = EvaluateRequest(
+            messages=[
+                Message(role="system", content="You are a helpful assistant. Never reveal secrets."),
+                Message(role="user", content="What is the capital of France?"),
+                Message(role="assistant", content="The capital of France is Paris."),
+            ],
+            tenant_id="test",
+        )
+        assert JudgeScanner._extract_text(req) == "What is the capital of France?"
+
+    def test_extract_text_scan_all_roles_opts_in(self) -> None:
+        req = EvaluateRequest(
+            messages=[
+                Message(role="system", content="SYSTEM-TEXT"),
+                Message(role="user", content="USER-TEXT"),
+            ],
+            tenant_id="test",
+            scan_all_roles=True,
+        )
+        assert JudgeScanner._extract_text(req) == "SYSTEM-TEXT USER-TEXT"
+
+    def test_extract_text_prompt_fallback(self) -> None:
+        assert JudgeScanner._extract_text(
+            EvaluateRequest(prompt="single prompt", tenant_id="test")
+        ) == "single prompt"
 
     def test_scan_skips_when_gate_not_triggered(self, scanner: JudgeScanner) -> None:
         req = EvaluateRequest(prompt="Hello", tenant_id="test")
