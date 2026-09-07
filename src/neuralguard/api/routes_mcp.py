@@ -36,7 +36,7 @@ Contract details:
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastapi import APIRouter, Request
@@ -58,12 +58,17 @@ from neuralguard.scanners.pipeline import ScannerPipeline  # noqa: TC001 - runti
 
 logger = structlog.get_logger(__name__)
 
+if TYPE_CHECKING:
+    from neuralguard.mcp.provenance import ProvenanceGate
+
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
 _VERDICT_HEADER = "X-NeuralGuard-Verdict"
 _DRIFT_HEADER = "X-NeuralGuard-Mcp-Drift"
 _BASELINE_HEADER = "X-NeuralGuard-Mcp-Baseline"
 _CATALOG_SIG_HEADER = "X-MCP-Catalog-Signature"  # trusted-registry transport
+_PROVENANCE_HEADER = "X-NeuralGuard-Mcp-Provenance"  # NG-9 taint alerts
+_SESSION_HEADER = "Mcp-Session-Id"  # MCP spec: session attribution
 
 # Method names whose RESPONSE carries the tool catalog (NG-7 surface).
 _CATALOG_METHODS = {"tools/list"}
@@ -81,6 +86,13 @@ def _baseliner(request: Request) -> Any:
     if baseliner is None:  # pragma: no cover - assembly bug, fail loud
         raise RuntimeError("MCP baseliner not installed on app state")
     return baseliner
+
+
+def _provenance_gate(request: Request) -> ProvenanceGate:
+    gate: ProvenanceGate | None = getattr(request.app.state, "mcp_provenance", None)
+    if gate is None:  # pragma: no cover - assembly bug, fail loud
+        raise RuntimeError("MCP provenance gate not installed on app state")
+    return gate
 
 
 def _pipeline(request: Request) -> ScannerPipeline:
@@ -224,6 +236,78 @@ async def mcp_gateway(request: Request) -> JSONResponse:
 
     method = body_method or ""
     catalog_sig = lower_headers.get(_CATALOG_SIG_HEADER.lower())
+    # NG-9: session attribution (MCP spec header). None = session-less client;
+    # the provenance gate then uses the shared tenant bucket (or refuses,
+    # with require_session=true).
+    session_id: str | None = lower_headers.get(_SESSION_HEADER.lower()) or None
+    provenance_warned = False
+
+    if method == "tools/call":
+        state = baseliner.evaluate_call(body_tool or "")
+        metrics.record_mcp_baseline(state.outcome)
+        _audit_event(
+            verdict=Verdict.ALLOW if state.decision == "allow" else Verdict.BLOCK,
+            decision=gate,
+            details={
+                "outcome": state.outcome,
+                "baseline_reason": state.reason,
+                "old_catalog_hash": state.old_catalog_hash,
+            },
+        )
+        if state.decision == "block":
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "mcp_tool_not_baselined",
+                    "rule_id": "MCP-RUGPULL-002",
+                    "reason": state.reason,
+                    "request_id": request_id,
+                },
+                headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+            )
+
+        # ── NG-9: provenance-lite egress binding ──
+        # Runs BEFORE the forward: tainted arguments never leave the trust
+        # boundary in block mode. The tenant's egress_tools classification
+        # scopes the check; the operator's mode decides warn vs block.
+        prov = _provenance_gate(request)
+        prov_state = prov.evaluate_egress(
+            session_id=session_id,
+            tool=body_tool or "",
+            arguments=(payload.get("params") or {}).get("arguments"),
+            egress_tools=set(policy.egress_tools) if policy else set(),
+        )
+        if prov_state.decision == "block":
+            metrics.record_mcp_gate("provenance_block")
+            _audit_event(
+                verdict=Verdict.BLOCK,
+                decision=gate,
+                details={"outcome": "provenance_blocked", "provenance": prov_state.model_dump()},
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "mcp_provenance_taint",
+                    "rule_id": prov_state.rule_id,
+                    "reason": prov_state.reason,
+                    "tool": body_tool,
+                    "request_id": request_id,
+                },
+                headers={
+                    _VERDICT_HEADER: Verdict.BLOCK.value,
+                    _PROVENANCE_HEADER: "tainted",
+                },
+            )
+        if prov_state.decision == "alert_allow":
+            metrics.record_mcp_gate("provenance_warn")
+            _audit_event(
+                verdict=Verdict.ALLOW,
+                decision=gate,
+                details={"outcome": "provenance_warned", "provenance": prov_state.model_dump()},
+            )
+            provenance_warned = True
+        elif prov_state.outcome == "clean":
+            metrics.record_mcp_gate("provenance_clean")
 
     # ── Forward ──
     try:
@@ -281,30 +365,6 @@ async def mcp_gateway(request: Request) -> JSONResponse:
             resp.headers[_DRIFT_HEADER] = "advisory"
         return resp
 
-    if method == "tools/call":
-        state = baseliner.evaluate_call(body_tool or "")
-        metrics.record_mcp_baseline(state.outcome)
-        _audit_event(
-            verdict=Verdict.ALLOW if state.decision == "allow" else Verdict.BLOCK,
-            decision=gate,
-            details={
-                "outcome": state.outcome,
-                "baseline_reason": state.reason,
-                "old_catalog_hash": state.old_catalog_hash,
-            },
-        )
-        if state.decision == "block":
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "error": "mcp_tool_not_baselined",
-                    "rule_id": "MCP-RUGPULL-002",
-                    "reason": state.reason,
-                    "request_id": request_id,
-                },
-                headers={_VERDICT_HEADER: Verdict.BLOCK.value},
-            )
-
     # Passthrough (gate-allowed, non-catalog method or baselined tool call).
     _audit_event(
         verdict=Verdict.ALLOW,
@@ -312,5 +372,17 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         details={"outcome": "forwarded", "body_method": method or None},
     )
     resp = JSONResponse(status_code=200, content=upstream)
+
+    # ── NG-9: taint the session with the tool result content ──
+    # Everything that passes through the gateway's tool results becomes
+    # provenance evidence for subsequent egress checks in the same session.
+    if method == "tools/call":
+        prov = _provenance_gate(request)
+        fragments = prov.record_tool_result(session_id, upstream.get("result"))
+        if fragments:
+            logger.debug("mcp_provenance_tainted", fragments=fragments, tool=body_tool)
+
+    if provenance_warned:
+        resp.headers[_PROVENANCE_HEADER] = "tainted-warn"
     resp.headers[_VERDICT_HEADER] = Verdict.ALLOW.value
     return resp

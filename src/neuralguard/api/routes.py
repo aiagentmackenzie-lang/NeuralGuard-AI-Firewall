@@ -555,6 +555,9 @@ async def info(
             "signed_baselines": bool(config.mcp.signing_seed),
             "registry_signature_verification": bool(config.mcp.verify_pubkey),
             "require_signature_on_change": config.mcp.require_signature_on_change,
+            # NG-9 posture (opt-in control; the classification is per-tenant).
+            "provenance_mode": config.mcp.provenance_mode,
+            "provenance_require_session": config.mcp.provenance_require_session,
         }
 
     # F9/F10.3 posture: where does data go? Surfaced so nobody is surprised.
