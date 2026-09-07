@@ -14,8 +14,10 @@ import numpy as np
 import pytest
 
 from neuralguard.semantic.hygiene import (
+    blocking_report,
     drop_benign_blocking_vectors,
     drop_conversational_vectors,
+    drop_vectors_blocking_probes,
     load_benign_guard_probes,
     split_benign_prefix_compounds,
     split_system_marker_compounds,
@@ -277,3 +279,115 @@ class TestRebuiltCorpusBenignGate:
             f"undocumented escalate offenders: {sorted(bad_ids)} — new corpus "
             f"vectors pushed benign prompts into the escalate zone"
         )
+
+
+# ── NG-6: hard-negative guard (shared core + probe-centric report) ─────────
+
+
+class TestDropVectorsBlockingProbes:
+    """The mask-aligned core guard: kept embeddings stay aligned with kept rows."""
+
+    def test_blocking_vector_dropped_with_aligned_embeddings(self):
+        attacks = [{"text": f"attack {i}"} for i in range(4)]
+        # Probe embedding = e0; attack 0 identical to it (sim 1.0 → BLOCK).
+        attack_embs = np.array([[1, 0], [0.5, 0.5], [0, 1], [0.2, 0.8]], dtype=np.float32)
+        probe_embs = np.array([[1, 0]], dtype=np.float32)
+        kept, kept_embs, dropped = drop_vectors_blocking_probes(
+            attacks, attack_embs, probe_embs, block_threshold=0.75
+        )
+        assert len(kept) == 3
+        assert dropped == [("attack 0", 1.0)]
+        assert kept_embs.shape == (3, 2)
+        # Alignment: kept row i embedding matches kept row i text's source row.
+        assert np.allclose(kept_embs[0], attack_embs[1])
+        assert np.allclose(kept_embs[2], attack_embs[3])
+
+    def test_no_blockers_no_drops(self):
+        attacks = [{"text": "a"}, {"text": "b"}]
+        attack_embs = np.array([[0, 1], [0, 1]], dtype=np.float32)
+        probe_embs = np.array([[1, 0]], dtype=np.float32)
+        kept, kept_embs, dropped = drop_vectors_blocking_probes(
+            attacks, attack_embs, probe_embs, block_threshold=0.75
+        )
+        assert len(kept) == 2 and dropped == []
+        assert np.allclose(kept_embs, attack_embs)
+
+    def test_multiple_probes_worst_similarity_governs(self):
+        attacks = [{"text": "a"}]
+        attack_embs = np.array([[0.6, 0.8]], dtype=np.float32)  # sim 0.8 with e1
+        probe_embs = np.array([[1, 0], [0, 1]], dtype=np.float32)
+        _, _, dropped = drop_vectors_blocking_probes(
+            attacks, attack_embs, probe_embs, block_threshold=0.75
+        )
+        assert len(dropped) == 1 and dropped[0][1] == pytest.approx(0.8)
+
+
+class TestBlockingReport:
+    """Probe-centric report math (the NG-6 FPR SLO measurement)."""
+
+    def test_counts_and_blockers(self):
+        probes = ["p1", "p2", "p3"]
+        # p1 aligns with c_block (sim 1.0 → BLOCK); p2 lands at 0.7071 with
+        # c_amb (escalate zone); p3 is orthogonal to both (clean ALLOW).
+        probe_embs = np.array(
+            [[1, 0], [0, 1], [-0.7071, 0.7071]], dtype=np.float32
+        )
+        corpus_embs = np.array([[1, 0], [0.7071, 0.7071]], dtype=np.float32)
+        report = blocking_report(probes, probe_embs, corpus_embs, 0.75, 0.60)
+        assert report["probes"] == 3
+        assert report["block_count"] == 1  # p1 at sim 1.0
+        assert report["escalate_count"] == 1  # p2 at sim 0.7071
+        assert report["max_similarity"] == pytest.approx(1.0)
+        assert len(report["blockers"]) == 1
+        assert report["blockers"][0]["prompt"] == "p1"
+
+    def test_empty_corpus_returns_zero_counts(self):
+        probes = ["p1"]
+        probe_embs = np.ones((1, 2), dtype=np.float32)
+        corpus_embs = np.zeros((0, 2), dtype=np.float32)
+        report = blocking_report(probes, probe_embs, corpus_embs, 0.75, 0.60)
+        assert report["block_count"] == 0
+        assert report["escalate_count"] == 0
+        assert report["blockers"] == []
+
+    def test_below_floor_is_clean_allow(self):
+        probes = ["p1"]
+        probe_embs = np.array([[0, 1]], dtype=np.float32)
+        corpus_embs = np.array([[1, 0]], dtype=np.float32)
+        report = blocking_report(probes, probe_embs, corpus_embs, 0.75, 0.60)
+        assert report["block_count"] == 0 and report["escalate_count"] == 0
+
+
+class TestHardNegativeCorpusFile:
+    """The tracked NG-6 guard file: schema, uniqueness, benign-dominant size."""
+
+    HN_PATH = Path("corpus/benign_hard_negatives.jsonl")
+    KNOWN_CATEGORIES = {
+        "quoted_attack",
+        "security_training",
+        "defensive_tooling",
+        "policy_compliance",
+        "research_discussion",
+    }
+
+    def test_file_exists_and_loads(self):
+        assert self.HN_PATH.exists(), "NG-6 hard-negative guard file missing"
+        probes = load_benign_guard_probes(self.HN_PATH)
+        assert len(probes) >= 40, "hard-negative guard set unexpectedly small"
+
+    def test_rows_schema_and_unique_ids(self):
+        rows = [json.loads(line) for line in self.HN_PATH.read_text().splitlines() if line.strip()]
+        ids = [r["id"] for r in rows]
+        assert len(ids) == len(set(ids)), "duplicate HGN ids"
+        for r in rows:
+            assert r["id"].startswith("HGN-")
+            assert r["prompt"].strip()
+            assert r["category"] in self.KNOWN_CATEGORIES
+
+    def test_every_prompt_is_benign_dominant(self):
+        # NotInject thesis: a hard negative carries benign framing AROUND the
+        # attack vocabulary. A bare echo of an attack with no framing is not a
+        # hard negative — it is the attack.
+        for probe in load_benign_guard_probes(self.HN_PATH):
+            words = probe.split()
+            assert len(words) >= 12, f"prompt too bare to be benign-dominant: {probe!r}"

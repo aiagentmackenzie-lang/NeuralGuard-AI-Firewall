@@ -47,6 +47,21 @@ class TenantScannerOverrides(BaseModel):
         default=None,
         description="Override LLM-as-Judge enable. None=inherit global.",
     )
+    semantic_block_threshold: float | None = Field(
+        default=None,
+        ge=0.60,
+        le=0.95,
+        description=(
+            "NG-6 per-tenant semantic BLOCK threshold (the tenant's FPR vs "
+            "sensitivity dial). None=inherit the global threshold (default "
+            "0.75). Lower = more sensitive = higher measured FPR for this "
+            "tenant; bounded at/above the ESCALATE floor (0.60) so a tenant "
+            "cannot configure the semantic layer below its own ambiguous "
+            "zone, and at/below 0.95 so a threshold cannot become decorative. "
+            "The scanner re-validates the value at scan time (defense in "
+            "depth against a bad tenant file)."
+        ),
+    )
 
 
 class TenantConfig(BaseModel):

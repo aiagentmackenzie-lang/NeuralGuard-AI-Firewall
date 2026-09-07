@@ -47,6 +47,12 @@ class AttackCorpus:
         return self._corpus_size
 
     @property
+    def vectors(self) -> np.ndarray | None:
+        """Raw corpus matrix (n, dim), or None before load(). Read-only view
+        for the NG-6 guarded-FPR measurement (probe-centric max similarity)."""
+        return self._vectors
+
+    @property
     def load_time_ms(self) -> float:
         """Time taken to load the corpus in milliseconds."""
         return self._load_time_ms

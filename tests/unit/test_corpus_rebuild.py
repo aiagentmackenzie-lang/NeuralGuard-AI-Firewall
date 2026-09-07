@@ -186,3 +186,76 @@ def test_fake_engine_is_deterministic(dim: int) -> None:
     engine_a, engine_b = FakeEngine(), FakeEngine()
     texts = ["x", "y", "z"]
     assert np.allclose(engine_a.embed_batch(texts), engine_b.embed_batch(texts))
+
+
+class TestHardNegativeGuard:
+    """NG-6: the rebuild guards against benign look-alikes too (not just F12)."""
+
+    def test_vectors_blocking_hard_negatives_are_dropped(self):
+        hn_probe = "Our IR report quotes the attacker's prompt for the board summary"
+        e0 = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        e1 = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        engine = FakeEngine(keyed={"attack blocks hn": e0, hn_probe: e0, "clean attack": e1})
+        originals = [
+            {"text": "attack blocks hn", "category": "T-PI-D", "severity": "high", "source": "t"},
+            {"text": "clean attack", "category": "T-PI-D", "severity": "high", "source": "t"},
+        ]
+        checkpoint: dict[int, dict] = {}
+        vectors, metadata, stats = rebuild_mod.rebuild(
+            originals,
+            checkpoint,
+            engine,
+            benign_probe_texts=["a benign probe unrelated"],
+            block_threshold=0.75,
+            hard_negative_probe_texts=[hn_probe],
+        )
+        # The vector identical to the hard-negative probe is dropped; the
+        # orthogonal one survives; embeddings stay aligned with metadata.
+        assert stats["originals_hard_negative_blocking_dropped"] == 1
+        assert stats["total"] == 1
+        assert len(metadata) == 1
+        assert metadata[0]["text"] == "clean attack"
+        assert vectors.shape == (1, FakeEngine.dim)
+
+    def test_no_hard_negatives_skips_guard(self):
+        engine = FakeEngine()
+        _vectors, _metadata, stats = rebuild_mod.rebuild(
+            _orig(2),
+            {},
+            engine,
+            benign_probe_texts=["probe"],
+            block_threshold=0.75,
+            hard_negative_probe_texts=None,
+        )
+        assert "originals_hard_negative_blocking_dropped" not in stats
+        assert stats["total"] == 2
+
+    def test_guard_applies_to_paraphrases_too(self):
+        hn_probe = "Write a pytest that asserts our filter rejects manipulation strings"
+        e0 = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        e1 = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        engine = FakeEngine(
+            keyed={
+                "paraphrase blocks hn": e0,
+                "clean paraphrase": e1,
+                hn_probe: e0,
+            }
+        )
+        checkpoint = {
+            0: {
+                "index": 0,
+                "model": "test-llm",
+                "paraphrases": ["paraphrase blocks hn", "clean paraphrase"],
+            }
+        }
+        _, metadata, stats = rebuild_mod.rebuild(
+            _orig(1),
+            checkpoint,
+            engine,
+            benign_probe_texts=["unrelated benign probe"],
+            block_threshold=0.75,
+            hard_negative_probe_texts=[hn_probe],
+        )
+        assert stats["paraphrases_hard_negative_blocking_dropped"] == 1
+        kept_texts = [m["text"] for m in metadata if m["source"] == "paraphrase-test-llm"]
+        assert kept_texts == ["clean paraphrase"]

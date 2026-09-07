@@ -385,14 +385,15 @@ evidence anchor; statuses update per the "plan, not a promise" rule.
 | NG-3 | Decode-then-activate Agent Guardian signal (session-scoped, deterministic) | P1 | ~2–3 d | USENIX '26 §3–4 | ✅ Shipped 2026-09-07 (`AG-DECODE-001`) |
 | NG-4 | Overflow-resistant contiguity-gated windowed aggregation | **P0** | ~2–3 d | arXiv:2605.23196 §6.2 | ✅ Shipped 2026-09-07 (`SEM-OVERFLOW-001` / `SEM-W-***`) |
 | NG-5 | 16-mutation red-team gate (Unsafe-ASR + Safe-ASR, nightly, NeuralStrike pairing) | **P0** | ~2–3 d | HF study 2026-05 | ✅ Shipped 2026-09-07 (`benchmarks/ng_vs_ns/mutation_harness.py` + nightly bench job; measured baseline: Unsafe-ASR 56.94% / Safe-ASR 12.50% / 0 hard BLOCKs — see the honest-baseline note) |
-| NG-6 | Published per-tenant FPR SLOs (corpus-hygiene hard negatives in semantic rebuild) | P1 | ~1–2 d | KDD '26; A2 history | ⬜ Open |
+| NG-6 | Published per-tenant FPR SLOs (corpus-hygiene hard negatives in semantic rebuild) | P1 | ~1–2 d | KDD '26; A2 history | ✅ Shipped 2026-09-07 (`corpus/benign_hard_negatives.jsonl` 50 NotInject-style probes, rebuild hard-negative guard, boot FPR self-check + `/v1/info` surface, `TenantScannerOverrides.semantic_block_threshold` dial; **measured guarded FPR 0.00% across 95 probes** — see `docs/FPR_SLO.md`) |
 | NG-7 | MCP gateway: signed tool-inventory baselining + rug-pull detect/block (reuse P2-10 Ed25519 + audit chains) | **P0** | ~1–2 wk | MCP 2026-07-28; MDPI FI 18(5):243 | ⬜ Open (differentiator) |
 | NG-8 | Header-based per-tool Intent Gate (`Mcp-Method`/`Mcp-Name` before body parse) | P0 (with NG-7) | ~1 wk | MCP 2026-07-28; OWASP ASI02 | ⬜ Open (differentiator) |
 | NG-9 | Provenance-lite egress binding (not a mini-CaMeL; fail-closed, opt-in) | P2 | ~1 wk | CaMeL 2503.18813 | ⬜ Open |
 
 Ordering guidance: NG-1–NG-4 shipped first (small, gate-provable, defend against
 attack classes that beat every tested open-weight guard). NG-5 shipped with the
-calibrated baseline + a free detector fix it exposed (below). Next: NG-6 (the
+calibrated baseline + a free detector fix it exposed (below). NG-6 shipped
+next (2026-09-07) — the cheap honesty gate, published in `docs/FPR_SLO.md`.
 cheap honesty gate), then NG-7 + NG-8 as the differentiator sprint. All
 additions inherit the existing CI bar (ruff + format + mypy strict + pytest +
 90% coverage floor + A1 gate + boot smoke). Calibration note (NG-4): the

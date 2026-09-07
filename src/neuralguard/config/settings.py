@@ -135,6 +135,48 @@ class ScannerSettings(BaseSettings):
         description="Path to attack corpus metadata JSON",
     )
 
+    # NG-6: published per-tenant FPR SLO. The guarded false-positive rate is
+    # measured at boot (and at rebuild) against two probe sets: the F12
+    # benign corpus and the NotInject-style hard negatives
+    # (corpus/benign_hard_negatives.jsonl). A probe is a false positive when
+    # its worst corpus match reaches the BLOCK threshold; matches in the
+    # ambiguous zone (>= 0.60, judge-resolvable) are reported separately as
+    # pre-judge FPR.
+    semantic_fpr_slo: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "Maximum tolerated guarded FPR, in percent, across both guard "
+            "probe sets. Measured at boot and logged; surfaced on /v1/info. "
+            "Measured (2026-09-08, rebuilt corpus + 94 probes): see "
+            "docs/FPR_SLO.md."
+        ),
+    )
+    semantic_fpr_slo_enforce: bool = Field(
+        default=False,
+        description=(
+            "When True, boot FAILS (RuntimeError) if the measured guarded FPR "
+            "exceeds semantic_fpr_slo. Opt-in: an SLO breach is a quality "
+            "failure (more false positives than promised), not a safety "
+            "failure — failing boot by default would trade availability for "
+            "a number. Operators who promise the SLO contractually should "
+            "enable this."
+        ),
+    )
+    semantic_benign_guard_path: str = Field(
+        default="benchmarks/ng_vs_ns/benign_corpus.jsonl",
+        description="F12 benign guard probe corpus (JSONL, {id, prompt, ...} rows).",
+    )
+    semantic_hard_negatives_path: str = Field(
+        default="corpus/benign_hard_negatives.jsonl",
+        description=(
+            "NG-6 hard-negative guard probes (benign look-alikes: quoted "
+            "attacks in security work, training material, defensive tooling, "
+            "policy text). JSONL, same schema as the benign guard."
+        ),
+    )
+
     # NG-4: overflow-resistant window aggregation (Prompt Overflow defense).
     # arXiv:2605.23196 fragments a malicious instruction into low-density
     # pieces interleaved with benign filler across an overlong prompt; the

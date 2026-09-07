@@ -101,3 +101,28 @@ class TestTenantConfig:
         assert d["scanners"]["semantic"] is False
         # No secret-bearing keys are ever present in the model.
         assert "secret" not in str(d)
+
+
+class TestTenantSemanticBlockThreshold:
+    """NG-6: the per-tenant semantic BLOCK threshold (bounded sensitivity dial)."""
+
+    def test_default_is_none(self):
+        o = TenantScannerOverrides()
+        assert o.semantic_block_threshold is None
+
+    def test_valid_values(self):
+        for v in (0.60, 0.65, 0.75, 0.90, 0.95):
+            assert TenantScannerOverrides(semantic_block_threshold=v).semantic_block_threshold == v
+
+    @pytest.mark.parametrize("bad", [0.59, 0.96, 1.0, 0.0, -0.75])
+    def test_out_of_bounds_rejected(self, bad):
+        with pytest.raises(ValidationError):
+            TenantScannerOverrides(semantic_block_threshold=bad)
+
+    def test_surface_in_effective_dict(self):
+        cfg = TenantConfig(
+            tenant_id="acme",
+            scanners=TenantScannerOverrides(semantic_block_threshold=0.65),
+        )
+        d = cfg.to_effective_dict()
+        assert d["scanners"]["semantic_block_threshold"] == 0.65

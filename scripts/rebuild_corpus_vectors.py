@@ -46,12 +46,17 @@ from neuralguard.config.settings import ScannerSettings
 from neuralguard.semantic.hygiene import (
     drop_benign_blocking_vectors,
     drop_conversational_vectors,
+    drop_vectors_blocking_probes,
     load_benign_guard_probes,
 )
 
 CORPUS_DIR = Path("corpus")
 MODEL_DIR = Path("models")
 BENIGN_GUARD_PATH = Path("benchmarks/ng_vs_ns/benign_corpus.jsonl")
+# NG-6: NotInject-style benign look-alikes (quoted attacks in security work,
+# training material, defensive engineering, policy text, research discussion).
+# A corpus vector that would BLOCK one of these is a false-positive generator.
+HARD_NEGATIVES_PATH = Path("corpus/benign_hard_negatives.jsonl")
 METADATA_TEXT_CAP = 200  # same truncation build_attack_corpus.py applies
 
 
@@ -135,11 +140,14 @@ def rebuild(
     benign_probe_texts: list[str],
     block_threshold: float,
     batch_size: int = 256,
+    hard_negative_probe_texts: list[str] | None = None,
 ) -> tuple[Any, list[dict[str, Any]], dict[str, int]]:
     """Produce (vectors, metadata, stats) from tracked sources.
 
     Mirrors ``build_attack_corpus.py`` (originals) + ``augment_attack_corpus.py
-    finalize()`` (dedup → conversational drop → embed → benign guard → append).
+    finalize()`` (dedup → conversational drop → embed → benign guard → append),
+    then applies the NG-6 hard-negative guard (vectors that would BLOCK a
+    benign look-alike are dropped — from originals AND paraphrases).
     """
     import numpy as np
 
@@ -185,6 +193,22 @@ def rebuild(
         embed_chunked(kept_texts) if kept_texts else np.zeros((0, orig_embs.shape[1]), np.float32)
     )
 
+    # 6. NG-6 hard-negative guard over BOTH vector sets: a vector that would
+    #    BLOCK a benign look-alike (security work quoting an attack, training
+    #    material, defensive tooling, policy text) is an FPR generator with
+    #    the same corpus-side remedy as the F12 benign guard — drop it.
+    hn_texts = hard_negative_probe_texts or []
+    if hn_texts:
+        hn_embs = engine.embed_batch(hn_texts).astype(np.float32)
+        originals, orig_embs, dropped_orig_hn = drop_vectors_blocking_probes(
+            originals, orig_embs, hn_embs, block_threshold
+        )
+        kept, kept_embs, dropped_kept_hn = drop_vectors_blocking_probes(
+            kept, kept_embs, hn_embs, block_threshold
+        )
+        stats["originals_hard_negative_blocking_dropped"] = len(dropped_orig_hn)
+        stats["paraphrases_hard_negative_blocking_dropped"] = len(dropped_kept_hn)
+
     vectors = np.vstack([orig_embs, kept_embs]).astype(np.float32)
 
     metadata = [
@@ -226,6 +250,11 @@ def main() -> None:
         default=str(BENIGN_GUARD_PATH),
         help="Benign probe corpus for the benign guard.",
     )
+    parser.add_argument(
+        "--hard-negatives",
+        default=str(HARD_NEGATIVES_PATH),
+        help="NG-6 benign look-alike probes (hard negatives) for the FPR guard.",
+    )
     args = parser.parse_args()
 
     from neuralguard.semantic.embedding import EmbeddingEngine
@@ -239,8 +268,14 @@ def main() -> None:
     engine.load()
 
     probes = load_benign_guard_probes(Path(args.benign_guard))
+    hard_negatives = load_benign_guard_probes(Path(args.hard_negatives))
     vectors, metadata, stats = rebuild(
-        originals, checkpoint, engine, probes, settings.semantic_similarity_threshold
+        originals,
+        checkpoint,
+        engine,
+        probes,
+        settings.semantic_similarity_threshold,
+        hard_negative_probe_texts=hard_negatives,
     )
 
     import numpy as np
@@ -258,6 +293,11 @@ def main() -> None:
         f"  hygiene: {stats['paraphrase_duplicates_dropped']} duplicates, "
         f"{stats['paraphrases_conversational_dropped']} conversational, "
         f"{stats['paraphrases_benign_blocking_dropped']} benign-blocking dropped"
+    )
+    print(
+        f"  ng6 hard-negative guard: "
+        f"{stats.get('originals_hard_negative_blocking_dropped', 0)} originals, "
+        f"{stats.get('paraphrases_hard_negative_blocking_dropped', 0)} paraphrases dropped"
     )
     print(
         f"  wrote {out_dir / 'attack_vectors.npy'} ({vectors.shape}) + "
