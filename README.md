@@ -2,7 +2,7 @@
 
 > **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
 >
-> **Status:** alpha, **production-ready (P0 + P1 closed, P2 enterprise track landed, v0.2.1 tagged).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS posture, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1–B4 (multi-turn detection + static template analysis + dedicated ASI06 rules + canary token verification + multi-turn benchmark + scanner gap closure), Sprint C C1 per-tenant config + C2 production-readiness sweep, **the standalone appliance proxy (F9: `POST /v1/proxy/chat/completions`, hardened compose profile + runbook, boot-drill verified)**, **SIEM routing + BLOCK-spike alerting incl. SecurityScarletAI (P2-7)**, **JWT bearer auth + runtime key rotation (P2-4)**, **Ed25519 audit-event signing + JSONL *and* Postgres chain verification (P2-10, live-fire proven)**, **pure-ASGI middleware stack (P2-8)**, and **dedicated ASI04 Supply Chain + ASI10 Rogue Agents rules (P2-3)** are shipped. **1162 tests collected on `main`** (1154 pass locally with Ollama up; the live judge-integration tests run against the `mistral:7b` default — override with `NEURALGUARD_TEST_JUDGE_MODEL` — and skip cleanly when the model is absent; 5 Postgres live-fire tests + 3 others skip without their services), ruff + `ruff format` + mypy strict clean (62 files), **90% coverage floor — CI regenerates the ONNX model + rebuilds the semantic corpus from tracked sources so the gate runs the FULL suite (90.67% measured locally without a live Postgres; ≥91% in CI with the pg service container)**. Also shipped: **cosign SBOM signing + attestation (P2-5, keyless in CI / key-based locally)**, **Kubernetes manifests + HPA (P2-6, schema-validated offline — cluster drill pending)**, and the **2026-09-07 research-frontier controls (NG-1/2/3/4/5 — see the threat-model section, the NG-5 mutation gate, and the decision register in docs/ROADMAP.md)**, plus **NG-6 (2026-09-07): the published guarded-FPR SLO — 50 NotInject-style hard negatives guard the corpus rebuild, the guarded FPR is measured at boot + per-PR in CI (0.00% across 95 probes) and surfaced on /v1/info, with a per-tenant semantic threshold dial (see [docs/FPR_SLO.md](docs/FPR_SLO.md))**, and **NG-7 + NG-8 (2026-09-07): the MCP gateway — `POST /v1/mcp` decides per-tool intent on `Mcp-Method`/`Mcp-Name` headers BEFORE body parse (per-tenant allow/deny/escalate policies, smuggling defense) and refuses rug pulls with Ed25519-signed tool-catalog baselines (strict mode withholds drifted catalogs and refuses all executions until an explicit re-baseline; drift evidence lands in the P2-10 hash-chained audit trail — see [docs/runbooks/mcp_gateway.md](docs/runbooks/mcp_gateway.md))**, **plus NG-9 (2026-09-07): provenance-lite egress binding — tool-result content taints the session window and tenant-classified egress tools have their arguments checked for tainted content before forwarding (off/warn/block, off by default; normalized shingle matching; CaMeL-class paraphrase evasion is a documented boundary)**. Remaining open items: i18n native-speaker review (P2-11 — pending HUMAN review, machine self-audit done; see `docs/i18n_native_review_request.md`) and the K8s cluster drill — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+> **Status:** alpha, **production-ready (P0 + P1 closed, P2 enterprise track landed, v0.2.1 tagged).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS posture, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1–B4 (multi-turn detection + static template analysis + dedicated ASI06 rules + canary token verification + multi-turn benchmark + scanner gap closure), Sprint C C1 per-tenant config + C2 production-readiness sweep, **the standalone appliance proxy (F9: `POST /v1/proxy/chat/completions`, hardened compose profile + runbook, boot-drill verified)**, **SIEM routing + BLOCK-spike alerting incl. SecurityScarletAI (P2-7)**, **JWT bearer auth + runtime key rotation (P2-4)**, **Ed25519 audit-event signing + JSONL *and* Postgres chain verification (P2-10, live-fire proven)**, **pure-ASGI middleware stack (P2-8)**, and **dedicated ASI04 Supply Chain + ASI10 Rogue Agents rules (P2-3)** are shipped. **1284 tests collected on `main`** (1276 pass locally with Ollama up; the live judge-integration tests run against the `mistral:7b` default — override with `NEURALGUARD_TEST_JUDGE_MODEL` — and skip cleanly when the model is absent; 5 Postgres live-fire tests + 3 others skip without their services), ruff + `ruff format` + mypy strict clean (69 files), **90% coverage floor — CI regenerates the ONNX model + rebuilds the semantic corpus from tracked sources so the gate runs the FULL suite (91.04% measured locally without a live Postgres; ≥91% in CI with the pg service container)**. Also shipped: **cosign SBOM signing + attestation (P2-5, keyless in CI / key-based locally)**, **Kubernetes manifests + HPA (P2-6, schema-validated offline — cluster drill pending)**, and the **2026-09-07 research-frontier controls (NG-1/2/3/4/5 — see the threat-model section, the NG-5 mutation gate, and the decision register in docs/ROADMAP.md)**, plus **NG-6 (2026-09-07): the published guarded-FPR SLO — 50 NotInject-style hard negatives guard the corpus rebuild, the guarded FPR is measured at boot + per-PR in CI (0.00% across 95 probes) and surfaced on /v1/info, with a per-tenant semantic threshold dial (see [docs/FPR_SLO.md](docs/FPR_SLO.md))**, and **NG-7 + NG-8 (2026-09-07): the MCP gateway — `POST /v1/mcp` decides per-tool intent on `Mcp-Method`/`Mcp-Name` headers BEFORE body parse (per-tenant allow/deny/escalate policies, smuggling defense) and refuses rug pulls with Ed25519-signed tool-catalog baselines (strict mode withholds drifted catalogs and refuses all executions until an explicit re-baseline; drift evidence lands in the P2-10 hash-chained audit trail — see [docs/runbooks/mcp_gateway.md](docs/runbooks/mcp_gateway.md))**, **plus NG-9 (2026-09-07): provenance-lite egress binding — tool-result content taints the session window and tenant-classified egress tools have their arguments checked for tainted content before forwarding (off/warn/block, off by default; normalized shingle matching; CaMeL-class paraphrase evasion is a documented boundary)**. **Fleet campaign (2026-09-19): the SecurityScarletAI producer contract shipped — companion events (actor slot + ai_prompt_injection / mcp_tool_denied in the same POST), opt-in batched delivery, MCP-gateway upstream bearer auth, the co-resident fleet compose, and the live-fire receipt (4 detections + correlation + coverage armed) — see the fleet-deployment section in Production Deployment.** Remaining open items: i18n native-speaker review (P2-11 — pending HUMAN review, machine self-audit done; see `docs/i18n_native_review_request.md`) and the K8s cluster drill — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -444,7 +444,7 @@ sinks (CI gate).
 ## Documentation
 
 - **API docs** — OpenAPI auto-generated docs at `http://localhost:8000/docs` (development/staging only; hidden in production for safety).
-- **Runbooks** — [`docs/runbooks/appliance.md`](docs/runbooks/appliance.md) (standalone appliance), [`docs/runbooks/tls_termination.md`](docs/runbooks/tls_termination.md), [`docs/runbooks/secret_rotation.md`](docs/runbooks/secret_rotation.md), [`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md), [`docs/runbooks/artifact_signing.md`](docs/runbooks/artifact_signing.md) (cosign SBOM/image signing).
+- **Runbooks** — [`docs/runbooks/appliance.md`](docs/runbooks/appliance.md) (standalone appliance), [`docs/runbooks/fleet_deployment.md`](docs/runbooks/fleet_deployment.md) (co-resident fleet with SecurityScarletAI + the live-fire harness), [`docs/runbooks/tls_termination.md`](docs/runbooks/tls_termination.md), [`docs/runbooks/secret_rotation.md`](docs/runbooks/secret_rotation.md), [`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md), [`docs/runbooks/artifact_signing.md`](docs/runbooks/artifact_signing.md) (cosign SBOM/image signing).
 - **Kubernetes** — [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) (manifests + HPA; schema-validated, cluster drill pending).
 - **Benchmarks** — [`benchmarks/ng_vs_ns/README.md`](benchmarks/ng_vs_ns/README.md) + dated results in [`benchmarks/ng_vs_ns/results/`](benchmarks/ng_vs_ns/results/) (A2, B4, known gaps).
 - **i18n review request** — [`docs/i18n_native_review_request.md`](docs/i18n_native_review_request.md) (P2-11, needs native speakers).
@@ -517,6 +517,43 @@ zero-downtime dual-key API-key rotation and Postgres password rotation.
 `NEURALGUARD_RATELIMIT_REDIS_URL` — the production lifespan refuses to start
 otherwise (a per-process limiter would let a tenant exceed the limit by the
 worker count). `docker-compose.yml` ships a `redis` service.
+
+### Fleet deployment: co-resident with SecurityScarletAI (live-fire verified)
+
+One compose project runs NeuralGuard and the
+[SecurityScarletAI](https://github.com/aiagentmackenzie-lang/securityscarletai)
+local SIEM together — `deploy/fleet/docker-compose.fleet.yml` (includes
+Scarlet's compose unchanged; services reach each other by name: `api:8000`,
+`mcp:8002`), with NeuralGuard serving on `:8100`. The full production stack
+is up: semantic ONNX layer (the `models/` checkout mounted read-only),
+Agent Guardian, canary detection, judge + proxy at host Ollama — NG-6
+guarded FPR measured at boot (0.00%, SLO met) and surfaced on `/v1/info`.
+
+Three integration pipes, all operational:
+
+- **SIEM routing**: every verdict audit event (hash-chained) POSTs to
+  ScarletAI's ingest with the scoped `INGEST_BEARER_TOKEN` — the tenant
+  rides `user_name` (the actor slot) and injection-shaped verdicts
+  (T-PI-D / T-PI-I / T-JB) carry an `ai_prompt_injection` companion while
+  MCP-gate denials carry an `mcp_tool_denied` companion, in the SAME POST.
+- **MCP gateway auth**: `POST /v1/mcp` fronts Scarlet's closed 3-tool MCP
+  server with the server-side `NEURALGUARD_MCP_UPSTREAM_AUTH_TOKEN`; a
+  caller can never override the upstream `Authorization` header.
+- **The detections on the SIEM side**: `prompt_injection_attempt`,
+  `mcp_tool_denial_burst`, and the dedicated
+  `rules/sigma/neuralguard/` rules (`block_rate_spike`,
+  `confirmed_ai_attack_block` — both critical) + the
+  `ai_verdict_block_sustained` correlation.
+
+**Live-fire receipt (2026-09-19, run-stamped host `neuralguard-fleet-w5`):**
+95/95 injection probes blocked (0.95 confidence) · 12/12 MCP-gate refusals
+(403, pre-forward) · alerts fired at the SIEM: AI Prompt Injection Attempt,
+NeuralGuard Confirmed AI Attack Block (critical), MCP Tool Denial Burst,
+NeuralGuard Block-Rate Spike (critical) + the sustained-block correlation ·
+coverage map 97/128 armed, both producer rules ARMED. Reproduce with
+`bash deploy/fleet/fleet_livefire.sh` (health gates → probes → settle →
+receipt). See
+[`docs/runbooks/fleet_deployment.md`](docs/runbooks/fleet_deployment.md).
 
 **Readiness.** `GET /v1/ready` reports per-component status (scanners, audit
 DB, Redis) and returns 503 when the core is broken, 200 `degraded` when
@@ -729,6 +766,7 @@ curl -X POST http://localhost:8000/v1/scan/output \
 
 ## Related Projects
 
+- **SecurityScarletAI** — AI-native SIEM (the fleet-integration counterpart; local sibling repo `../SecurityScarletAI` — the two run co-resident via `deploy/fleet/`, live-fire verified 2026-09-19)
 - **NeuralStrike** — Offensive AI / red teaming (attack counterpart; local sibling repo `../NeuralStrike`)
 - **AI Agent Security Monitor** — Unified SOC for AI systems (aspirational integration target; local sibling repo `../AI Agent Security Monitor`)
 
