@@ -519,6 +519,28 @@ class SiemSettings(BaseSettings):
             "verdicts + spike alerts — alert-quality over volume)"
         ),
     )
+    scarletai_batch_max_events: int = Field(
+        default=1,
+        ge=1,
+        le=1000,
+        description=(
+            "Buffer ScarletAI verdict deliveries and flush when this many "
+            "EVENTS accumulate (parent + companions; 1 = every verdict "
+            "POSTs immediately — the legacy behavior). Spike alerts always "
+            "bypass the buffer (immediate). Buffered events are LOST on a "
+            "hard crash — best-effort delivery doctrine; the lifespan "
+            "shutdown does one final flush."
+        ),
+    )
+    scarletai_batch_flush_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=3600,
+        description=(
+            "Background flush interval for the ScarletAI batch buffer "
+            "(scarletai sink only; Splunk/webhook always deliver immediately)"
+        ),
+    )
     timeout_seconds: float = Field(
         default=5.0, ge=0.5, le=60, description="Per-delivery HTTP timeout"
     )

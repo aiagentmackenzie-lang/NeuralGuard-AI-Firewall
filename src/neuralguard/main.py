@@ -404,6 +404,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         with contextlib.suppress(Exception):
             await mcp_transport.aclose()
 
+    # P2-7 batch buffering: best-effort final flush of buffered ScarletAI
+    # verdict deliveries (opt-in batching; no-op with the default knobs and
+    # for splunk/webhook sinks, which never buffer). Buffered events are
+    # LOST on a hard crash — best-effort delivery doctrine (knob docs).
+    siem_router = getattr(app.state, "siem_router", None)
+    if siem_router is not None:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await siem_router.shutdown_flush()
+
     structlog.get_logger("neuralguard").info("shutdown")
 
 
@@ -550,6 +561,9 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             from neuralguard.siem import SiemRouter
 
             siem_router = SiemRouter(config.siem)
+            # Lifespan shutdown uses this to best-effort-flush the ScarletAI
+            # batch buffer (opt-in batching; no-op with the default knobs).
+            app.state.siem_router = siem_router
             structlog.get_logger("neuralguard").info(
                 "siem_router_registered",
                 sinks=siem_router._sinks,

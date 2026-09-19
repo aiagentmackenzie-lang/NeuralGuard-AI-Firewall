@@ -451,3 +451,189 @@ def test_splunk_envelope_unchanged_by_companions() -> None:
     assert len(splunk_bodies) == 1
     assert splunk_bodies[0]["event"]["event_type"] == "neuralguard.verdict"
     assert splunk_bodies[0]["event"]["event"]["verdict"] == "block"
+
+
+# ── Batched delivery (opt-in, scarletai sink only) ────────────────────────
+# scarletai_batch_max_events=1 is EXACT legacy behavior (the suite above is
+# the compat pin); N>1 buffers verdict families and flushes on size/time.
+# Spike alerts always bypass the buffer. Splunk/webhook never buffer.
+
+
+def _batch_settings(**over: Any) -> SiemSettings:
+    """Batching test settings: spike detector effectively disabled by default
+    (window 100000) so hermetic routing tests are not polluted by spike
+    POSTs; the spike-bypass test re-enables it explicitly."""
+    base: dict[str, Any] = {
+        "spike_window": 100000,
+        "scarletai_batch_flush_seconds": 0.2,
+    }
+    base.update(over)
+    return _settings(**base)
+
+
+@pytest.mark.asyncio
+async def test_batch_flush_on_size() -> None:
+    capture = _Capture()
+    router = _make(_batch_settings(scarletai_batch_max_events=3), capture)
+    for _ in range(3):
+        router.route(_audit_event())
+    await asyncio.sleep(0.05)  # deliveries run → 3rd append triggers the flush
+    assert len(capture.requests) == 1  # nothing POSTed before the cap
+    assert len(capture.bodies()[0]) == 3
+    await router.shutdown_flush()
+    assert len(capture.requests) == 1  # buffer was drained by the size flush
+
+
+@pytest.mark.asyncio
+async def test_batch_flush_on_time() -> None:
+    capture = _Capture()
+    router = _make(_batch_settings(scarletai_batch_max_events=10), capture)
+    router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert capture.requests == []  # below the cap, waiting on the timer
+    await asyncio.sleep(0.4)  # flush interval 0.2s → the tick fires first
+    assert len(capture.requests) == 1
+    assert len(capture.bodies()[0]) == 1
+    await router.shutdown_flush()  # teardown the flusher before draining
+    await _drain()
+
+
+@pytest.mark.asyncio
+async def test_spike_bypasses_buffer_immediately() -> None:
+    """A critical spike alert must never wait for a flush interval."""
+    capture = _Capture()
+    router = _make(
+        _batch_settings(scarletai_batch_max_events=20, spike_window=10, spike_block_threshold=0.5),
+        capture,
+    )
+    for _ in range(10):  # window fills with blocks → spike fires
+        router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert len(capture.requests) == 1  # ONLY the spike POSTed immediately
+    spike = capture.bodies()[0]
+    assert len(spike) == 1  # spikes stay single-element
+    assert spike[0]["event_action"] == "block_rate_spike"
+    assert spike[0]["severity"] == "critical"
+    assert "user_name" not in spike[0]  # no slot mapping on the spike payload
+    await router.shutdown_flush()  # the 10 verdicts were buffered, not lost
+    await _drain()
+    assert len(capture.requests) == 2
+    assert len(capture.bodies()[1]) == 10
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flush_delivers_buffered_then_noops() -> None:
+    capture = _Capture()
+    router = _make(_batch_settings(scarletai_batch_max_events=5), capture)
+    router.route(_audit_event())
+    router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert capture.requests == []
+    await router.shutdown_flush()  # best-effort final flush
+    assert len(capture.requests) == 1
+    assert len(capture.bodies()[0]) == 2
+    await router.shutdown_flush()  # second call: empty buffer → no POST
+    assert len(capture.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_buffer_stays_bounded_at_cap() -> None:
+    capture = _Capture()
+    router = _make(_batch_settings(scarletai_batch_max_events=3), capture)
+    for _ in range(7):  # flushes at 3 and 6; 1 event stays buffered
+        router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert len(capture.requests) == 2
+    assert all(len(body) == 3 for body in capture.bodies())
+    assert len(router._batch_buffer) == 1
+    await router.shutdown_flush()
+    await _drain()
+    assert len(capture.requests) == 3
+    assert len(capture.bodies()[2]) == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_flush_failure_drops_and_counts() -> None:
+    capture = _Capture(status=500)
+    router = _make(_batch_settings(scarletai_batch_max_events=2), capture)
+    router.route(_audit_event())
+    router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert router._drops >= 1  # the rejected flush counts like any delivery
+    assert router._batch_buffer == []  # drained: no silent re-queue
+    await router.shutdown_flush()  # idempotent teardown after the failure
+
+
+@pytest.mark.asyncio
+async def test_default_knobs_are_legacy_immediate_behavior() -> None:
+    """Compat pin: cap=1 (default) → every verdict POSTs immediately."""
+    capture = _Capture()
+    router = _make(_batch_settings(), capture)  # no batch knobs set
+    for _ in range(3):
+        router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert len(capture.requests) == 3
+    assert all(len(body) == 1 for body in capture.bodies())
+    assert router._flusher_task is None  # no flusher started
+
+
+@pytest.mark.asyncio
+async def test_flusher_skips_when_inflight_cap_exhausted() -> None:
+    """Busy semaphore → the tick RETRIES (never drops, never queues)."""
+    capture = _Capture()
+    router = _make(_batch_settings(scarletai_batch_max_events=5, max_inflight=1), capture)
+    router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert len(router._batch_buffer) == 1
+    await router._semaphore.acquire()  # exhaust the inflight permit(s)
+    try:
+        await router._flush_from_loop()
+        assert len(router._batch_buffer) == 1  # skipped, NOT dropped
+        assert capture.requests == []
+    finally:
+        router._semaphore.release()
+    await router.shutdown_flush()
+    assert len(capture.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_companion_family_flushes_together() -> None:
+    """A parent+companions family is ONE buffer unit — never split."""
+    capture = _Capture()
+    router = _make(_batch_settings(scarletai_batch_max_events=4), capture)
+    router.route(
+        _audit_event(threat_categories=["T-PI-D"], metadata={"mcp": True, "tool": "investigate"})
+    )  # 3-event family
+    router.route(_audit_event())  # 1 event → total 4 ≥ cap → flush
+    await asyncio.sleep(0.05)
+    assert len(capture.requests) == 1
+    body = capture.bodies()[0]
+    assert len(body) == 4
+    assert [e["event_action"] for e in body] == [
+        "verdict_block",
+        "ai_prompt_injection",
+        "mcp_tool_denied",
+        "verdict_block",
+    ]
+    await router.shutdown_flush()
+
+
+def test_chunk_arrays_never_splits_a_family() -> None:
+    """Defensive split at ScarletAI's 1000-event cap, array-boundary safe."""
+    arrays = [[{"i": i}] for i in range(700)]  # 700 single events
+    arrays += [[{"j": j}] * 3 for j in range(200)]  # 200 three-event families
+    chunks = SiemRouter._chunk_arrays(arrays)
+    assert all(len(c) <= 1000 for c in chunks)
+    assert sum(len(c) for c in chunks) == 700 + 600
+    # family boundaries respected: 3-event families appear intact
+    flat = [e for c in chunks for e in c]
+    assert len(flat) == 1300
+
+
+@pytest.mark.asyncio
+async def test_batch_env_keys_are_known_to_f5_gate() -> None:
+    from neuralguard.config.settings import known_env_keys
+
+    known = known_env_keys()
+    assert "NEURALGUARD_SIEM_SCARLETAI_BATCH_MAX_EVENTS" in known
+    assert "NEURALGUARD_SIEM_SCARLETAI_BATCH_FLUSH_SECONDS" in known

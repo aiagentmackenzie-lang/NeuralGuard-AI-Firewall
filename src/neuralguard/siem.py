@@ -27,6 +27,7 @@ Delivery contract (observability, not an inline control):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections import deque
 from datetime import UTC, datetime
@@ -265,6 +266,12 @@ class SiemRouter:
         # swallow the FIRST spike alert for `cooldown_seconds`.)
         self._last_alert_ts: float | None = None
         self._drops: int = 0
+        # Opt-in batch buffering (scarletai sink only): verdict families
+        # (parent + companions) accumulate and flush on size/time. Default
+        # cap = 1 → never used, byte-identical legacy behavior.
+        self._batch_buffer: list[list[dict[str, Any]]] = []
+        self._batch_lock = asyncio.Lock()
+        self._flusher_task: asyncio.Task[None] | None = None
 
     # ── Public API (request-path safe) ────────────────────────────────────
 
@@ -443,14 +450,133 @@ class SiemRouter:
 
     async def _post_scarletai(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> None:
         try:
-            # Mapped array (parent + companions), one POST. (Batch buffering
-            # is layered on top of this call site — scarletai sink only.)
-            await self._post_scarletai_events(
-                client, map_to_scarletai_batch(payload, self.settings)
-            )
+            events = map_to_scarletai_batch(payload, self.settings)
+            spike = payload.get("event_type") == "neuralguard.block_spike"
+            if self._batching_enabled() and not spike:
+                # Opt-in batching (scarletai sink only): verdict families
+                # buffer and flush on size/time. Spike alerts BYPASS the
+                # buffer — a critical alert must never wait a flush interval.
+                await self._buffer_verdict(client, events)
+            else:
+                await self._post_scarletai_events(client, events)
         except Exception as exc:
             logger.warning("siem_sink_failed", sink="scarletai", error=str(exc))
             self._on_dropped(f"scarletai: {exc.__class__.__name__}")
+
+    # ── Batch buffering (opt-in, scarletai sink only) ────────────────────
+
+    def _batching_enabled(self) -> bool:
+        """True when the buffer is on (cap > 1). Splunk/webhook never buffer."""
+        return self.settings.scarletai_batch_max_events > 1
+
+    async def _buffer_verdict(
+        self, client: httpx.AsyncClient, events: list[dict[str, Any]]
+    ) -> None:
+        """Buffer one mapped event-array; flush when the buffer reaches the cap.
+
+        The cap counts EVENTS (parent + companions), not arrays. Called while
+        the caller holds the inflight semaphore, so a size-flush POST rides
+        the caller's permit — the inflight cap stays the only concurrency
+        bound. Between flushes the buffer holds at most the cap (overshoot
+        bounded by one array — a family flushes together, never split).
+        """
+        flush: list[list[dict[str, Any]]] = []
+        async with self._batch_lock:
+            self._batch_buffer.append(events)
+            if (
+                sum(len(arr) for arr in self._batch_buffer)
+                >= self.settings.scarletai_batch_max_events
+            ):
+                flush = self._batch_buffer
+                self._batch_buffer = []
+        self._ensure_flusher()
+        if flush:
+            await self._post_event_arrays(client, flush)
+
+    def _ensure_flusher(self) -> None:
+        """Start the time-based flusher lazily (first buffered verdict).
+
+        Only meaningful in a running loop (the buffered path is async).
+        Idempotent: a no-op when the flusher is alive.
+        """
+        if self._flusher_task is None or self._flusher_task.done():
+            self._flusher_task = asyncio.get_running_loop().create_task(self._flush_loop())
+
+    async def _flush_loop(self) -> None:
+        interval = self.settings.scarletai_batch_flush_seconds
+        while True:
+            await asyncio.sleep(interval)
+            await self._flush_from_loop()
+
+    async def _flush_from_loop(self) -> None:
+        """Drain + POST the buffer (flusher ticks / shutdown final flush).
+
+        Never raises. When the inflight semaphore is exhausted the tick is
+        SKIPPED (retry next interval) rather than dropping the batch — the
+        buffer is bounded, so retrying is safe and no data is lost to
+        transient contention. Deliveries keep the drop-on-cap semantics.
+        """
+        if not self._batch_buffer:  # lock-free fast path; a race is a no-op tick
+            return
+        if self._semaphore.locked():
+            return  # busy: retry next tick, never queue behind a slow sink
+        try:
+            async with self._semaphore:
+                async with self._batch_lock:
+                    arrays = self._batch_buffer
+                    self._batch_buffer = []
+                if not arrays:
+                    return
+                async with httpx.AsyncClient(
+                    timeout=self.settings.timeout_seconds,
+                    transport=cast("httpx.AsyncBaseTransport | None", self._transport),
+                ) as client:
+                    await self._post_event_arrays(client, arrays)
+        except Exception as exc:
+            logger.warning("siem_batch_flush_failed", error=str(exc))
+            self._on_dropped(f"scarletai_batch: {exc.__class__.__name__}")
+
+    @staticmethod
+    def _chunk_arrays(arrays: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+        """Split buffered families into POSTs of ≤ ScarletAI's 1000-event cap.
+
+        Chunking respects ARRAY boundaries — a parent + companions family is
+        never split across POSTs. Unreachable at configured sizes (cap ≤ 1000,
+        families ≤ 3 events); pure defensive depth against the 413.
+        """
+        chunks: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        count = 0
+        for arr in arrays:
+            if count and count + len(arr) > _SCARLETAI_BATCH_LIMIT:
+                chunks.append(current)
+                current, count = [], 0
+            current.extend(arr)
+            count += len(arr)
+        if current:
+            chunks.append(current)
+        return chunks
+
+    async def _post_event_arrays(
+        self, client: httpx.AsyncClient, arrays: list[list[dict[str, Any]]]
+    ) -> None:
+        """POST buffered families (split ≤1000/POST); failures drop + count."""
+        for chunk in self._chunk_arrays(arrays):
+            await self._post_scarletai_events(client, chunk)
+
+    async def shutdown_flush(self) -> None:
+        """Best-effort final flush + flusher teardown (lifespan shutdown).
+
+        Buffered events are LOST on a hard crash (no persistence) — the
+        best-effort doctrine is documented on the batch knob. Never raises.
+        """
+        task = self._flusher_task
+        self._flusher_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await self._flush_from_loop()
 
     async def _post_scarletai_events(
         self, client: httpx.AsyncClient, events: list[dict[str, Any]]
