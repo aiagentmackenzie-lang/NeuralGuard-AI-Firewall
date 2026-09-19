@@ -60,6 +60,20 @@ services:
       - NEURALGUARD_MCP_UPSTREAM_URL=${NEURALGUARD_MCP_UPSTREAM_URL:-http://mcp:8002/mcp}
       - NEURALGUARD_MCP_UPSTREAM_AUTH_TOKEN=${MCP_BEARER_TOKEN:?set MCP_BEARER_TOKEN in deploy/fleet/.env}
       - NEURALGUARD_MCP_HEADERS_REQUIRED=true
+      # ── Detection layers (full production stack) ──
+      # Semantic: the ONNX models are MOUNTED from the repo checkout
+      # (models/ is a gitignored build artifact — never baked). The image
+      # carries the semantic runtime (Dockerfile --extra semantic); a
+      # deployment without the mount degrades gracefully (readiness
+      # reports degraded, detection stays deterministic).
+      - NEURALGUARD_SCANNER_SEMANTIC_ENABLED=${SEMANTIC_ENABLED:-true}
+      # Agent Guardian (multi-turn detection): memory backend is correct for
+      # the fleet's single worker (redis-backed AG needs a shared store).
+      - NEURALGUARD_AGENT_GUARDIAN_ENABLED=${AGENT_GUARDIAN_ENABLED:-true}
+      - NEURALGUARD_AGENT_GUARDIAN_BACKEND=memory
+      # Canary (system-prompt exfiltration detection): secret pinned above;
+      # the layer is operational in the fleet posture.
+      - NEURALGUARD_CANARY_ENABLED=${CANARY_ENABLED:-true}
       # ── Judge + proxy at HOST Ollama (the same instance Scarlet uses) ──
       - NEURALGUARD_SCANNER_JUDGE_ENABLED=${JUDGE_ENABLED:-true}
       - NEURALGUARD_SCANNER_JUDGE_MODEL=${JUDGE_MODEL:-mistral:7b}
@@ -79,6 +93,8 @@ services:
       - NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE=${NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE:-60}
     volumes:
       - ng_fleet_audit:/data/audit
+      # The semantic layer's ONNX model + tokenizer (repo build artifacts).
+      - ../../models:/app/models:ro
     depends_on:
       api:
         condition: service_healthy
@@ -92,7 +108,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1g
+          # Measured 742 MiB with the FULL stack (semantic ONNX + judge
+          # plumbing + AG); 1.5 GiB = measured + ~2× headroom under load.
+          memory: 1536m
           cpus: "2.0"
         reservations:
           memory: 256m

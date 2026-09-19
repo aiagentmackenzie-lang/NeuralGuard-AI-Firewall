@@ -14,11 +14,20 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock* ./
 COPY README.md LICENSE* ./
 COPY src/ src/
+# NG-6: the guarded-FPR probe sets — the boot-time self-check measures the
+# loaded corpus against these (fpr_guard_file_missing otherwise, and the
+# SLO surface reports null). Small tracked JSONL files, runtime-required.
+COPY benchmarks/ng_vs_ns/benign_corpus.jsonl benchmarks/ng_vs_ns/benign_corpus.jsonl
+COPY corpus/benign_hard_negatives.jsonl corpus/benign_hard_negatives.jsonl
 
 # Install dependencies. Extras must cover every backend the appliance
 # profiles can enable: db (postgres audit), redis (AG session store +
-# rate-limit backend), tenants (YAML tenant registry), metrics (Prometheus).
-RUN uv sync --no-dev --extra db --extra redis --extra tenants --extra metrics --frozen
+# rate-limit backend), tenants (YAML tenant registry), metrics (Prometheus),
+# semantic (ONNX/tokenizer runtime for the semantic layer — the models
+# themselves stay OUT of the image (gitignored build artifacts); profiles
+# mount models/ at /app/models to enable the layer, which degrades
+# gracefully when the mount is absent).
+RUN uv sync --no-dev --extra db --extra redis --extra tenants --extra metrics --extra semantic --frozen
 
 # Production stage
 FROM base AS production

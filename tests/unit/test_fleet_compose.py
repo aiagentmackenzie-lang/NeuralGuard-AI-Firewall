@@ -75,7 +75,10 @@ class TestFleetComposePosture:
         compose = _read(_FLEET_COMPOSE)
         # Compose-network service names of the INCLUDED Scarlet stack.
         assert "NEURALGUARD_SIEM_SCARLETAI_URL=http://api:8000/api/v1/ingest" in compose
-        assert "NEURALGUARD_MCP_UPSTREAM_URL=${NEURALGUARD_MCP_UPSTREAM_URL:-http://mcp:8002/mcp}" in compose
+        assert (
+            "NEURALGUARD_MCP_UPSTREAM_URL=${NEURALGUARD_MCP_UPSTREAM_URL:-http://mcp:8002/mcp}"
+            in compose
+        )
         assert "NEURALGUARD_SIEM_ENABLED=true" in compose
         assert "NEURALGUARD_MCP_ENABLED=true" in compose
         # Wave-2: the shared bearer tokens ride both sides.
