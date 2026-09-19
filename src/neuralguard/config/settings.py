@@ -910,6 +910,17 @@ class McpGatewaySettings(BaseSettings):
         "headers on every gateway POST — the pre-parse Intent Gate seam. "
         "When False the gate is bypassed by configuration (logged).",
     )
+    upstream_auth_token: str = Field(
+        default="",
+        description=(
+            "Server-side bearer token forwarded as the upstream MCP server's "
+            "Authorization header (e.g. SecurityScarletAI's MCP_BEARER_TOKEN: "
+            "'Authorization: Bearer <token>'). Empty = no auth header "
+            "forwarded (legacy local-MCP posture). Server-side secret: never "
+            "logged, and gateway callers can NOT override it — a "
+            "client-supplied Authorization header is discarded."
+        ),
+    )
 
     # NG-9: provenance-lite egress binding (opt-in; off by default).
     provenance_mode: Literal["off", "warn", "block"] = Field(

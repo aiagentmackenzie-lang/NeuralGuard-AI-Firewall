@@ -7,7 +7,9 @@ refused, same fail-closed posture as the chat proxy's SSE hold-back).
 
 The transport holds no state and injects no upstream auth by default (local
 MCP servers are typically unauthenticated); an upstream Authorization header
-can be configured server-side and is never logged.
+is configured server-side via ``upstream_auth_token`` (Bearer scheme) and is
+never logged — and a caller-supplied ``Authorization`` header can never reach
+the upstream: the server-side token overwrites it.
 """
 
 from __future__ import annotations
@@ -56,6 +58,14 @@ class McpTransport:
         }
         if headers:
             forward_headers.update(headers)
+        # Server-side upstream auth: the configured token OVERWRITES any
+        # caller-supplied Authorization — a gateway client must never be able
+        # to smuggle its own credentials upstream. The token is held
+        # server-side and never logged (log lines carry url/status/body_len
+        # only; httpx exception reprs carry the URL, never headers).
+        token = str(getattr(self._settings, "upstream_auth_token", "") or "")
+        if token:
+            forward_headers["Authorization"] = f"Bearer {token}"
 
         try:
             response = await self._client.post(base, json=payload, headers=forward_headers)

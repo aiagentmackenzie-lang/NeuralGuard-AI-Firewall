@@ -37,6 +37,7 @@ transport): `POST /v1/mcp`.*
 | `VERIFY_PUBKEY` | — | Ed25519 pubkey (hex) to verify registry-signed catalog changes (the `X-MCP-Catalog-Signature` recovery path). |
 | `REQUIRE_SIGNATURE_ON_CHANGE` | `false` | When true, drift resolves ONLY via a verified signature. |
 | `HEADERS_REQUIRED` | `true` | The NG-8 seam. Turning this off disables the pre-parse gate (logged). |
+| `UPSTREAM_AUTH_TOKEN` | — | Server-side bearer token forwarded as the upstream's `Authorization: Bearer <token>` (e.g. SecurityScarletAI's `MCP_BEARER_TOKEN`). Empty = no auth header (legacy local-MCP posture). **Secret — never logged; gateway callers cannot override it; rotate via `secret_rotation.md`.** |
 
 ### Tenant policies (NG-8)
 

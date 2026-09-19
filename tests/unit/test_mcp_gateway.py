@@ -10,6 +10,7 @@ import hashlib
 import json
 from typing import Any
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -32,6 +33,7 @@ from neuralguard.mcp.manifest import (
     verify_baseline_signature,
 )
 from neuralguard.mcp.provenance import ProvenanceGate
+from neuralguard.mcp.transport import McpTransport, McpUpstreamError
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -1035,3 +1037,181 @@ class TestProvenanceSettings:
         cfg = TenantConfig(tenant_id="acme", mcp={"egress_tools": ["send_email", "http_post"]})
         d = cfg.to_effective_dict()
         assert d["mcp"]["egress_tools"] == ["http_post", "send_email"]
+
+
+# ── Upstream auth (GAP-2 closure) ──────────────────────────────────────────
+# The transport docstring always claimed "an upstream Authorization header can
+# be configured server-side" — Wave 2 makes the claim TRUE: a server-side
+# bearer token (e.g. SecurityScarletAI's MCP_BEARER_TOKEN) rides every
+# forward, and a caller-supplied Authorization header can NEVER reach the
+# upstream (the server-side token overwrites it). Token never logged.
+
+
+class _RecordingUpstream:
+    """httpx.MockTransport handler that records forwarded request headers."""
+
+    def __init__(self, response: dict[str, Any] | None = None) -> None:
+        self.requests: list[tuple[str, dict[str, str]]] = []
+        self._response = response or {"jsonrpc": "2.0", "id": 1, "result": {}}
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append((str(request.url), {k: v for k, v in request.headers.items()}))
+        return httpx.Response(200, json=self._response)
+
+
+def _real_transport(config: NeuralGuardConfig, handler: _RecordingUpstream) -> McpTransport:
+    import httpx as _httpx
+
+    transport = McpTransport(config.mcp)
+    transport._client = _httpx.AsyncClient(
+        transport=_httpx.MockTransport(handler),
+        timeout=config.mcp.timeout_seconds,
+    )
+    return transport
+
+
+class TestUpstreamAuth:
+    def test_env_key_known_to_f5_gate(self) -> None:
+        from neuralguard.config.settings import known_env_keys
+
+        assert "NEURALGUARD_MCP_UPSTREAM_AUTH_TOKEN" in known_env_keys()
+
+    def test_off_by_default(self) -> None:
+        config = NeuralGuardConfig()
+        assert config.mcp.upstream_auth_token == ""
+
+    @pytest.mark.asyncio
+    async def test_bearer_injected_when_configured(self) -> None:
+        config = _config(upstream_auth_token="scarlet-mcp-token-123")
+        upstream = _RecordingUpstream()
+        transport = _real_transport(config, upstream)
+        try:
+            await transport.forward(_rpc("tools/list"))
+        finally:
+            await transport.aclose()
+        assert len(upstream.requests) == 1
+        _, headers = upstream.requests[0]
+        assert headers["authorization"] == "Bearer scarlet-mcp-token-123"
+
+    @pytest.mark.asyncio
+    async def test_no_auth_header_by_default(self) -> None:
+        config = _config()  # no upstream_auth_token (legacy local-MCP posture)
+        upstream = _RecordingUpstream()
+        transport = _real_transport(config, upstream)
+        try:
+            await transport.forward(_rpc("tools/list"))
+        finally:
+            await transport.aclose()
+        _, headers = upstream.requests[0]
+        assert "authorization" not in {k.lower(): v for k, v in headers.items()}
+
+    @pytest.mark.asyncio
+    async def test_server_side_token_overrides_caller_header(self) -> None:
+        """A gateway caller can never smuggle its own credentials upstream."""
+        config = _config(upstream_auth_token="server-token-456")
+        upstream = _RecordingUpstream()
+        transport = _real_transport(config, upstream)
+        try:
+            await transport.forward(
+                _rpc("tools/call", "read_file"),
+                headers={"Authorization": "Bearer attacker-token", "X-Custom": "kept"},
+            )
+        finally:
+            await transport.aclose()
+        _, headers = upstream.requests[0]
+        assert headers["authorization"] == "Bearer server-token-456"
+        assert headers["x-custom"] == "kept"  # non-auth caller headers still pass
+
+    @pytest.mark.asyncio
+    async def test_token_never_logged(self) -> None:
+        """The failure paths log url/status only — never the auth token."""
+        import structlog.testing
+
+        config = _config(upstream_auth_token="scarlet-mcp-secret-token")
+        rejected = _RecordingUpstream()
+        transport = _real_transport(config, rejected)
+
+        def _reject(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"detail": "no"})
+
+        transport._client = httpx.AsyncClient(transport=httpx.MockTransport(_reject))
+        with structlog.testing.capture_logs() as logs:
+            try:
+                await transport.forward(_rpc("tools/list"))
+            except McpUpstreamError:
+                pass  # expected: 401 → generic upstream error
+            finally:
+                await transport.aclose()
+        serialized = json.dumps(logs)
+        assert "scarlet-mcp-secret-token" not in serialized
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_gateway_forwards_server_token(self) -> None:
+        """Full wiring: config → create_app transport → forward → upstream."""
+        config = _config(upstream_auth_token="e2e-token-789")
+        app = create_app(config)
+        upstream = _RecordingUpstream()
+        installed = app.state.mcp_transport
+        assert installed is not None
+        installed._client = httpx.AsyncClient(transport=httpx.MockTransport(upstream), timeout=5.0)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/mcp",
+                json=_rpc("tools/list"),
+                headers={"Mcp-Method": "tools/list"},
+            )
+        assert resp.status_code == 200
+        assert upstream.requests, "gateway call never reached the upstream"
+        _, headers = upstream.requests[0]
+        assert headers["authorization"] == "Bearer e2e-token-789"
+        await installed.aclose()
+
+
+class TestTransportFailurePaths:
+    """The transport's error contract: generic McpUpstreamError, token-free logs."""
+
+    @staticmethod
+    def _transport_with(handler: Any) -> McpTransport:
+        config = _config(upstream_auth_token="failure-path-token")
+        transport = McpTransport(config.mcp)
+        transport._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_timeout_becomes_generic_upstream_error(self) -> None:
+        def _timeout(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("slow", request=request)
+
+        transport = self._transport_with(_timeout)
+        with pytest.raises(McpUpstreamError, match="timed out"):
+            await transport.forward(_rpc("tools/list"))
+        await transport.aclose()
+
+    @pytest.mark.asyncio
+    async def test_transport_error_becomes_unreachable(self) -> None:
+        def _down(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        transport = self._transport_with(_down)
+        with pytest.raises(McpUpstreamError, match="unreachable"):
+            await transport.forward(_rpc("tools/list"))
+        await transport.aclose()
+
+    @pytest.mark.asyncio
+    async def test_non_json_response_is_refused(self) -> None:
+        transport = self._transport_with(
+            lambda request: httpx.Response(200, content=b"<html>not json</html>")
+        )
+        with pytest.raises(McpUpstreamError, match="invalid JSON"):
+            await transport.forward(_rpc("tools/list"))
+        await transport.aclose()
+
+    @pytest.mark.asyncio
+    async def test_injected_client_not_closed_by_aclose(self) -> None:
+        """aclose releases the client only when the transport OWNS it."""
+        upstream = _RecordingUpstream()
+        config = _config()
+        transport = McpTransport(config.mcp)  # owns its client
+        transport._client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        await transport.aclose()
+        assert transport._client.is_closed
