@@ -56,6 +56,23 @@ _VERDICT_SEVERITY = {
     "allow": "info",
 }
 
+# Injection-shaped threat categories (the closed T-* vocabulary): a verdict
+# carrying one of these ALSO maps into ScarletAI's ai-category
+# ``ai_prompt_injection`` companion event — Scarlet's ai_usage doctrine puts
+# the mapping AT THE PRODUCER ("a NeuralGuard prompt-injection verdict maps
+# into ai_prompt_injection at its producer"), and Scarlet's Sigma compiler
+# only selects FLAT columns (raw_data is not selectable), so the companion
+# event is what makes single NeuralGuard injection detections alertable.
+_INJECTION_CATEGORIES = frozenset({"T-PI-D", "T-PI-I", "T-JB"})
+
+# ScarletAI's per-POST batch cap (api/ingest.py: 413 above 1000 events).
+# Configured batch sizes cannot reach this (batch_max_events ≤ 1000, arrays
+# ≤ 3 events) — the split below is pure defensive depth.
+_SCARLETAI_BATCH_LIMIT = 1000
+
+# ScarletAI IngestEvent.user_name / process_name max_length (256 chars).
+_SCARLETAI_ACTOR_CAP = 256
+
 
 def map_to_scarletai(payload: dict[str, Any], settings: SiemSettings) -> dict[str, Any]:
     """Map a NeuralGuard SIEM envelope into a ScarletAI IngestEvent dict.
@@ -106,6 +123,110 @@ def map_to_scarletai(payload: dict[str, Any], settings: SiemSettings) -> dict[st
         "severity": severity,
         "raw_data": {"neuralguard": inner},
     }
+
+
+def map_to_scarletai_batch(payload: dict[str, Any], settings: SiemSettings) -> list[dict[str, Any]]:
+    """Map one SIEM envelope into the ScarletAI IngestEvent dicts for its POST.
+
+    Fleet contract (companion events, scarletai sink ONLY — Splunk/webhook
+    consumers keep the full audit event, which already carries everything):
+
+    - **Actor slot (A1):** every mapped verdict event sets ``user_name`` to
+      the audit event's ``tenant_id`` (ECS-borrowed actor slot, Scarlet's
+      own ai_usage convention: user_name is the ACTOR). ``tenant_id`` ALSO
+      stays inside ``raw_data.neuralguard`` — Scarlet's
+      ``ai_verdict_block_sustained`` correlation detector groups on it.
+    - **Injection companion (A2):** a verdict whose ``threat_categories``
+      intersects {T-PI-D, T-PI-I, T-JB} adds ONE ``ai``-category
+      ``ai_prompt_injection`` event — same severity, ``@timestamp`` and
+      ``host_name`` as the parent, marked ``neuralguard_companion`` in
+      ``raw_data``. No ``process_name`` (there is no tool in an input scan).
+    - **MCP-denial companion (A3):** an MCP-gateway event (``metadata.mcp``)
+      with verdict block/escalate adds ONE ``mcp_tool_denied`` companion
+      with the denied tool in ``process_name``. A verdict event can yield
+      BOTH companions (an injection-shaped MCP gate block is two domain
+      lenses on one decision).
+    - **Spikes (A4):** ``neuralguard.block_spike`` payloads stay
+      single-element — the spike payload is not an AuditEvent dump.
+
+    Companions ride the SAME POST as the parent (they are derived from it,
+    so they inherit its routing decision, including the allow-filter).
+    Purity/totality: no companion path may raise — a companion-build failure
+    logs and degrades to the parent-only delivery (observability never
+    affects verdicts, the P2-7 doctrine).
+    """
+    parent = map_to_scarletai(payload, settings)
+    if payload.get("event_type") == "neuralguard.block_spike":
+        return [parent]  # A4: spikes stay single-element, no slot mapping
+
+    inner = payload.get("event", {})
+    tenant = inner.get("tenant_id")
+    if isinstance(tenant, str) and tenant:
+        # A1: actor slot, capped to IngestEvent's 256-char field limit.
+        parent["user_name"] = tenant[:_SCARLETAI_ACTOR_CAP]
+
+    events: list[dict[str, Any]] = [parent]
+
+    # A2: injection companion — Scarlet's closed ai-category vocabulary.
+    try:
+        categories = {str(c) for c in (inner.get("threat_categories") or [])}
+        if categories & _INJECTION_CATEGORIES:
+            events.append(
+                {
+                    "@timestamp": parent["@timestamp"],
+                    "host_name": parent["host_name"],
+                    "source": "neuralguard",
+                    "event_category": "ai",
+                    "event_type": "info",
+                    "event_action": "ai_prompt_injection",
+                    "user_name": parent.get("user_name"),
+                    "severity": parent["severity"],
+                    "raw_data": {
+                        "neuralguard": inner,
+                        "neuralguard_companion": "prompt_injection",
+                    },
+                }
+            )
+    except Exception as exc:
+        logger.warning(
+            "siem_companion_build_failed",
+            companion="prompt_injection",
+            error=exc.__class__.__name__,
+        )
+
+    # A3: MCP-denial companion — the denied tool call as an ai-category event
+    # (tool in process_name per Scarlet's ai_usage producer convention).
+    try:
+        metadata = inner.get("metadata") or {}
+        if metadata.get("mcp") and str(inner.get("verdict", "")) in {"block", "escalate"}:
+            tool = metadata.get("tool")
+            events.append(
+                {
+                    "@timestamp": parent["@timestamp"],
+                    "host_name": parent["host_name"],
+                    "source": "neuralguard",
+                    "event_category": "ai",
+                    "event_type": "info",
+                    "event_action": "mcp_tool_denied",
+                    "user_name": parent.get("user_name"),
+                    "process_name": tool[:_SCARLETAI_ACTOR_CAP]
+                    if isinstance(tool, str) and tool
+                    else None,
+                    "severity": parent["severity"],
+                    "raw_data": {
+                        "neuralguard": inner,
+                        "neuralguard_companion": "mcp_denial",
+                    },
+                }
+            )
+    except Exception as exc:
+        logger.warning(
+            "siem_companion_build_failed",
+            companion="mcp_denial",
+            error=exc.__class__.__name__,
+        )
+
+    return events
 
 
 class SiemRouter:
@@ -312,29 +433,43 @@ class SiemRouter:
             if self.settings.scarletai_token
             else {}
         )
+        # Sync fallback (no running loop — CLI / sync test context): no
+        # buffering. The time-based flush needs an event loop, and immediate
+        # delivery is strictly better in a one-shot CLI process.
         response = client.post(
-            scarletai_url, json=[map_to_scarletai(payload, self.settings)], headers=headers
+            scarletai_url, json=map_to_scarletai_batch(payload, self.settings), headers=headers
         )
         self._check(response, "scarletai")
 
     async def _post_scarletai(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> None:
         try:
-            scarletai_url = self.settings.scarletai_url
-            assert scarletai_url is not None  # "scarletai" in _sinks guarantees this
-            headers = (
-                {"Authorization": f"Bearer {self.settings.scarletai_token}"}
-                if self.settings.scarletai_token
-                else {}
+            # Mapped array (parent + companions), one POST. (Batch buffering
+            # is layered on top of this call site — scarletai sink only.)
+            await self._post_scarletai_events(
+                client, map_to_scarletai_batch(payload, self.settings)
             )
-            response = await client.post(
-                scarletai_url,
-                json=[map_to_scarletai(payload, self.settings)],
-                headers=headers,
-            )
-            self._check(response, "scarletai")
         except Exception as exc:
             logger.warning("siem_sink_failed", sink="scarletai", error=str(exc))
             self._on_dropped(f"scarletai: {exc.__class__.__name__}")
+
+    async def _post_scarletai_events(
+        self, client: httpx.AsyncClient, events: list[dict[str, Any]]
+    ) -> None:
+        """POST one mapped event-array (parent + companions) to ScarletAI.
+
+        Companions ride the SAME POST as the parent by construction. The
+        companion contract is Scarlet's closed vocabulary, so companions are
+        scarletai-only; Splunk/webhook sinks keep the single-event envelope.
+        """
+        scarletai_url = self.settings.scarletai_url
+        assert scarletai_url is not None  # "scarletai" in _sinks guarantees this
+        headers = (
+            {"Authorization": f"Bearer {self.settings.scarletai_token}"}
+            if self.settings.scarletai_token
+            else {}
+        )
+        response = await client.post(scarletai_url, json=events, headers=headers)
+        self._check(response, "scarletai")
 
     # ── Sink implementations ─────────────────────────────────────────────
 
