@@ -637,3 +637,81 @@ async def test_batch_env_keys_are_known_to_f5_gate() -> None:
     known = known_env_keys()
     assert "NEURALGUARD_SIEM_SCARLETAI_BATCH_MAX_EVENTS" in known
     assert "NEURALGUARD_SIEM_SCARLETAI_BATCH_FLUSH_SECONDS" in known
+
+
+@pytest.mark.asyncio
+async def test_mapping_guards_are_total() -> None:
+    """A1/A3 guards: missing tenant, non-dict metadata — never raise."""
+    # No tenant_id in the dump → no user_name slot, parent-only mapping.
+    payload = {
+        "event_type": "neuralguard.verdict",
+        "time": 0.0,
+        "event": {"verdict": "block", "threat_categories": []},
+    }
+    mapped = map_to_scarletai_batch(payload, _settings())
+    assert len(mapped) == 1
+    assert "user_name" not in mapped[0]
+    # Empty tenant_id is equally skipped.
+    payload2 = {
+        "event_type": "neuralguard.verdict",
+        "time": 0.0,
+        "event": {"verdict": "block", "tenant_id": "", "threat_categories": []},
+    }
+    mapped2 = map_to_scarletai_batch(payload2, _settings())
+    assert len(mapped2) == 1 and "user_name" not in mapped2[0]
+    # Non-dict metadata → the MCP companion degrades to parent-only (A3/A6).
+    payload3 = {
+        "event_type": "neuralguard.verdict",
+        "time": 0.0,
+        "event": {
+            "verdict": "block",
+            "tenant_id": "acme",
+            "threat_categories": [],
+            "metadata": 12345,
+        },
+    }
+    mapped3 = map_to_scarletai_batch(payload3, _settings())
+    assert len(mapped3) == 1
+    assert mapped3[0]["event_action"] == "verdict_block"
+
+
+def test_chunk_arrays_empty_input_yields_no_chunks() -> None:
+    assert SiemRouter._chunk_arrays([]) == []
+
+
+@pytest.mark.asyncio
+async def test_buffer_flush_transport_error_drops_and_counts() -> None:
+    """A transport-level failure (not a 4xx) in the flush drops + counts."""
+
+    def _raising_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    router = SiemRouter(
+        _batch_settings(scarletai_batch_max_events=2),
+        transport=httpx.MockTransport(_raising_handler),
+    )
+    router.route(_audit_event())
+    router.route(_audit_event())
+    await asyncio.sleep(0.05)
+    assert router._drops >= 1
+    assert router._batch_buffer == []  # drained; failure counted, not re-queued
+    await router.shutdown_flush()
+
+
+@pytest.mark.asyncio
+async def test_flusher_tick_transport_error_drops_and_counts() -> None:
+    """The flusher tick's own failure path: drop + count, never raise."""
+
+    def _raising_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    router = SiemRouter(
+        _batch_settings(scarletai_batch_max_events=5),
+        transport=httpx.MockTransport(_raising_handler),
+    )
+    router.route(_audit_event())  # buffered (below cap), no size flush
+    await asyncio.sleep(0.05)
+    assert len(router._batch_buffer) == 1
+    await router._flush_from_loop()  # direct tick with the broken transport
+    assert router._drops >= 1
+    assert router._batch_buffer == []  # drained: failures drop, not re-queue

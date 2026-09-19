@@ -526,7 +526,10 @@ class SiemRouter:
                     arrays = self._batch_buffer
                     self._batch_buffer = []
                 if not arrays:
-                    return
+                    return  # pragma: no cover — concurrent-drainer race guard
+                # (the lock-free check → lock drain sequence has no await
+                # between them in-process; a second drainer cannot interleave.
+                # Kept as a defensive invariant for future callers.)
                 async with httpx.AsyncClient(
                     timeout=self.settings.timeout_seconds,
                     transport=cast("httpx.AsyncBaseTransport | None", self._transport),
