@@ -40,12 +40,24 @@ Deliberate fleet posture (differences from the standalone composes):
   (`/data/audit`, volume-persisted) + memory rate limiting (single worker).
   Scarlet's stack carries the SIEM's durable stores; NG's audit chain rides
   to Scarlet inside `raw_data` of every routed event.
+- **The FULL detection stack runs**: semantic ONNX layer (the repo's
+  `models/` build artifacts mounted read-only at `/app/models` — the image
+  carries the runtime; a checkout without `models/` degrades gracefully to
+  the deterministic layers), Agent Guardian (memory backend, single
+  worker), canary detection, judge + proxy at host Ollama. The NG-6
+  guarded-FPR SLO is measured at boot (reference fleet: 0.00%, SLO met)
+  and surfaced on `/v1/info`.
 - NeuralGuard serves on `:8100` — Scarlet publishes `:8000`, so the
-  standalone NG port would collide.
+  standalone NG port would collide. NG's memory limit is 1.5 GiB (measured
+  742 MiB with the full stack).
 - Scarlet's compose is included UNCHANGED (its pins, healthchecks, and
   overlays stay authoritative). The prod overlay upgrade path is in the
   Scarlet repo docs (`docker-compose.prod.yml` / `local-prod`); this file
   wires the base single-role posture.
+- **include: env precedence**: the INCLUDED repo's own `.env` (if present)
+  wins for its services. If Scarlet has a standing `.env`, mirror its
+  shared-token values (`INGEST_BEARER_TOKEN`, `MCP_BEARER_TOKEN`) into
+  `deploy/fleet/.env` so both sides agree — NG sends what Scarlet verifies.
 
 ## Prerequisites
 
@@ -59,7 +71,11 @@ Deliberate fleet posture (differences from the standalone composes):
 2. Docker + compose v2.20+ (colima works: `colima start`).
 3. Host Ollama running with the judge model pulled
    (`ollama pull mistral:7b` or set `JUDGE_MODEL`).
-4. Secrets generated and filled (see below).
+4. The repo checkout's `models/` build artifacts present (the semantic
+   layer's ONNX model + precomputed vectors; regenerate via the export
+   scripts if absent — without them the semantic layer degrades gracefully
+   to the deterministic layers and readiness reports `degraded`).
+5. Secrets generated and filled (see below).
 
 ## Deploy
 
@@ -116,9 +132,23 @@ curl -s "http://127.0.0.1:8000/api/v1/logs?limit=5" \
   | python3 -m json.tool | grep -m1 neuralguard
 ```
 
-Step 3 exercises the live pipe once with one real attack probe — it is a
-wiring check, not the campaign's live-fire exercise (that is a later wave,
-with the full matrix and scorecard).
+Step 3 exercises the live pipe once with one real attack probe — a wiring
+check, not the full exercise (the complete probe matrix is the next
+section, with the receipt).
+
+## Live-fire exercise (the full receipt)
+
+`bash deploy/fleet/fleet_livefire.sh` runs the reproducible exercise:
+health gates (fail-closed) → the MCP wire proof (`tools/list` through the
+gateway) → 12 MCP-gate denials (never-baselined tool, nothing executes) →
+96 injection probes → a settle window for the rule scheduler + correlation
+→ the ScarletAI receipt (alerts by Sigma title, correlation matches,
+coverage arming). Reference receipt (2026-09-19, run-stamped host
+`neuralguard-fleet-w5`, ALL GREEN): 95/95 injections blocked @ 0.95
+confidence · 12/12 gate refusals · 4 detections fired (AI Prompt Injection
+Attempt, NeuralGuard Confirmed AI Attack Block, MCP Tool Denial Burst,
+NeuralGuard Block-Rate Spike) + the `ai_verdict_block_sustained`
+correlation · coverage 97/128 armed with both producer rules ARMED.
 
 ## Auth posture
 
