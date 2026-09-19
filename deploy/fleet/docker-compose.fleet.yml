@@ -1,0 +1,101 @@
+# Fleet deployment (GAP-3 closure): NeuralGuard + SecurityScarletAI in ONE
+# compose project — a single `up` for the co-resident posture.
+#
+#   cd deploy/fleet
+#   cp fleet.env.example .env   # fill in the generated secrets
+#   docker compose -f docker-compose.fleet.yml up -d
+#
+# The include pulls ScarletAI's own compose file UNCHANGED from the sibling
+# checkout (this repo and SecurityScarletAI must sit side by side — the
+# default checkout layout). Compose resolves the included file's relative
+# paths against ITS location, so Scarlet's builds and mounts work unchanged.
+# All services then share one compose network and reach each other by
+# SERVICE name: Scarlet's API is `api:8000`, its MCP server `mcp:8002`.
+#
+# Wiring (the whole point of this file):
+# - SIEM: every NeuralGuard verdict (hash-chained audit event + companion
+#   events) → Scarlet's ingest endpoint, authenticated with the SAME
+#   INGEST_BEARER_TOKEN Scarlet verifies on its side.
+# - MCP gateway: NeuralGuard's /v1/mcp fronts Scarlet's MCP server
+#   (investigate / hunt / explain) with the Wave-2 server-side bearer auth
+#   (NEURALGUARD_MCP_UPSTREAM_AUTH_TOKEN = MCP_BEARER_TOKEN).
+# - Judge + proxy: HOST Ollama via host.docker.internal (the same instance
+#   Scarlet's containers use).
+#
+# Deliberate fleet posture (documented in docs/runbooks/fleet_deployment.md):
+# - NeuralGuard runs WITHOUT its own postgres/redis: JSONL hash-chained audit
+#   + memory rate limiting (single worker). Scarlet's stack brings the SIEM's
+#   durable stores; NG's audit chain rides to Scarlet inside every event.
+# - NeuralGuard serves on ${NG_FLEET_PORT:-8100} — Scarlet publishes :8000,
+#   so the standalone NG port would collide.
+# - Scarlet publishes host ports (8000/8002/8501/6379/5433) as its compose
+#   defines them; container_name pins (scarletai-*) mean the standalone
+#   Scarlet stack must NOT run at the same time as this fleet file.
+
+include:
+  - ../../../SecurityScarletAI/docker-compose.yml
+
+services:
+  neuralguard:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    ports:
+      - "${NG_FLEET_PORT:-8100}:8000"
+    environment:
+      - NEURALGUARD_ENVIRONMENT=${NEURALGUARD_ENVIRONMENT:-production}
+      - NEURALGUARD_LOG_LEVEL=${NEURALGUARD_LOG_LEVEL:-INFO}
+      - NEURALGUARD_AUTH_ENABLED=true
+      - NEURALGUARD_AUTH_API_KEYS=${NEURALGUARD_AUTH_API_KEYS:?set NEURALGUARD_AUTH_API_KEYS in deploy/fleet/.env}
+      - NEURALGUARD_ALLOW_INSECURE_HTTP=true
+      - NEURALGUARD_MAX_REQUEST_BODY_BYTES=${NEURALGUARD_MAX_REQUEST_BODY_BYTES:-1048576}
+      - NEURALGUARD_CANARY_SECRET=${NEURALGUARD_CANARY_SECRET:?set NEURALGUARD_CANARY_SECRET in deploy/fleet/.env}
+      # ── Fleet SIEM wiring (P2-7 + the Wave-1 companion contract) ──
+      - NEURALGUARD_SIEM_ENABLED=true
+      - NEURALGUARD_SIEM_SCARLETAI_URL=http://api:8000/api/v1/ingest
+      - NEURALGUARD_SIEM_SCARLETAI_TOKEN=${INGEST_BEARER_TOKEN:?set INGEST_BEARER_TOKEN in deploy/fleet/.env}
+      - NEURALGUARD_SIEM_SCARLETAI_HOST=${NEURALGUARD_SIEM_SCARLETAI_HOST:-neuralguard-fleet}
+      # ── MCP gateway → Scarlet's MCP server (Wave-2 upstream auth) ──
+      - NEURALGUARD_MCP_ENABLED=true
+      - NEURALGUARD_MCP_UPSTREAM_URL=http://mcp:8002
+      - NEURALGUARD_MCP_UPSTREAM_AUTH_TOKEN=${MCP_BEARER_TOKEN:?set MCP_BEARER_TOKEN in deploy/fleet/.env}
+      - NEURALGUARD_MCP_HEADERS_REQUIRED=true
+      # ── Judge + proxy at HOST Ollama (the same instance Scarlet uses) ──
+      - NEURALGUARD_SCANNER_JUDGE_ENABLED=${JUDGE_ENABLED:-true}
+      - NEURALGUARD_SCANNER_JUDGE_MODEL=${JUDGE_MODEL:-mistral:7b}
+      - NEURALGUARD_SCANNER_JUDGE_OLLAMA_URL=http://host.docker.internal:11434
+      - NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS=${JUDGE_TIMEOUT_SECONDS:-10}
+      - NEURALGUARD_PROXY_ENABLED=${PROXY_ENABLED:-true}
+      - NEURALGUARD_PROXY_UPSTREAM_URL=${NEURALGUARD_PROXY_UPSTREAM_URL:-http://host.docker.internal:11434/v1}
+      - NEURALGUARD_PROXY_UPSTREAM_API_KEY=${NEURALGUARD_PROXY_UPSTREAM_API_KEY:-}
+      - NEURALGUARD_PROXY_TIMEOUT_SECONDS=120
+      # ── Fleet posture: single worker, JSONL hash-chained audit, memory rate limit ──
+      # (Scarlet's stack carries the durable stores; NG's audit chain rides
+      # to Scarlet inside raw_data of every routed event.)
+      - NEURALGUARD_AUDIT_BACKEND=jsonl
+      - NEURALGUARD_AUDIT_JSONL_PATH=/data/audit
+      - NEURALGUARD_RATELIMIT_ENABLED=true
+      - NEURALGUARD_RATELIMIT_BACKEND=memory
+      - NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE=${NEURALGUARD_RATELIMIT_REQUESTS_PER_MINUTE:-60}
+    volumes:
+      - ng_fleet_audit:/data/audit
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+        reservations:
+          memory: 256m
+
+volumes:
+  ng_fleet_audit:
