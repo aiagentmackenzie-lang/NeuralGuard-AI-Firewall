@@ -27,6 +27,7 @@ Delivery contract (observability, not an inline control):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections import deque
 from datetime import UTC, datetime
@@ -55,6 +56,23 @@ _VERDICT_SEVERITY = {
     "rate_limit": "low",
     "allow": "info",
 }
+
+# Injection-shaped threat categories (the closed T-* vocabulary): a verdict
+# carrying one of these ALSO maps into ScarletAI's ai-category
+# ``ai_prompt_injection`` companion event — Scarlet's ai_usage doctrine puts
+# the mapping AT THE PRODUCER ("a NeuralGuard prompt-injection verdict maps
+# into ai_prompt_injection at its producer"), and Scarlet's Sigma compiler
+# only selects FLAT columns (raw_data is not selectable), so the companion
+# event is what makes single NeuralGuard injection detections alertable.
+_INJECTION_CATEGORIES = frozenset({"T-PI-D", "T-PI-I", "T-JB"})
+
+# ScarletAI's per-POST batch cap (api/ingest.py: 413 above 1000 events).
+# Configured batch sizes cannot reach this (batch_max_events ≤ 1000, arrays
+# ≤ 3 events) — the split below is pure defensive depth.
+_SCARLETAI_BATCH_LIMIT = 1000
+
+# ScarletAI IngestEvent.user_name / process_name max_length (256 chars).
+_SCARLETAI_ACTOR_CAP = 256
 
 
 def map_to_scarletai(payload: dict[str, Any], settings: SiemSettings) -> dict[str, Any]:
@@ -108,6 +126,110 @@ def map_to_scarletai(payload: dict[str, Any], settings: SiemSettings) -> dict[st
     }
 
 
+def map_to_scarletai_batch(payload: dict[str, Any], settings: SiemSettings) -> list[dict[str, Any]]:
+    """Map one SIEM envelope into the ScarletAI IngestEvent dicts for its POST.
+
+    Fleet contract (companion events, scarletai sink ONLY — Splunk/webhook
+    consumers keep the full audit event, which already carries everything):
+
+    - **Actor slot (A1):** every mapped verdict event sets ``user_name`` to
+      the audit event's ``tenant_id`` (ECS-borrowed actor slot, Scarlet's
+      own ai_usage convention: user_name is the ACTOR). ``tenant_id`` ALSO
+      stays inside ``raw_data.neuralguard`` — Scarlet's
+      ``ai_verdict_block_sustained`` correlation detector groups on it.
+    - **Injection companion (A2):** a verdict whose ``threat_categories``
+      intersects {T-PI-D, T-PI-I, T-JB} adds ONE ``ai``-category
+      ``ai_prompt_injection`` event — same severity, ``@timestamp`` and
+      ``host_name`` as the parent, marked ``neuralguard_companion`` in
+      ``raw_data``. No ``process_name`` (there is no tool in an input scan).
+    - **MCP-denial companion (A3):** an MCP-gateway event (``metadata.mcp``)
+      with verdict block/escalate adds ONE ``mcp_tool_denied`` companion
+      with the denied tool in ``process_name``. A verdict event can yield
+      BOTH companions (an injection-shaped MCP gate block is two domain
+      lenses on one decision).
+    - **Spikes (A4):** ``neuralguard.block_spike`` payloads stay
+      single-element — the spike payload is not an AuditEvent dump.
+
+    Companions ride the SAME POST as the parent (they are derived from it,
+    so they inherit its routing decision, including the allow-filter).
+    Purity/totality: no companion path may raise — a companion-build failure
+    logs and degrades to the parent-only delivery (observability never
+    affects verdicts, the P2-7 doctrine).
+    """
+    parent = map_to_scarletai(payload, settings)
+    if payload.get("event_type") == "neuralguard.block_spike":
+        return [parent]  # A4: spikes stay single-element, no slot mapping
+
+    inner = payload.get("event", {})
+    tenant = inner.get("tenant_id")
+    if isinstance(tenant, str) and tenant:
+        # A1: actor slot, capped to IngestEvent's 256-char field limit.
+        parent["user_name"] = tenant[:_SCARLETAI_ACTOR_CAP]
+
+    events: list[dict[str, Any]] = [parent]
+
+    # A2: injection companion — Scarlet's closed ai-category vocabulary.
+    try:
+        categories = {str(c) for c in (inner.get("threat_categories") or [])}
+        if categories & _INJECTION_CATEGORIES:
+            events.append(
+                {
+                    "@timestamp": parent["@timestamp"],
+                    "host_name": parent["host_name"],
+                    "source": "neuralguard",
+                    "event_category": "ai",
+                    "event_type": "info",
+                    "event_action": "ai_prompt_injection",
+                    "user_name": parent.get("user_name"),
+                    "severity": parent["severity"],
+                    "raw_data": {
+                        "neuralguard": inner,
+                        "neuralguard_companion": "prompt_injection",
+                    },
+                }
+            )
+    except Exception as exc:
+        logger.warning(
+            "siem_companion_build_failed",
+            companion="prompt_injection",
+            error=exc.__class__.__name__,
+        )
+
+    # A3: MCP-denial companion — the denied tool call as an ai-category event
+    # (tool in process_name per Scarlet's ai_usage producer convention).
+    try:
+        metadata = inner.get("metadata") or {}
+        if metadata.get("mcp") and str(inner.get("verdict", "")) in {"block", "escalate"}:
+            tool = metadata.get("tool")
+            events.append(
+                {
+                    "@timestamp": parent["@timestamp"],
+                    "host_name": parent["host_name"],
+                    "source": "neuralguard",
+                    "event_category": "ai",
+                    "event_type": "info",
+                    "event_action": "mcp_tool_denied",
+                    "user_name": parent.get("user_name"),
+                    "process_name": tool[:_SCARLETAI_ACTOR_CAP]
+                    if isinstance(tool, str) and tool
+                    else None,
+                    "severity": parent["severity"],
+                    "raw_data": {
+                        "neuralguard": inner,
+                        "neuralguard_companion": "mcp_denial",
+                    },
+                }
+            )
+    except Exception as exc:
+        logger.warning(
+            "siem_companion_build_failed",
+            companion="mcp_denial",
+            error=exc.__class__.__name__,
+        )
+
+    return events
+
+
 class SiemRouter:
     """Fan-out of audit events to SIEM sinks + BLOCK-rate spike alerting.
 
@@ -144,6 +266,12 @@ class SiemRouter:
         # swallow the FIRST spike alert for `cooldown_seconds`.)
         self._last_alert_ts: float | None = None
         self._drops: int = 0
+        # Opt-in batch buffering (scarletai sink only): verdict families
+        # (parent + companions) accumulate and flush on size/time. Default
+        # cap = 1 → never used, byte-identical legacy behavior.
+        self._batch_buffer: list[list[dict[str, Any]]] = []
+        self._batch_lock = asyncio.Lock()
+        self._flusher_task: asyncio.Task[None] | None = None
 
     # ── Public API (request-path safe) ────────────────────────────────────
 
@@ -312,29 +440,165 @@ class SiemRouter:
             if self.settings.scarletai_token
             else {}
         )
+        # Sync fallback (no running loop — CLI / sync test context): no
+        # buffering. The time-based flush needs an event loop, and immediate
+        # delivery is strictly better in a one-shot CLI process.
         response = client.post(
-            scarletai_url, json=[map_to_scarletai(payload, self.settings)], headers=headers
+            scarletai_url, json=map_to_scarletai_batch(payload, self.settings), headers=headers
         )
         self._check(response, "scarletai")
 
     async def _post_scarletai(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> None:
         try:
-            scarletai_url = self.settings.scarletai_url
-            assert scarletai_url is not None  # "scarletai" in _sinks guarantees this
-            headers = (
-                {"Authorization": f"Bearer {self.settings.scarletai_token}"}
-                if self.settings.scarletai_token
-                else {}
-            )
-            response = await client.post(
-                scarletai_url,
-                json=[map_to_scarletai(payload, self.settings)],
-                headers=headers,
-            )
-            self._check(response, "scarletai")
+            events = map_to_scarletai_batch(payload, self.settings)
+            spike = payload.get("event_type") == "neuralguard.block_spike"
+            if self._batching_enabled() and not spike:
+                # Opt-in batching (scarletai sink only): verdict families
+                # buffer and flush on size/time. Spike alerts BYPASS the
+                # buffer — a critical alert must never wait a flush interval.
+                await self._buffer_verdict(client, events)
+            else:
+                await self._post_scarletai_events(client, events)
         except Exception as exc:
             logger.warning("siem_sink_failed", sink="scarletai", error=str(exc))
             self._on_dropped(f"scarletai: {exc.__class__.__name__}")
+
+    # ── Batch buffering (opt-in, scarletai sink only) ────────────────────
+
+    def _batching_enabled(self) -> bool:
+        """True when the buffer is on (cap > 1). Splunk/webhook never buffer."""
+        return self.settings.scarletai_batch_max_events > 1
+
+    async def _buffer_verdict(
+        self, client: httpx.AsyncClient, events: list[dict[str, Any]]
+    ) -> None:
+        """Buffer one mapped event-array; flush when the buffer reaches the cap.
+
+        The cap counts EVENTS (parent + companions), not arrays. Called while
+        the caller holds the inflight semaphore, so a size-flush POST rides
+        the caller's permit — the inflight cap stays the only concurrency
+        bound. Between flushes the buffer holds at most the cap (overshoot
+        bounded by one array — a family flushes together, never split).
+        """
+        flush: list[list[dict[str, Any]]] = []
+        async with self._batch_lock:
+            self._batch_buffer.append(events)
+            if (
+                sum(len(arr) for arr in self._batch_buffer)
+                >= self.settings.scarletai_batch_max_events
+            ):
+                flush = self._batch_buffer
+                self._batch_buffer = []
+        self._ensure_flusher()
+        if flush:
+            await self._post_event_arrays(client, flush)
+
+    def _ensure_flusher(self) -> None:
+        """Start the time-based flusher lazily (first buffered verdict).
+
+        Only meaningful in a running loop (the buffered path is async).
+        Idempotent: a no-op when the flusher is alive.
+        """
+        if self._flusher_task is None or self._flusher_task.done():
+            self._flusher_task = asyncio.get_running_loop().create_task(self._flush_loop())
+
+    async def _flush_loop(self) -> None:
+        interval = self.settings.scarletai_batch_flush_seconds
+        while True:
+            await asyncio.sleep(interval)
+            await self._flush_from_loop()
+
+    async def _flush_from_loop(self) -> None:
+        """Drain + POST the buffer (flusher ticks / shutdown final flush).
+
+        Never raises. When the inflight semaphore is exhausted the tick is
+        SKIPPED (retry next interval) rather than dropping the batch — the
+        buffer is bounded, so retrying is safe and no data is lost to
+        transient contention. Deliveries keep the drop-on-cap semantics.
+        """
+        if not self._batch_buffer:  # lock-free fast path; a race is a no-op tick
+            return
+        if self._semaphore.locked():
+            return  # busy: retry next tick, never queue behind a slow sink
+        try:
+            async with self._semaphore:
+                async with self._batch_lock:
+                    arrays = self._batch_buffer
+                    self._batch_buffer = []
+                if not arrays:
+                    return  # pragma: no cover — concurrent-drainer race guard
+                # (the lock-free check → lock drain sequence has no await
+                # between them in-process; a second drainer cannot interleave.
+                # Kept as a defensive invariant for future callers.)
+                async with httpx.AsyncClient(
+                    timeout=self.settings.timeout_seconds,
+                    transport=cast("httpx.AsyncBaseTransport | None", self._transport),
+                ) as client:
+                    await self._post_event_arrays(client, arrays)
+        except Exception as exc:
+            logger.warning("siem_batch_flush_failed", error=str(exc))
+            self._on_dropped(f"scarletai_batch: {exc.__class__.__name__}")
+
+    @staticmethod
+    def _chunk_arrays(arrays: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+        """Split buffered families into POSTs of ≤ ScarletAI's 1000-event cap.
+
+        Chunking respects ARRAY boundaries — a parent + companions family is
+        never split across POSTs. Unreachable at configured sizes (cap ≤ 1000,
+        families ≤ 3 events); pure defensive depth against the 413.
+        """
+        chunks: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        count = 0
+        for arr in arrays:
+            if count and count + len(arr) > _SCARLETAI_BATCH_LIMIT:
+                chunks.append(current)
+                current, count = [], 0
+            current.extend(arr)
+            count += len(arr)
+        if current:
+            chunks.append(current)
+        return chunks
+
+    async def _post_event_arrays(
+        self, client: httpx.AsyncClient, arrays: list[list[dict[str, Any]]]
+    ) -> None:
+        """POST buffered families (split ≤1000/POST); failures drop + count."""
+        for chunk in self._chunk_arrays(arrays):
+            await self._post_scarletai_events(client, chunk)
+
+    async def shutdown_flush(self) -> None:
+        """Best-effort final flush + flusher teardown (lifespan shutdown).
+
+        Buffered events are LOST on a hard crash (no persistence) — the
+        best-effort doctrine is documented on the batch knob. Never raises.
+        """
+        task = self._flusher_task
+        self._flusher_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await self._flush_from_loop()
+
+    async def _post_scarletai_events(
+        self, client: httpx.AsyncClient, events: list[dict[str, Any]]
+    ) -> None:
+        """POST one mapped event-array (parent + companions) to ScarletAI.
+
+        Companions ride the SAME POST as the parent by construction. The
+        companion contract is Scarlet's closed vocabulary, so companions are
+        scarletai-only; Splunk/webhook sinks keep the single-event envelope.
+        """
+        scarletai_url = self.settings.scarletai_url
+        assert scarletai_url is not None  # "scarletai" in _sinks guarantees this
+        headers = (
+            {"Authorization": f"Bearer {self.settings.scarletai_token}"}
+            if self.settings.scarletai_token
+            else {}
+        )
+        response = await client.post(scarletai_url, json=events, headers=headers)
+        self._check(response, "scarletai")
 
     # ── Sink implementations ─────────────────────────────────────────────
 

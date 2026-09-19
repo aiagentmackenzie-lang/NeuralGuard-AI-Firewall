@@ -553,7 +553,17 @@ default; spike alerts → critical) and POST to
 ScarletAI's enrichment + correlation chains fire on arrival, and the
 tamper-evident chain hash rides in `raw_data`. Delivery is bounded
 (in-flight cap, drop + warn beyond it) and best-effort by design: routing
-is observability, delivery failures never affect verdicts.
+is observability, delivery failures never affect verdicts. Companion
+events (ScarletAI sink only): every mapped verdict sets `user_name` to
+the tenant (ECS-borrowed actor slot), and the SAME POST additionally
+carries an `ai_prompt_injection` companion for injection-shaped verdicts
+(T-PI-D / T-PI-I / T-JB) and an `mcp_tool_denied` companion for MCP-gate
+denials (tool in `process_name`) — Scarlet's closed vocabulary needs the
+flat ai-category events for its Sigma rules; Splunk/webhook keep the
+single-event envelope. Opt-in batching (`NEURALGUARD_SIEM_SCARLETAI_BATCH_MAX_EVENTS`,
+default 1 = immediate) buffers verdict families and flushes on size/time
+(spike alerts always immediate; buffered events are lost on a hard crash
+— best-effort doctrine).
 
 **JWT bearer auth + key rotation (P2-4).** In addition to static API keys:
 short-lived JWTs (`NEURALGUARD_AUTH_JWT_ENABLED`, HS256 with an alg
