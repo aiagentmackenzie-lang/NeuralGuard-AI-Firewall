@@ -57,7 +57,7 @@ services:
       - NEURALGUARD_SIEM_SCARLETAI_HOST=${NEURALGUARD_SIEM_SCARLETAI_HOST:-neuralguard-fleet}
       # ── MCP gateway → Scarlet's MCP server (Wave-2 upstream auth) ──
       - NEURALGUARD_MCP_ENABLED=true
-      - NEURALGUARD_MCP_UPSTREAM_URL=http://mcp:8002
+      - NEURALGUARD_MCP_UPSTREAM_URL=${NEURALGUARD_MCP_UPSTREAM_URL:-http://mcp:8002/mcp}
       - NEURALGUARD_MCP_UPSTREAM_AUTH_TOKEN=${MCP_BEARER_TOKEN:?set MCP_BEARER_TOKEN in deploy/fleet/.env}
       - NEURALGUARD_MCP_HEADERS_REQUIRED=true
       # ── Judge + proxy at HOST Ollama (the same instance Scarlet uses) ──
