@@ -17,6 +17,7 @@ deploy/fleet/fleet.env.example          # the secrets template → copy to .env
 | `api` (Scarlet) | included from the sibling repo, unchanged | host `:8000`, network `api:8000` |
 | `mcp` (Scarlet) | included, unchanged | host `:8002`, network `mcp:8002` |
 | `dashboard`, `postgres`, `redis` (Scarlet) | included, unchanged | `:8501`, `:5433`, `:6379` |
+| `neuralstrike` | built from the sibling NeuralStrike checkout | **profile `bench` only** — one-shot, no ports |
 
 Wired by the fleet file:
 
@@ -171,6 +172,72 @@ docker compose -f docker-compose.fleet.yml down -v       # include Scarlet's dat
 NG's audit JSONL lives in the `ng_fleet_audit` volume — inspect or verify a
 worker chain with the in-image tool:
 `docker compose -f docker-compose.fleet.yml exec neuralguard uv run neuralguard audit-verify /data/audit`.
+
+## Purple-team exercise (NeuralStrike → NeuralGuard → Scarlet, Wave 3)
+
+The third pipe: NeuralStrike attacks, NeuralGuard defends, SecurityScarletAI
+detects, and the purple-report measures what the SIEM actually caught. The
+attacker joins as a PROFILE-GATED one-shot service — `up -d` still brings only
+the 6 production containers.
+
+```bash
+# 0. Preconditions: the fleet is up (above), Scarlet's API_BEARER_TOKEN and
+#    INGEST_BEARER_TOKEN are in deploy/fleet/.env, and the sibling
+#    NeuralStrike checkout sits at ../../../NeuralStrike.
+
+# 1. ONE exercise (telemetry ON by wiring; receipt into the runs volume):
+FLEET="deploy/fleet"
+docker compose -f $FLEET/docker-compose.fleet.yml run --rm neuralstrike \\
+  neuralguard-bench \\
+  --neuralguard-url "$NEURALSTRIKE_NEURALGUARD_URL" \\
+  --neuralguard-api-key "$NEURALGUARD_AUTH_API_KEYS" \\
+  --scarletai-url "$NEURALSTRIKE_SCARLETAI_URL" \\
+  --scarletai-token "$INGEST_BEARER_TOKEN" \\
+  --telemetry-actor "${NEURALSTRIKE_TELEMETRY_ACTOR:-neuralstrike-operator}" \\
+  --json-out /data/runs/exercise-$(date +%Y%m%d%H%M%S).json
+# (deploy/fleet/.env exports the token values; parse per-key — never `source`.)
+# Simpler: `bash deploy/fleet/neuralstrike_exercise.sh` does steps 1+2 with
+# the .env parsed per-key and health gates fail-closed.
+
+# 2. The purple report (reads the receipt + the SIEM; admin-class read path):
+docker compose -f $FLEET/docker-compose.fleet.yml run --rm neuralstrike \\
+  purple-report /data/runs/<receipt>.json \\
+  --scarlet-base-url "http://api:8000" --scarlet-api-token "$API_BEARER_TOKEN" \\
+  --ng-tenant default --json-out /data/runs/purple-<runid>.json
+```
+
+What the report says (and why each part is honest):
+
+- **X attacks, Y caught by NG (with rule ids)** — from the LOCAL receipt
+  (the screen verdicts + fired rule ids are the ground truth of what the
+  firewall returned per payload). NeuralGuard's SIEM events corroborate at
+  exercise level (NG's audit event carries no prompt, so per-payload
+  attribution stays local by design).
+- **Z Scarlet alerts fired** — alerts keyed on the run-stamped host (the
+  exercise rules) + a windowed walk for the NG-producer-rule alerts (their
+  host is the firewall's; attribution rides the time window).
+- **Per-payload table** — caught / gap / resisted / inconclusive; the
+  **undetected-Succeeded (gap) list is the real defense-gap list**: payloads
+  that passed the firewall AND beat the victim.
+- **Trend** — pass `--previous-receipt` to compare catch rates across
+  exercises.
+
+Trust posture: the purple-report READS with the same operator's admin-class
+`API_BEARER_TOKEN` (read-only `/alerts` + `/logs` usage; the scoped ingest
+token cannot read by design). No new credentials are minted. A failed query
+fails the report LOUDLY (a report must never be silently partial — the
+deliberate opposite of the telemetry pipe's fail-soft). The fleet key's
+bound tenant (default: `default`) is the NG events' user_name actor slot —
+pass it as `--ng-tenant` so the firewall-event join is exact.
+
+Teardown after an exercise (yesterday's fleet precedent): compose down,
+volumes preserved, unload the judge model if it was loaded:
+
+```bash
+docker compose -f $FLEET/docker-compose.fleet.yml down   # volumes preserved
+ollama ps            # if mistral:7b was loaded by the exercise
+ollama stop mistral:7b   # unload it
+```
 
 ## Validation gate
 
