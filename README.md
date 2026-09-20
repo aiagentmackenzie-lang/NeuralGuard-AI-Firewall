@@ -544,6 +544,18 @@ Three integration pipes, all operational:
   `rules/sigma/neuralguard/` rules (`block_rate_spike`,
   `confirmed_ai_attack_block` — both critical) + the
   `ai_verdict_block_sustained` correlation.
+- **The purple loop (2026-09-20)**: NeuralStrike — the offensive third —
+  joined as a PROFILE-GATED ONE-SHOT service (`profiles: [bench]`;
+  `up -d` still brings ONLY the 6 production containers). Its exercises
+  drive this firewall at `http://neuralguard:8000` with the fleet key
+  (the documented `<key>|<tenant>` credential form, split by the bench;
+  the tenant must match the key's binding — NG 403s a mismatch) and
+  report the run to Scarlet's ingest; `neuralstrike purple-report` then
+  joins the run receipt with what the SIEM caught (per-payload
+  caught/gap/resisted table + the UNDETECTED-SUCCEEDED gap list) and the
+  coverage map arms the NeuralStrike producer rules. Harness:
+  `deploy/fleet/neuralstrike_exercise.sh`; runbook: the purple-team
+  section below.
 
 **Live-fire receipt (2026-09-19, run-stamped host `neuralguard-fleet-w5`):**
 95/95 injection probes blocked (0.95 confidence) · 12/12 MCP-gate refusals
