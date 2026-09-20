@@ -115,5 +115,61 @@ services:
         reservations:
           memory: 256m
 
+  # ── NeuralStrike (the offensive third) — PROFILE-GATED, one-shot ──
+  # `up -d` brings ONLY the 6 production containers (Scarlet's 5 + NG) —
+  # this service exists under the `bench` profile and runs ONE exercise at
+  # a time via `docker compose run --rm neuralstrike <cmd>` (the same
+  # pattern NeuralStrike's own compose uses). Built from the SIBLING
+  # checkout (../../.. = the Security Apps parent dir), like the include
+  # above builds from the Scarlet sibling.
+  #
+  # Wiring (shared ONCE in fleet .env, never duplicated):
+  # - screen:  http://neuralguard:8000 (the fleet NG service, in-network)
+  #     + NEURALSTRIKE_NEURALGUARD_API_KEY = NEURALGUARD_AUTH_API_KEYS
+  #       verbatim — the documented '<key>|<tenant>' form is split by the
+  #       bench (resolve_neuralguard_credential); the tenant part matches
+  #       the key binding (NG 403s a mismatch).
+  # - ingest:  NEURALSTRIKE_SCARLETAI_URL = Scarlet's ingest + the shared
+  #     INGEST_BEARER_TOKEN (the SAME token NG sends and Scarlet verifies).
+  # - reads:   the purple-report's /alerts + /logs queries ride the
+  #     ADMIN-class API_BEARER_TOKEN (the scoped ingest token cannot read
+  #     by design). Read-only usage, same operator, no new credentials.
+  # Receipts land in the ns_fleet_runs volume (shared by the one-shot
+  # neuralstrike containers: the bench writes, the purple-report reads).
+  neuralstrike:
+    build:
+      context: ../../../NeuralStrike
+      dockerfile: Dockerfile
+    profiles:
+      - bench
+    volumes:
+      - ns_fleet_runs:/data/runs
+    environment:
+      # The attack surface: the fleet firewall itself (in-network, :8000).
+      - NEURALSTRIKE_NEURALGUARD_URL=http://neuralguard:8000
+      - NEURALSTRIKE_NEURALGUARD_API_KEY=${NEURALGUARD_AUTH_API_KEYS:?set NEURALGUARD_AUTH_API_KEYS in deploy/fleet/.env}
+      - NEURALSTRIKE_NEURALGUARD_TENANT=${NEURALSTRIKE_NEURALGUARD_TENANT:-default}
+      # Exercise telemetry (opt-in for the bench; the fleet exercise is
+      # telemetry-ON by definition — that is the purple loop's point).
+      - NEURALSTRIKE_SCARLETAI_URL=http://api:8000/api/v1/ingest
+      - NEURALSTRIKE_SCARLETAI_TOKEN=${INGEST_BEARER_TOKEN:?set INGEST_BEARER_TOKEN in deploy/fleet/.env}
+      - NEURALSTRIKE_TELEMETRY_ACTOR=${NEURALSTRIKE_TELEMETRY_ACTOR:-neuralstrike-operator}
+      # The purple-report read path (admin-class; /alerts + /logs only).
+      - NEURALSTRIKE_SCARLETAI_BASE_URL=http://api:8000
+      - NEURALSTRIKE_SCARLETAI_API_TOKEN=${API_BEARER_TOKEN:?set API_BEARER_TOKEN in deploy/fleet/.env}
+      # The bench needs no LLM (canonical payloads, deterministic oracles):
+      # skip the startup model-reachability check inside the container.
+      - NEURALSTRIKE_SKIP_REACHABILITY_CHECK=true
+      - NEURALSTRIKE_REDACT_LOGS=true
+    depends_on:
+      neuralguard:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    # One-shot by default: every real run is `docker compose run --rm
+    # neuralstrike <cmd>` — no long-lived attacker process in the fleet.
+    command: ["--help"]
+
 volumes:
   ng_fleet_audit:
+  ns_fleet_runs:

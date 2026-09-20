@@ -32,9 +32,15 @@ def _read(path: Path) -> str:
 class TestFleetComposePosture:
     def test_every_neuralguard_env_key_is_known_to_f5_gate(self) -> None:
         """Any NEURALGUARD_* key set by the fleet file must map to a real
-        settings field — production REFUSES unknown keys (F5)."""
+        settings field — production REFUSES unknown keys (F5).
+
+        Wave 3: NeuralStrike's own env keys (NEURALSTRIKE_NEURALGUARD_*) are
+        consumed by the neuralstrike one-shot container's pydantic settings
+        (prefix NEURALSTRIKE_), NOT by the NG process — they are excluded
+        from the F5 posture check by a negative lookbehind.
+        """
         compose = _read(_FLEET_COMPOSE)
-        keys = set(re.findall(r"NEURALGUARD_[A-Z_]+", compose))
+        keys = set(re.findall(r"(?<!NEURALSTRIKE_)NEURALGUARD_[A-Z_]+", compose))
         assert keys, "fleet compose sets no NeuralGuard env at all"
         unknown = sorted(k for k in keys if k not in known_env_keys())
         assert unknown == [], (
@@ -105,6 +111,50 @@ class TestFleetComposePosture:
         assert "api:" in compose.split("depends_on:")[1], (
             "NG must boot after Scarlet's API is healthy (the SIEM pipe exists at boot)"
         )
+
+    def test_neuralstrike_service_is_profile_gated_one_shot(self) -> None:
+        """The attacker joins under the bench profile, one-shot, no ports —
+        `up -d` must still bring ONLY the 6 production containers."""
+        compose = _read(_FLEET_COMPOSE)
+        service_block = compose.split("neuralstrike:")[1].split("\nvolumes:")[0]
+        assert "profiles:" in service_block
+        assert "- bench" in service_block
+        assert 'command: ["--help"]' in service_block, (
+            "the neuralstrike service is a one-shot template — no long-lived attacker process"
+        )
+        # The one-shot attacker publishes NO host ports (it dials out).
+        assert "ports:" not in service_block
+        # The bench + purple-report share the runs volume (receipt handoff).
+        assert "ns_fleet_runs:/data/runs" in service_block
+
+    def test_neuralstrike_wiring_shares_fleet_secrets_once(self) -> None:
+        """The neuralstrike service reuses the SAME fleet tokens — no secret
+        is ever duplicated into a second variable."""
+        compose = _read(_FLEET_COMPOSE)
+        assert "NEURALSTRIKE_NEURALGUARD_URL=http://neuralguard:8000" in compose
+        assert "NEURALSTRIKE_NEURALGUARD_API_KEY=${NEURALGUARD_AUTH_API_KEYS:" in compose, (
+            "the screen credential is NEURALGUARD_AUTH_API_KEYS verbatim ('<key>|<tenant>' split by the bench)"
+        )
+        assert "NEURALSTRIKE_SCARLETAI_URL=http://api:8000/api/v1/ingest" in compose
+        assert "NEURALSTRIKE_SCARLETAI_TOKEN=${INGEST_BEARER_TOKEN:" in compose
+        assert "NEURALSTRIKE_SCARLETAI_BASE_URL=http://api:8000" in compose
+        assert "NEURALSTRIKE_SCARLETAI_API_TOKEN=${API_BEARER_TOKEN:" in compose
+        # The bench drives no LLM — the container must skip the reachability
+        # check instead of stalling on an Ollama it does not need.
+        assert "NEURALSTRIKE_SKIP_REACHABILITY_CHECK=true" in compose
+
+    def test_neuralstrike_builds_from_sibling_checkout(self) -> None:
+        compose = _read(_FLEET_COMPOSE)
+        assert "context: ../../../NeuralStrike" in compose, (
+            "the neuralstrike service builds from the sibling NS checkout (same layout as the Scarlet include)"
+        )
+
+    def test_neuralstrike_service_depends_on_healthy_ng_and_api(self) -> None:
+        compose = _read(_FLEET_COMPOSE)
+        ns_block = compose.split("neuralstrike:")[1].split("\nvolumes:")[0]
+        assert "neuralguard:" in ns_block.split("depends_on:")[1]
+        assert "api:" in ns_block.split("depends_on:")[1]
+        assert "service_healthy" in ns_block
 
     def test_env_template_lists_every_required_secret(self) -> None:
         example = _read(_FLEET_ENV_EXAMPLE)
