@@ -1,12 +1,12 @@
-"""NeuralGuard load/perf gate (P1-5).
+"""NeuralGuard load/perf gate.
 
 A dependency-free async harness (httpx is already a core dep — no locust/k6
 pull needed) that drives /v1/evaluate at a fixed concurrency for a duration,
 then asserts:
 
 - p95 latency under a target (default 100 ms) — the deterministic
-  structural+pattern path. The bare-metal targets in PRODUCTION_HARDENING_PLAN
-  are tighter (<10 ms pattern); the CI gate is looser to absorb shared-runner
+  structural+pattern path. Bare-metal pattern-only runs are faster
+  (<10 ms observed locally); the CI gate is looser to absorb shared-runner
   variance. Tune --p95-ms for your hardware.
 - error rate under a threshold (default 1%) — excludes the expected 200
   BLOCK-family responses (a BLOCK is a correct 200, not an error).

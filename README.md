@@ -1,33 +1,81 @@
 # NeuralGuard — LLM Guard / AI Application Firewall
 
-> **Defensive counterpart to NeuralStrike.** A hardened FastAPI middleware (alpha) that detects, blocks, and logs prompt injection, jailbreaks, data exfiltration, and rate-limit abuse, sitting in front of LLM APIs and agentic pipelines.
->
-> **Status:** alpha, **production-ready (P0 + P1 closed, P2 enterprise track landed, v0.2.1 tagged).** The deterministic + semantic + judge pipeline, production hardening (auth, TLS posture, body-size limits, bounded bombs, metrics), the P0+P1 deployability sweep (real boot smoke test, TLS/secret-rotation/backup runbooks, Redis-backed multi-worker rate limiting, readiness probe, hash-chained tamper-evident audit, load/perf gate), the NeuralGuard↔NeuralStrike benchmark harness (Sprint A), Phase 3 Agent Guardian B1–B4 (multi-turn detection + static template analysis + dedicated ASI06 rules + canary token verification + multi-turn benchmark + scanner gap closure), Sprint C C1 per-tenant config + C2 production-readiness sweep, **the standalone appliance proxy (F9: `POST /v1/proxy/chat/completions`, hardened compose profile + runbook, boot-drill verified)**, **SIEM routing + BLOCK-spike alerting incl. SecurityScarletAI (P2-7)**, **JWT bearer auth + runtime key rotation (P2-4)**, **Ed25519 audit-event signing + JSONL *and* Postgres chain verification (P2-10, live-fire proven)**, **pure-ASGI middleware stack (P2-8)**, and **dedicated ASI04 Supply Chain + ASI10 Rogue Agents rules (P2-3)** are shipped. **1284 tests collected on `main`** (1276 pass locally with Ollama up; the live judge-integration tests run against the `mistral:7b` default — override with `NEURALGUARD_TEST_JUDGE_MODEL` — and skip cleanly when the model is absent; 5 Postgres live-fire tests + 3 others skip without their services), ruff + `ruff format` + mypy strict clean (69 files), **90% coverage floor — CI regenerates the ONNX model + rebuilds the semantic corpus from tracked sources so the gate runs the FULL suite (91.04% measured locally without a live Postgres; ≥91% in CI with the pg service container)**. Also shipped: **cosign SBOM signing + attestation (P2-5, keyless in CI / key-based locally)**, **Kubernetes manifests + HPA (P2-6, schema-validated offline — cluster drill pending)**, and the **2026-09-07 research-frontier controls (NG-1/2/3/4/5 — see the threat-model section, the NG-5 mutation gate, and the decision register in docs/ROADMAP.md)**, plus **NG-6 (2026-09-07): the published guarded-FPR SLO — 50 NotInject-style hard negatives guard the corpus rebuild, the guarded FPR is measured at boot + per-PR in CI (0.00% across 95 probes) and surfaced on /v1/info, with a per-tenant semantic threshold dial (see [docs/FPR_SLO.md](docs/FPR_SLO.md))**, and **NG-7 + NG-8 (2026-09-07): the MCP gateway — `POST /v1/mcp` decides per-tool intent on `Mcp-Method`/`Mcp-Name` headers BEFORE body parse (per-tenant allow/deny/escalate policies, smuggling defense) and refuses rug pulls with Ed25519-signed tool-catalog baselines (strict mode withholds drifted catalogs and refuses all executions until an explicit re-baseline; drift evidence lands in the P2-10 hash-chained audit trail — see [docs/runbooks/mcp_gateway.md](docs/runbooks/mcp_gateway.md))**, **plus NG-9 (2026-09-07): provenance-lite egress binding — tool-result content taints the session window and tenant-classified egress tools have their arguments checked for tainted content before forwarding (off/warn/block, off by default; normalized shingle matching; CaMeL-class paraphrase evasion is a documented boundary)**. **Fleet campaign (2026-09-19): the SecurityScarletAI producer contract shipped — companion events (actor slot + ai_prompt_injection / mcp_tool_denied in the same POST), opt-in batched delivery, MCP-gateway upstream bearer auth, the co-resident fleet compose, and the live-fire receipt (4 detections + correlation + coverage armed) — see the fleet-deployment section in Production Deployment.** Remaining open items: i18n native-speaker review (P2-11 — pending HUMAN review, machine self-audit done; see `docs/i18n_native_review_request.md`) and the K8s cluster drill — see [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md).
+**A FastAPI firewall for LLM APIs and agentic pipelines.** NeuralGuard sits
+between your users/agents and your models and analyzes every prompt and
+response for prompt injection, jailbreaks, data exfiltration, and agentic
+abuse — with a layered detection pipeline, multi-tenant enforcement,
+tamper-evident audit logging, and benchmarks that measure what it actually
+catches.
 
-[![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![OWASP](https://img.shields.io/badge/OWASP-LLM%20Top%2010%202025-red)](https://genai.owasp.org/)
-[![OWASP Agentic](https://img.shields.io/badge/OWASP-Agentic%20Top%2010%202026-purple)](https://genai.owasp.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/ci.yml?branch=main&label=CI)](https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1E4C74)](https://mypy-lang.org)
+[![Coverage gate](https://img.shields.io/badge/coverage%20gate-90%25%20enforced-blueviolet)](https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/blob/main/.github/workflows/ci.yml)
+
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![ONNX Runtime](https://img.shields.io/badge/semantic%20layer-ONNX%20Runtime-6E6E96)](https://onnxruntime.ai)
+[![Redis](https://img.shields.io/badge/multi--worker%20limits-Redis-DC382D?logo=redis&logoColor=white)](https://redis.io)
+[![PostgreSQL](https://img.shields.io/badge/audit%20store-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Ollama](https://img.shields.io/badge/LLM%20judge-Ollama-1A1A1A?logo=ollama&logoColor=white)](https://ollama.com)
+[![Prometheus](https://img.shields.io/badge/metrics-Prometheus-E6522C?logo=prometheus&logoColor=white)](https://prometheus.io)
+[![Docker](https://img.shields.io/badge/deploy-Docker%20%2B%20K8s-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![cosign](https://img.shields.io/badge/artifacts-cosign%20keyless-3F51B5)](https://github.com/sigstore/cosign)
+[![MCP](https://img.shields.io/badge/gateway-MCP-7C4DFF)](docs/runbooks/mcp_gateway.md)
+[![OWASP LLM](https://img.shields.io/badge/mapping-OWASP%20LLM%20Top%2010-B71C1C)](https://genai.owasp.org)
+[![OWASP Agentic](https://img.shields.io/badge/mapping-OWASP%20Agentic%20Top%2010-6A1B9A)](https://genai.owasp.org)
+
+| Documentation | |
+|---|---|
+| **[Public roadmap](docs/ROADMAP.md)** | What ships next (plan-of-record) |
+| **[Runbooks](#operations-and-runbooks)** | Appliance, fleet, TLS, secret rotation, backup, signing, MCP gateway |
+| **[Benchmarks](benchmarks/ng_vs_ns/README.md)** | Harness docs + dated results |
+| **[FPR SLO](docs/FPR_SLO.md)** | The published false-positive SLO, measured at boot and per-PR |
+| **[Security policy](SECURITY.md)** | Responsible disclosure |
+
+> [!NOTE]
+> NeuralGuard is **alpha** software under active development. It is the
+> defensive counterpart to
+> [**NeuralStrike**](https://github.com/aiagentmackenzie-lang/NeuralStrike)
+> (offensive). The two ship a working attack/defend pairing — see
+> [Benchmarks](#benchmarks-measured-not-vibes).
 
 ---
 
-## What It Is
+## What it does
 
-NeuralGuard is the defensive layer of your AI security posture. It sits between your users/agents and your LLM infrastructure, analyzing every prompt and response for malicious intent.
+Every request passes through a layered pipeline before your LLM sees it —
+and every response passes through output validation before it reaches your
+user:
 
-**OWASP LLM Top 10 2025 Coverage:** LLM01 (Prompt Injection), LLM02 (Sensitive Disclosure), LLM05 (Improper Output), LLM07 (System Prompt Leakage), LLM10 (Unbounded Consumption), and more.
+| Layer | What it catches | Config |
+|---|---|---|
+| **Structural** | Malformed payloads, decompression bombs (8 MiB hard cap) | Always on |
+| **Pattern** | 123 regex/heuristic rules: instruction override, jailbreaks, system-prompt extraction, exfiltration, PII — EN + 50 i18n patterns | Always on |
+| **Semantic** | ONNX embedding similarity (7,623-vector corpus) catches paraphrased/mutated attacks regex misses; windowed pass for Prompt-Overflow-style fragmentation | Optional (`[semantic]` extra) |
+| **Judge** | LLM adjudication (local Ollama) of the ambiguous zone only | Optional |
+| **Agent Guardian** | **Multi-turn** attacks: delayed/garden-path injection, role drift, gradual extraction, gradual memory poisoning | Optional, session-based |
+| **Output validation** | PII redaction, exfil detection, system-prompt leakage, canary-leak detection | On `/v1/scan/output` and the proxy |
 
-**OWASP Agentic Top 10 2026 Coverage:** ASI01 (Goal Hijack), ASI02 (Tool Misuse), ASI06 (Memory Poisoning), ASI04 (Supply Chain, SC-001..005), and ASI10 (Rogue Agents, RA-001..005) — all five via dedicated detection rules (P2-3).
+Verdicts: **ALLOW** / **BLOCK** / **SANITIZE** / **ESCALATE** — each with
+confidence, per-layer findings, rule IDs, and a correlation ID.
 
-**Corpus augmentation (F12, 2026-09-05):** the semantic attack corpus was rebuilt with build-time hygiene (connector-compound splits, system-marker splits, conversational-noise drop, benign guard) and paraphrase-augmented 5.4× (1,398 → 7,623 vectors; 95.3% of original vectors augmented via the curator-framing generator; the 67-vector refusal tail — the most extreme samples — is a documented residual whose base forms remain in the corpus). A1 gates pass with the enlarged corpus: ASR 0.00% / FPR 0.00%. **NG-6 (2026-09-07):** the rebuild now also guards against NotInject-style benign look-alikes (`corpus/benign_hard_negatives.jsonl`) and the guarded FPR is a published, per-tenant-configurable SLO — [docs/FPR_SLO.md](docs/FPR_SLO.md). **NG-7/NG-8 (2026-09-07):** an MCP gateway (`POST /v1/mcp`) fronts one MCP server with a pre-body-parse per-tool Intent Gate (per-tenant policies on the `Mcp-Method`/`Mcp-Name` headers) and rug-pull-refusing signed tool-catalog baselines — [docs/runbooks/mcp_gateway.md](docs/runbooks/mcp_gateway.md).
+**OWASP coverage** — dedicated detection rules for LLM01 (Prompt Injection),
+LLM02 (Sensitive Disclosure), LLM05 (Improper Output), LLM07 (System Prompt
+Leakage), LLM10 (Unbounded Consumption), ASI01 (Goal Hijack), ASI02 (Tool
+Misuse), ASI04 (Supply Chain), ASI06 (Memory Poisoning), ASI10 (Rogue
+Agents). `GET /v1/info` publishes the honest split between
+`dedicated_rules` and `corpus_assisted_only` (currently empty — kept as the
+honesty surface for future gaps). Do not rely on corpus-assisted coverage
+as a control.
 
-### Why Build This?
-- You have **NeuralStrike** (offensive AI) — NeuralGuard completes the story
-- Commercial tools (Lakera, HiddenLayer) are **expensive black boxes**
+### Why this exists
+
+- Commercial AI firewalls (Lakera, HiddenLayer) are **expensive black boxes**
 - Open-source alternatives (Protect AI's LLM Guard) are **heavy and not agent-aware**
-- The EU AI Act now requires "appropriate security measures" for high-risk AI systems
-- Every deployment without guardrails is a liability waiting to happen
+- The **EU AI Act** requires "appropriate security measures" for high-risk AI systems
+- Every LLM deployment without guardrails is a liability waiting to happen
 
 ---
 
@@ -48,21 +96,24 @@ User / Agent
 │  ┌──────────────────────────────────────────┐  │
 │  │  INPUT GUARDRAILS                        │  │
 │  │  1. Structural Validator                 │  │
-│  │  2. Pattern Scanner (regex/heuristic)   │  │
+│  │  2. Pattern Scanner (regex/heuristic)    │  │
 │  │  3. Semantic Scanner (ONNX embeddings)   │  │
-│  │  → Hybrid Score (pattern + semantic)    │  │
-│  │  4. LLM-as-Judge (gated, local Ollama)  │  │
+│  │     → Hybrid Score (pattern + semantic)  │  │
+│  │  4. LLM-as-Judge (gated, local Ollama)   │  │
+│  │  5. Agent Guardian (multi-turn window)   │  │
 │  └──────────────────────────────────────────┘  │
 │                   │                            │
-│              [ALLOW | BLOCK | SANITIZE]        │
+│         [ ALLOW | BLOCK | SANITIZE | ESCALATE ] │
 │                   │                            │
 │  ┌──────────────────────────────────────────┐  │
-│  │  OUTPUT VALIDATION                         │  │
-│  │  PII redaction | Exfil | Sys-prompt extraction │  │
+│  │  OUTPUT VALIDATION                       │  │
+│  │  PII redaction | Exfil | Sys-prompt leak │  │
+│  │  Canary-leak detection                   │  │
 │  └──────────────────────────────────────────┘  │
 │                   │                            │
 │  ┌──────────────────────────────────────────┐  │
-│  │  AUDIT (JSONL/Postgres) + /v1/metrics      │  │
+│  │  AUDIT (JSONL / Postgres, hash-chained)  │  │
+│  │  Prometheus /v1/metrics · SIEM routing   │  │
 │  └──────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────┘
     │
@@ -70,392 +121,63 @@ User / Agent
 LLM Provider / Local Model / Agent Framework
 ```
 
+Also in the box: an **appliance proxy** (`/v1/proxy/chat/completions`)
+that fronts any OpenAI-compatible upstream, an **MCP gateway**
+(`/v1/mcp`) with per-tool intent decisions and signed tool-catalog
+baselines, **canary token** mint/verify for system-prompt exfiltration
+detection, a **prompt-template analyzer** for shift-left CI checks, and
+**per-tenant configuration** overlays.
+
 ---
 
 ## Threat model: what input filtering can and cannot do
 
-**Input-side detection has a provable ceiling — and we say so.** Ball et al. (2025) proved that no
-input filter running significantly faster than the model it protects can universally distinguish
-adversarial prompts from benign ones ([arXiv:2507.07341](https://arxiv.org/abs/2507.07341)).
-Fairoze, Garg, Lee & Wang turned that theory into a production attack (**controlled-release
-prompting**, [USENIX Security 2026](https://www.usenix.org/system/files/usenixsecurity26-fairoze.pdf)):
-jailbreaks encoded as substitution ciphers scored **92–100% attack success against Google Gemini,
-DeepSeek Chat, xAI Grok and Mistral Le Chat in production**, while the same paper measured 14
-open-weight prompt guards with benchmark ROC-AUCs of 0.84–0.998 detecting those same attacks at
+**Input-side detection has a provable ceiling — and we say so.** Ball et al.
+(2025) proved that no input filter running significantly faster than the
+model it protects can universally distinguish adversarial prompts from
+benign ones ([arXiv:2507.07341](https://arxiv.org/abs/2507.07341)).
+Fairoze, Garg, Lee & Wang turned that theory into a production attack
+(**controlled-release prompting**, [USENIX Security 2026](https://www.usenix.org/system/files/usenixsecurity26-fairoze.pdf)):
+jailbreaks encoded as substitution ciphers scored **92–100% attack success**
+against production models, while 14 open-weight prompt guards with
+benchmark ROC-AUCs of 0.84–0.998 detected those same attacks at
 **0.00–0.23** — benchmark aggregates do not predict deployment security.
 
-NeuralGuard's honest position, and what we ship for it:
+NeuralGuard's honest position, and what it ships for it:
 
-- **Input layers are an efficiency + defense-in-depth control, not a security boundary.** The
-  layered pipeline (structural → pattern → semantic → judge → output validation) is the posture
-  the research recommends; input filtering is one layer of it, and the README will not claim
-  otherwise.
-- **Output-side scanning is the theoretically strongest remaining layer.** The decode step of a
-  controlled-release attack emits the malicious payload as intermediate model output, which
-  output validation can catch. Thinking-enabled models add a corollary risk: reasoning tokens
-  can carry the full payload even when the final answer is clean —
-  `NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN` (NG-1, opt-in, fail-closed on unscannable payloads)
-  scans the upstream's reasoning payload with the same output semantics and canary detection.
-- **Detect the decode-then-activate shape, don't ban encodings.** Blocking cipher/decode work
-  would be an FPR machine (CTFs, students, i18n are legitimate). Agent Guardian (NG-3) fires
-  only when a decode/extraction step combines with a directive to follow the decoded content,
-  session-scoped and deterministic (`AG-DECODE-001`).
+- **Input layers are efficiency + defense-in-depth, not a security boundary.**
+  The layered pipeline is the posture the research recommends; input
+  filtering is one layer of it, and this README will not claim otherwise.
+- **Output-side scanning is the theoretically strongest remaining layer.**
+  A controlled-release attack must emit the malicious payload as
+  intermediate model output, which output validation can catch. Reasoning
+  tokens can carry a payload even when the final answer is clean — the
+  optional reasoning-token output scan (`NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN`)
+  covers that, fail-closed on unscannable payloads.
+- **Detect the decode-then-activate shape, don't ban encodings.** Blocking
+  cipher/decode work would be a false-positive machine (CTFs, students, i18n
+  are legitimate). Agent Guardian fires only when a decode/extraction step
+  combines with a directive to follow the decoded content — session-scoped
+  and deterministic.
 - **Overflow-resistant aggregation.** Prompt Overflow
-  ([arXiv:2605.23196](https://arxiv.org/html/2605.23196)) fragments one instruction across an
-  overlong prompt and beat every guard tested (~100% bypass of Llama Prompt Guard 2 with
-  interleaving; sliding-window + max-pooling both fail). For long inputs the semantic layer
-  additionally runs a windowed pass with the paper's contiguity-gated excess-risk aggregation
-  (NG-4): fragments that individually stay sub-threshold but accumulate across contiguous
-  windows are flagged (`SEM-OVERFLOW-001`), while a concentrated window match at the BLOCK
-  floor blocks outright (`SEM-W-***`).
-- **Publish per-attack-class results, never aggregates alone** — the A1/A2 tables below report
-  per-config results; the USENIX finding that benchmark scores mislead is a result we can own.
+  ([arXiv:2605.23196](https://arxiv.org/html/2605.23196)) fragments one
+  instruction across an overlong prompt and beat every guard tested. For
+  long inputs the semantic layer runs a windowed pass with
+  contiguity-gated excess-risk aggregation: fragments that individually stay
+  sub-threshold but accumulate across contiguous windows are flagged.
+- **Publish per-attack-class results, never aggregates alone** — see the
+  benchmark tables below.
 
-What NeuralGuard explicitly is NOT: not a substitute for model-level alignment (the
-resource-asymmetry result bounds any faster-than-the-model input filter, including ours), and
-not a control-flow-integrity system — see CaMeL ([arXiv:2503.18813](https://arxiv.org/abs/2503.18813))
-for the by-design end of the spectrum. The full research synthesis and the v0.3+ decision
-register (mutation-robustness gate, per-tenant FPR SLOs, signed MCP tool-inventory baselining)
-live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+What NeuralGuard explicitly is **not**: not a substitute for model-level
+alignment (the resource-asymmetry result bounds any faster-than-the-model
+input filter, including ours), and not a control-flow-integrity system — see
+[CaMeL](https://arxiv.org/abs/2503.18813) for the by-design end of the
+spectrum. The full research synthesis and forward decisions live in the
+[public roadmap](docs/ROADMAP.md).
 
 ---
 
-## Project Status
-
-| Phase | Name | Status |
-|---|---|---|
-| Phase 0 | Production Hardening | ✅ Complete (auth, TLS posture, body-size limits, bounded bombs, metrics, JSON logs, type safety) |
-| Phase 0+ | Deployability sweep (P0+P1) | ✅ Complete — boot smoke test, TLS/secret-rotation/backup runbooks, Redis multi-worker rate limiting, readiness probe, hash-chained audit, load/perf gate |
-| Phase 1 | Deterministic Shield | ✅ Complete |
-| Phase 2 | Semantic Amplifier | ✅ Complete (corpus hygiene + 5.4× augmentation, corroboration gate, judge modernization) |
-| Phase 3 | Agent Guardian | ✅ B1+B2+B3+B4 + gap closure shipped |
-| Enterprise track (P2) | JWT/rotation · SIEM · K8s · cosign · Ed25519 signing · pure-ASGI stack · 90% gate · ASI04/ASI10 rules | ✅ Landed (v0.2.0/v0.2.1) — residuals documented below |
-
-**Current (`main` @ v0.2.1, 2026-09-07):** all P0/P1 items, Sprints A/B/C, and the P2 enterprise track are merged. The v0.2.1 release closed the read-through sweep's findings: the SIEM enabled-without-sink gate now knows the SecurityScarletAI sink (F23), the Postgres audit INSERT bug (every row silently lost — caught live-fire) is fixed with a JSONL-fallback contract, `event_sig` is persisted in Postgres rows, `neuralguard audit-verify --pg-url` verifies DB chains by link-walk, the pg live-fire tests run in CI against a real Postgres service on every push, every CI job carries `timeout-minutes`, the appliance/K8s secret posture is hardened (required `POSTGRES_PASSWORD`/`REDIS_PASSWORD`, redis requirepass), and the judge judges the same scope the other layers scan. **Research-frontier controls (2026-09-07 sweep, decision register in ROADMAP):** NG-4 overflow-resistant windowed aggregation in the semantic layer (Prompt Overflow defense), NG-3 decode-then-activate Agent Guardian signal (AG-DECODE-001, session-scoped), NG-1 opt-in reasoning-token output scan on the proxy (`NEURALGUARD_PROXY_OUTPUT_REASONING_SCAN`, fail-closed on unscannable payloads), NG-2 threat-model honesty section, and the NG-5 16-operator mutation gate (both directions, calibrated baseline + the Latin combining-mark fold it exposed). Gate as run 2026-09-07: ruff + format + mypy strict clean (62 files), **1114 passed / 8 skipped (0 failures), coverage 90.67% (90 floor)**, A1 regression gate PASS (ASR 0.00% / FPR 0.00%), NG-5 mutation gate PASS (Unsafe-ASR 56.94% ≤ baseline+1%, Safe-ASR 12.50% < 13%, 0 hard BLOCKs), boot smoke PASSED. CI: lint, matrix tests (3.11/3.12), full-suite coverage gate with pg service, blocking pip-audit + security scan, SBOM + keyless cosign sign/attest, boot-smoke, semantic-smoke, nightly perf + bench gates.
-**Next (open register):** i18n native-speaker sign-off (P2-11 — the only human-blocked item; machine self-audit complete, see `docs/i18n_native_review_request.md`), the K8s cluster drill (manifests are schema-valid but never applied to a real cluster), SSE hold-back streaming (streaming is refused 422 fail-closed by design), RS256/OIDC discovery + refresh tokens + Vault/SOPS for JWT (documented residuals), and cross-worker audit ordering (signing authenticates each per-worker chain; global ordering needs a WORM sink / DB sequence). Research-frontier items (register in [`docs/ROADMAP.md`](docs/ROADMAP.md)): NG-6 published per-tenant FPR SLOs, NG-7/NG-8 MCP gateway with signed tool-inventory baselining + header-based Intent Gate, NG-9 provenance-lite egress binding, and the NG-5 follow-up detector work (context-aware cross-script homoglyph folding — measured 96.3% gap, deliberately not blanket-folded). The ContextPoison `exhaust_context` DoS gap stays documented-and-mitigated-by-limits (cost-based rate limiting is the control; a "repetitive filler" regex was evaluated and rejected as an FPR machine).
-
----
-
-## Benchmarks: NeuralGuard vs NeuralStrike
-
-A benchmark measuring NeuralGuard's detection efficacy against its offensive
-sibling [NeuralStrike](https://github.com/aiagentmackenzie-lang/NeuralStrike).
-Sprint A shipped two phases (see [`docs/ROADMAP.md`](docs/ROADMAP.md)):
-
-> **Same-author caveat:** NeuralStrike (attacker) and NeuralGuard (defender)
-> are by the same author. This measures **defense-in-depth and regression**,
-> not neutral third-party independence. The live attacker uses a **local
-> 7B Ollama model** (no cloud API), so the ASR numbers are a *lower bound* on
-> what a frontier attacker would achieve — the value is the curve across
-> defender configs and the per-layer findings.
-
-> **Offensive-side counterpart (NeuralStrike Phase 7):** NeuralStrike now
-> ships the reciprocal `neuralstrike neuralguard-bench` command — the
-> **offensive** half's view of the same pairing. It runs a canonical
-> recon → weaponize → exploit → post-ex attack chain against a victim
-> with and without a NeuralGuard firewall in front and reports the ASR
-> delta. `neuralstrike neuralguard-bench --in-process` drives this
-> NeuralGuard repo's ASGI app in-process (`uv pip install -e
-> ../NeuralGuard-AI-Firewall` then run from the NeuralStrike repo). This is
-> the **defensive** half's view; both repos point at the same worked
-> example. See the NeuralStrike README §"NeuralGuard pairing (Phase 7)".
-
-### A1 — deterministic regression gate
-
-A labeled corpus (27 attacks / 45 benign) run against `/v1/evaluate` in the
-pattern-only baseline. This is the per-PR **CI gate**
-(`tests/benchmarks/test_a1_regression_gate.py`) and the hard ASR regression
-signal.
-
-| Metric | Result |
-|:--|--:|
-| Attack Success Rate (ASR) | **0.00%** (0 of 27 attacks allowed) |
-| False Positive Rate (FPR) | **0.00%** (0 of 45 benign over-blocked) |
-| Exact verdict match | 100.00% |
-
-### NG-5 — 16-operator mutation gate (both directions)
-
-Companion to A1: every character-level mutation operator (Cyrillic/Greek
-homoglyphs, fullwidth, leetspeak, diacritics, zero-width, token splitting,
-alternating case, dot interleave, word reversal, char duplication, NBSP
-swap, emoji interleave, soft hyphen, vowel stretch, homoglyph+accent combo)
-applied INDEPENDENTLY to the A1 corpora through the same pattern-only
-baseline — 432 mutated attack evals + 720 mutated benign evals, fully
-deterministic (no model, no network). Measures **both directions** of the
-mutation-robustness problem (HF robustness study, 2026-05): mutated attacks
-allowed through (Unsafe-ASR) AND mutated benign wrongly caught (Safe-ASR,
-mutation-induced over-blocking). CI-able hard gate
-(`tests/benchmarks/test_ng5_mutation_gate.py`) + nightly bench job.
-
-**Day-one measurement (2026-09-07, deterministic layers):**
-
-| Direction | Measured | Gate |
-|:--|--:|:--|
-| Unsafe-ASR (mutated attacks through) | 56.94% | regress → fail (≤ baseline+1%) |
-| Safe-ASR (mutated benign caught) | 12.50% | ceiling 13% — and 100% of it is the DESIGNED STRUCT-004 invisible-char strip-and-sanitize posture, zero hard BLOCKs (gate-pinned) |
-
-The measured Unsafe-ASR is the honest coverage map, not a target:
-normalizer-covered operators are at 0.00% (fullwidth, NBSP, **diacritics —
-0.96→0.00 via a combining-mark fold the gate itself exposed and shipped**:
-NFKD kept stray marks between ASCII letters, breaking every literal keyword
-regex; the fold is ASCII-follower-only so Devanagari/Arabic marks are never
-touched). The de-mutation-class gaps (word reversal / dot interleave 100%,
-homoglyphs / leetspeak / duplication / vowel-stretch ~96%) are documented —
-blanket cross-script folding would corrupt legitimate mixed-script text, so
-that work is context-aware and feeds the i18n/normalizer item; the semantic
-layer (A2) is the designed second line. Full table:
-`uv run python -m benchmarks.ng_vs_ns.mutation_harness`.
-
-### A2 — live NeuralStrike attacker across 3 defender configs
-
-Live `JailbreakForge` (iterative mutation) + `ContextPoison` prompts
-replayed through three NeuralGuard pipeline configurations (18 attacks /
-45 benign). **Re-measured 2026-09-04** (judge modernization: configurable
-timeout, 27B judge, egress gate, meta-attack fence) **and 2026-09-05**
-against the 5.4× augmented corpus — full dated tables + the
-`judge_resolves_escalate` decision experiment in
-[A2_RESULTS.md](benchmarks/ng_vs_ns/results/A2_RESULTS.md):
-
-| Attacker | pattern_only | pattern + semantic | pattern + semantic + judge |
-|:--|--:|--:|--:|
-| mistral:7b (lower bound) | 27.78% | 22.22% | 22.22% |
-| qwen3.8:27b (stronger attacker) | **61.11%** | **38.89%**¹ | 38.89% (judge completes; 44.44% with `judge_resolves_escalate`) |
-
-The 27B-attacker column shows the **2026-09-05 re-measurement against the 5.4× augmented corpus** (F12: 1,398 → 7,623 vectors): the paraphrase-augmented corpus recovered MORE mutated attacks (ASR 50.00% → 38.89%, −11.11 pt vs the pre-augmentation run) AND produced FEWER false positives (FPR 6.67% → 4.44%) — the hygiene removed FPR-generating vectors, the paraphrases are attack-shaped. Full dated history (2026-06-28 baseline, the 2026-09-04 judge-modernization runs incl. the `judge_resolves_escalate` decision experiment, and the 2026-09-05 corpus run) in [A2_RESULTS.md](benchmarks/ng_vs_ns/results/A2_RESULTS.md).
-
-FPR on the semantic/judge configs is **4.44% (2/45 benign ESCALATEs) with the current 5.4× corpus** (6.67% on the older corpus). With the 27B judge + `judge_resolves_escalate=true` the benign escalates resolve to ALLOW (measured FPR → 0%) and the 27B judge correctly BLOCKs the ContextPoison extraction attack the 7B judge
-false-negatived. Flag default stays **false** (safe for weak judges).
-
-**Monotonic ASR drop across configs: TRUE** in every run; each layer does not
-raise ASR. Same-author caveat: this measures defense-in-depth, not neutral
-third-party independence.
-
-Findings (full detail in [`benchmarks/ng_vs_ns/results/A2_RESULTS.md`](benchmarks/ng_vs_ns/results/A2_RESULTS.md)):
-- **Semantic-FPR corroboration gate (2026-06-28 fix):** the semantic layer
-  flags benign creative/translation prompts at 0.60–0.74 similarity. These
-  now `escalate` (review/judge) instead of `sanitize` (content modification)
-  — a lone ambiguous semantic signal no longer modifies benign content.
-  SANITIZE in the ambiguous zone now requires pattern corroboration or
-  semantic similarity at/above the 0.75 BLOCK floor. The semantic ASR gain is
-  preserved. The FPR-as-non-allow metric is 4.44% (2/45) with the current 5.4×
-  corpus — 6.67% pre-augmentation — a defensible ESCALATE
-  review signal, not a false content mutation.
-- **Opt-in `NEURALGUARD_SCANNER_JUDGE_RESOLVES_ESCALATE`** (default false;
-  F20: this knob moved from the dead-on-arrival ActionSettings placement):
-  a clean judge ALLOW downgrades ESCALATE → ALLOW, dropping FPR to 0.00% on
-  this benign corpus. Opt-in because the 7B judge false-negatives
-  `ContextPoison extract_system_prompt` (raising ASR back to the pattern-only
-  level). Re-measured 2026-09-04 with the 27B judge — see A2_RESULTS.
-- The judge adds no ASR benefit on this set with the safe default (curve flat
-  0.44 → 0.44); first-call latency dominates p95.
-- `ContextPoison` context-exhaustion (lorem-ipsum DoS) is undetected by all
-  layers — a future `T-DOS` rule gap.
-
-### Reproduce
-
-```bash
-# A1 (deterministic, no extra deps):
-uv run python -m benchmarks.ng_vs_ns.harness
-
-# A2 (live; needs Ollama + NeuralStrike + the [semantic] extra):
-uv pip install -e ../NeuralStrike
-uv sync --extra dev --extra db --extra semantic
-ollama pull mistral:7b
-uv run python -m benchmarks.ng_vs_ns.live_harness --attacker mistral:7b --judge mistral:7b
-```
-
-A nightly workflow ([`.github/workflows/bench.yml`](.github/workflows/bench.yml))
-re-runs the A1 gate (hard-fails on ASR regression) and the A2 `pattern_only`
-config (informational; the semantic/judge configs need the gitignored ONNX
-model and run locally). Full harness docs: [`benchmarks/ng_vs_ns/README.md`](benchmarks/ng_vs_ns/README.md).
-
-## Agent Guardian — multi-turn detection (Phase 3, B1)
-
-The `AgentGuardianScanner` (Layer 5) is the differentiator commercial AI
-firewalls mostly **don't** have: multi-turn detection no single-turn scanner
-sees, keyed on a bounded per-session sliding window of turns. Opt in via
-`NEURALGUARD_AGENT_GUARDIAN_ENABLED=true` and send a `session_id` on
-`/v1/evaluate` to correlate turns across requests (or send a multi-turn
-`messages` array in one request).
-
-Detects (deterministic + heuristic, no LLM call):
-- **Delayed / garden-path injection** (T-PI-D, BLOCK) — a current turn that
-  carries an injection directive AND a back-reference to prior conversation
-  (cross-turn payload assembly).
-- **Role drift / persona erosion** (T-JB, BLOCK) — accumulated
-  persona-redefinition signals across the window.
-- **Gradual system-prompt extraction** (T-EXT, ESCALATE) — N extraction
-  probes across the window.
-- **Gradual memory poisoning** (T-MEM/ASI06, ESCALATE) — N persistent-memory-
-  injection directives across the window.
-
-In-memory backend (B1) and a Redis backend (F4, shared across workers — one
-key per session, atomic Lua record, per-session inactivity TTL) are both
-implemented. Bounded (`session_window_turns` + LRU `max_sessions`), thread-safe,
-fail-closed on state-store errors, sessions isolated + namespaced by tenant,
-and the stores keep ONLY per-turn signal flags — never raw turn text.
-Production multi-worker requires the redis backend (memory backend warns on
-`workers>1`; a `redis` backend without a URL refuses to boot).
-
-## Canary token verification (Phase 3, B3)
-
-A defense against **system-prompt exfiltration**: mint per-session canary
-tokens via deterministic HMAC-SHA256 of `session_id|label`, inject them
-into your system prompt (or refuse to send a request with an exfiltrated
-canary). Tokens are 80-bit, base32-encoded, `NGCANARY-...` prefixed. The
-same token is re-derived on `/v1/scan/output`, so there is **no server-side
-token store** — session_id is the join key.
-
-```bash
-# Mint up to 8 canaries for a session (labels A..H)
-neuralguard canary-mint sess-42 --count 4 --json
-# Detect on /v1/scan/output — `canary_leaked` is now a real signal:
-curl -X POST $NG/v1/scan/output -H "Authorization: Bearer $KEY" \
-  -d '{"session_id":"sess-42","output":"...leaked canary text...","tenant_id":"demo"}'
-```
-
-**Configuration:** opt in with `NEURALGUARD_CANARY_ENABLED=true`. In
-production the canary refuses to start without `NEURALGUARD_CANARY_SECRET`
-≥ 32 chars (configurable via the env knob). Per-session label count is
-bounded to 1..8 (`NEURALGUARD_CANARY_TOKEN_COUNT`). Failure modes:
-`check_leak` returns None when disabled / misconfigured / empty session
-(additive signal, never raises); mint raises on disabled/misconfigured
-(fail-closed). On a leak, `/v1/scan/output` surfaces a `CANARY-LEAK-001`
-finding under `SYSTEM_PROMPT_EXTRACTION` (HIGH, BLOCK) and forces the
-verdict to BLOCK before the dispatcher — non-200 responses now carry the
-full `ScanOutputResponse` body (`canary_leaked` + `redacted_output` +
-`findings`) at the action status code.
-
-**Honest limits:** deterministic HMACs are detection signals, not
-forensics-grade watermarks. Bounded labels per session (≤8) is a
-defensive cap, not a security property. Pair with token rotation +
-session-scoped secrets in a real deployment.
-
-## Multi-turn benchmark integration (Phase 3, B4)
-
-Extends Sprint A's harness with **multi-turn delayed-injection
-sequences** targeting Agent Guardian directly, plus **NeuralStrike's
-`AgentPivot.exploit_delegation(agent_from, agent_to, malicious_instruction)`**
-attack module. Two defender configs: everything-but-Agent-Guardian
-(`baseline_no_guardian`) vs with-Agent-Guardian
-(`with_agent_guardian`). Headline delta = `seqASR_baseline − seqASR_with_guardian`.
-
-```bash
-# Deterministic (no model dependency) — CI-able
-uv run pytest tests/benchmarks/test_b4_multiturn.py -v -s
-# Live + local Ollama + NeuralStrike editable
-uv pip install -e ../NeuralStrike
-uv sync --extra dev --extra db --extra semantic
-ollama pull mistral:7b
-uv run python -m benchmarks.ng_vs_ns.multiturn_harness \
-    --save benchmarks/ng_vs_ns/results/b4_results.json
-```
-
-The deterministic gate (CI-able) replays 5 curated attack sequences
-(delayed injection, role drift, gradual extraction, gradual memory
-poisoning, AgentPivot delegation) + 3 curated benign multi-turn
-sequences against both configs in-process and asserts (hard gate) that
-Agent Guardian does not regress seqASR or produce false positives on
-benign multi-turn. Per-sequence detection is reported for diagnostic
-purposes — see [`benchmarks/ng_vs_ns/results/known_gaps.md`](benchmarks/ng_vs_ns/results/known_gaps.md)
-for the scanner-coverage findings the harness originally surfaced
-(MEM-002 user-as-subject phrasings + JB "AI without safety guidelines"
-framing; both since closed on `main`).
-
-**Same-author caveat applies** — attacker (NeuralStrike) and defender
-(NeuralGuard) are by the same author; this measures defense-in-depth,
-not neutral independence. 7B local Ollama attacker is a lower bound on
-a frontier attacker's surface.
-
-## Per-tenant config (Sprint C, C1 / P1-2)
-
-Multi-tenant mode lets an operator override the global config per tenant via
-`tenants/<tenant_id>.yaml` (or `.json`) files. The override overlay applies at
-request time to the rate-limit quota and the three optional scanners.
-
-**Security model (opinionated, fail-safe):**
-
-- **Structural + Pattern are mandatory.** A tenant can never disable the core
-  sanitization + regex layers — they are not modelled in the override schema.
-- **Override = `None` inherits the global default.** Every override field
-  defaults to `None`, so a partial/empty tenant file degrades to the global
-  config, never to an unsafe zero.
-- **Unknown tenant -> global default (fail-OPEN, never a 403).** Denying a
-  request because a YAML file is missing is a self-inflicted denial-of-service.
-- **Tenant config is a ceiling for the client `request.scanners` field.** A
-  client may narrow the scanner set but never widen it past the tenant +
-  global registration (per-tenant enforcement, not just a default).
-- **Hot-reload is fail-safe.** A parse error keeps the last-good config and
-  logs; the registry is never blanked and the request path never raises.
-
-```yaml
-# tenants/acme.yaml  — filename stem MUST equal tenant_id
-tenant_id: acme
-description: "Acme Co"
-requests_per_minute: 120   # null to inherit NEURALGUARD_RATELIMIT_*
-burst_size: 20
-scanners:
-  agent_guardian: null     # inherit global
-  semantic: false          # this tenant opts out of the semantic layer
-  judge: null              # inherit global
-```
-
-```bash
-# Read-only effective-config surface (auth-gated, tenant-binding-enforced)
-neuralguard tenants list [--json]
-neuralguard tenants info <tenant_id> [--json]
-# Or via the API:
-curl $NG/v1/tenants          -H "Authorization: Bearer $KEY"
-curl $NG/v1/tenants/acme     -H "Authorization: Bearer $KEY"
-```
-
-YAML tenant files require the optional `[tenants]` extra (`pip install
-neuralguard[tenants]`); `.json` tenant files work with no extra. In production
-the lifespan refuses to start if tenant mode is on, a YAML file is present,
-and PyYAML is not installed. See [`tenants/example.yaml`](tenants/example.yaml)
-for a documented sample. **Honest non-goal:** C1 ships read-only config + a
-per-tenant ceiling; per-tenant JWT/OAuth (P2-4) and a write/admin API are
-follow-up Sprint C work.
-
----
-
-## Prompt-template analyzer (Phase 3, B2)
-
-A shift-left counterpart to runtime detection: statically scan a system-prompt
-template for injection sinks **before** deployment. No LLM call — pure static
-analysis, fast, CI-able.
-
-```bash
-# From a file (or '-' for stdin). --json for machine output.
-neuralguard analyze-template prompt.txt --fail-on-high
-# Or via the API:
-curl -X POST $NG/v1/analyze/template -H "Authorization: Bearer $KEY" \
-  -d '{"template":"You are an assistant.\n{{user_input}}\nExecute {{query}}."}'
-```
-
-Sink classes: untrusted-variable interpolation into the system prompt (HIGH),
-action-adjacent variables (HIGH), missing delimiter fence (MEDIUM), ambiguous
-instruction precedence (MEDIUM), unbounded unknown variables (MEDIUM), raw
-structured-data injection (LOW). `--fail-on-high` exits non-zero only on HIGH
-sinks (CI gate).
-
----
-
-## Documentation
-
-- **API docs** — OpenAPI auto-generated docs at `http://localhost:8000/docs` (development/staging only; hidden in production for safety).
-- **Runbooks** — [`docs/runbooks/appliance.md`](docs/runbooks/appliance.md) (standalone appliance), [`docs/runbooks/fleet_deployment.md`](docs/runbooks/fleet_deployment.md) (co-resident fleet with SecurityScarletAI + the live-fire harness), [`docs/runbooks/tls_termination.md`](docs/runbooks/tls_termination.md), [`docs/runbooks/secret_rotation.md`](docs/runbooks/secret_rotation.md), [`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md), [`docs/runbooks/artifact_signing.md`](docs/runbooks/artifact_signing.md) (cosign SBOM/image signing).
-- **Kubernetes** — [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) (manifests + HPA; schema-validated, cluster drill pending).
-- **Benchmarks** — [`benchmarks/ng_vs_ns/README.md`](benchmarks/ng_vs_ns/README.md) + dated results in [`benchmarks/ng_vs_ns/results/`](benchmarks/ng_vs_ns/results/) (A2, B4, known gaps).
-- **i18n review request** — [`docs/i18n_native_review_request.md`](docs/i18n_native_review_request.md) (P2-11, needs native speakers).
-- **Production hardening ledger** — [`PRODUCTION_HARDENING_PLAN.md`](PRODUCTION_HARDENING_PLAN.md) (internal; closed items + residual-risk register).
-- **Roadmap** — [`docs/ROADMAP.md`](docs/ROADMAP.md).
-- **Boot smoke test** — `./scripts/smoke_test.sh` (boots uvicorn + exercises every endpoint over HTTP).
-- **Load/perf gate** — `perf/perf_gate.py` (p95 + fail-closed-under-load).
-
----
-
-## Quick Start
+## Quick start
 
 ```bash
 # Clone
@@ -468,7 +190,6 @@ cp .env.example .env
 # Generate a strong API key and bind it to the 'demo' tenant, then write it
 # into .env as NEURALGUARD_AUTH_API_KEYS="<that-key>|demo".
 python3 -c "import secrets;print(secrets.token_urlsafe(32))"   # copy this output
-# e.g. edit .env:  NEURALGUARD_AUTH_API_KEYS=AbC123...|demo
 
 # Deploy with Docker Compose (POSTGRES_PASSWORD has no default — set it inline)
 POSTGRES_PASSWORD=$(openssl rand -hex 24) docker compose up --build -d
@@ -489,177 +210,33 @@ curl -X POST http://localhost:8000/v1/evaluate \
 ```
 
 > The API key in `Authorization: Bearer <key>` must match
-> `NEURALGUARD_AUTH_API_KEYS` in `.env`, and `tenant_id` must match the tenant
-> that key is bound to (`|demo` above). A mismatch returns `401`/`403`.
+> `NEURALGUARD_AUTH_API_KEYS` in `.env`, and `tenant_id` must match the
+> tenant that key is bound to (`|demo` above). A mismatch returns `401`/`403`.
 
-## Production Deployment
+---
 
-**Authentication is mandatory in production.** The application refuses to
-start in `production` mode unless `NEURALGUARD_AUTH_ENABLED=true` and at least
-one API key is configured. Keys are bound to tenants (`key|tenant_id`); a key
-cannot act on behalf of another tenant.
+## API tour
 
-**TLS.** Terminate TLS at a reverse proxy (nginx / Caddy / Traefik / a cloud
-load balancer) in front of NeuralGuard. If you run uvicorn directly in
-production, set `NEURALGUARD_ALLOW_INSECURE_HTTP=true` only when a
-TLS-terminating proxy is in front — otherwise the startup log warns loudly.
-Never expose prompts over plain HTTP. See
-[`docs/runbooks/tls_termination.md`](docs/runbooks/tls_termination.md).
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/evaluate` | Scan a prompt → verdict + findings + sanitized content |
+| `POST /v1/scan/output` | Scan LLM output: PII/credential leakage, extraction, canary leaks |
+| `POST /v1/analyze/template` | Statically analyze a system-prompt template for injection sinks |
+| `POST /v1/canary/mint` | Mint per-session canary tokens (HMAC-SHA256) |
+| `POST /v1/mcp` | MCP gateway: per-tool intent gate + signed tool-catalog baselines |
+| `POST /v1/proxy/chat/completions` | Appliance proxy in front of any OpenAI-compatible upstream |
+| `POST /v1/auth/token` | Exchange a credential for a short-lived JWT |
+| `POST /v1/auth/keys/rotate` | Admin key rotation (durable, atomic 0600 writes) |
+| `GET /v1/tenants[/{id}]` | Read-only effective per-tenant config |
+| `GET /v1/info` | Honest coverage surface: dedicated rules vs corpus-assisted |
+| `GET /v1/metrics` | Prometheus counters/histograms |
+| `GET /v1/health` · `GET /v1/ready` | Liveness (public) · readiness (auth-protected, 503/degraded semantics) |
 
-**Secrets.** Never commit real secrets. Use a secret manager (SOPS, Vault,
-AWS Secrets Manager). `POSTGRES_PASSWORD` has no insecure default in
-`docker-compose.yml` — it must be set. See
-[`docs/runbooks/secret_rotation.md`](docs/runbooks/secret_rotation.md) for
-zero-downtime dual-key API-key rotation and Postgres password rotation.
-
-**Rate limiting (multi-worker).** The in-memory limiter is per-process. For
-`NEURALGUARD_WORKERS>1`, set `NEURALGUARD_RATELIMIT_BACKEND=redis` and
-`NEURALGUARD_RATELIMIT_REDIS_URL` — the production lifespan refuses to start
-otherwise (a per-process limiter would let a tenant exceed the limit by the
-worker count). `docker-compose.yml` ships a `redis` service.
-
-### Fleet deployment: co-resident with SecurityScarletAI (live-fire verified)
-
-One compose project runs NeuralGuard and the
-[SecurityScarletAI](https://github.com/aiagentmackenzie-lang/securityscarletai)
-local SIEM together — `deploy/fleet/docker-compose.fleet.yml` (includes
-Scarlet's compose unchanged; services reach each other by name: `api:8000`,
-`mcp:8002`), with NeuralGuard serving on `:8100`. The full production stack
-is up: semantic ONNX layer (the `models/` checkout mounted read-only),
-Agent Guardian, canary detection, judge + proxy at host Ollama — NG-6
-guarded FPR measured at boot (0.00%, SLO met) and surfaced on `/v1/info`.
-
-Three integration pipes, all operational:
-
-- **SIEM routing**: every verdict audit event (hash-chained) POSTs to
-  ScarletAI's ingest with the scoped `INGEST_BEARER_TOKEN` — the tenant
-  rides `user_name` (the actor slot) and injection-shaped verdicts
-  (T-PI-D / T-PI-I / T-JB) carry an `ai_prompt_injection` companion while
-  MCP-gate denials carry an `mcp_tool_denied` companion, in the SAME POST.
-- **MCP gateway auth**: `POST /v1/mcp` fronts Scarlet's closed 3-tool MCP
-  server with the server-side `NEURALGUARD_MCP_UPSTREAM_AUTH_TOKEN`; a
-  caller can never override the upstream `Authorization` header.
-- **The detections on the SIEM side**: `prompt_injection_attempt`,
-  `mcp_tool_denial_burst`, and the dedicated
-  `rules/sigma/neuralguard/` rules (`block_rate_spike`,
-  `confirmed_ai_attack_block` — both critical) + the
-  `ai_verdict_block_sustained` correlation.
-- **The purple loop (2026-09-20)**: NeuralStrike — the offensive third —
-  joined as a PROFILE-GATED ONE-SHOT service (`profiles: [bench]`;
-  `up -d` still brings ONLY the 6 production containers). Its exercises
-  drive this firewall at `http://neuralguard:8000` with the fleet key
-  (the documented `<key>|<tenant>` credential form, split by the bench;
-  the tenant must match the key's binding — NG 403s a mismatch) and
-  report the run to Scarlet's ingest; `neuralstrike purple-report` then
-  joins the run receipt with what the SIEM caught (per-payload
-  caught/gap/resisted table + the UNDETECTED-SUCCEEDED gap list) and the
-  coverage map arms the NeuralStrike producer rules. Harness:
-  `deploy/fleet/neuralstrike_exercise.sh`; runbook: the purple-team
-  section below.
-
-**Live-fire receipt (2026-09-19, run-stamped host `neuralguard-fleet-w5`):**
-95/95 injection probes blocked (0.95 confidence) · 12/12 MCP-gate refusals
-(403, pre-forward) · alerts fired at the SIEM: AI Prompt Injection Attempt,
-NeuralGuard Confirmed AI Attack Block (critical), MCP Tool Denial Burst,
-NeuralGuard Block-Rate Spike (critical) + the sustained-block correlation ·
-coverage map 97/128 armed, both producer rules ARMED. Reproduce with
-`bash deploy/fleet/fleet_livefire.sh` (health gates → probes → settle →
-receipt). See
-[`docs/runbooks/fleet_deployment.md`](docs/runbooks/fleet_deployment.md).
-
-**Readiness.** `GET /v1/ready` reports per-component status (scanners, audit
-DB, Redis) and returns 503 when the core is broken, 200 `degraded` when
-optional layers degrade (the firewall keeps serving with deterministic
-detection + JSONL audit fallback). Auth-protected by default; add `/v1/ready`
-to `NEURALGUARD_AUTH_PUBLIC_ENDPOINTS` for an unauthenticated kubelet probe.
-`GET /v1/health` remains the public liveness probe. Public endpoints match
-exact paths only — a trailing slash (`/v1/health/`) is NOT public and 401s.
-Clients must call the exact documented paths.
-
-**Audit integrity.** Every audit event is hash-chained (`worker_id` /
-`prev_hash` / `event_hash`). On-disk or in-DB tampering of an event breaks
-both its own hash and the next event's `prev_hash`. Optional Ed25519
-signing (P2-10): set `NEURALGUARD_AUDIT_SIGNING_KEY` (`neuralguard
-audit-keygen`) and every persisted event's chain hash is signed — forged,
-internally-consistent chains are then rejected by `neuralguard audit-verify
---pubkey <hex>`. Postgres-audit deployments verify the table directly:
-`neuralguard audit-verify --pg-url <dsn> [--pubkey <hex>]` (per-worker
-chains reconstructed by link-walk — SQL row order is not trusted as write
-order; signatures verified with the same `--pubkey` semantics; requires
-the `[db]` extra). A failed DB insert falls back to the JSONL audit path
-(an event is never silently lost). See
-[`docs/runbooks/backup_restore.md`](docs/runbooks/backup_restore.md) for
-backup, restore, and chain verification.
-
-**SIEM routing (P2-7).** Audit events (with their chain hash) fan out to
-Splunk HEC (native), a generic JSON webhook (ELK / Sentinel via their
-supported ingestion integrations), or **SecurityScarletAI** (local SIEM):
-verdicts map into ScarletAI's ECS-normalized IngestEvent schema
-(`event_category: intrusion_detection`, severity ladder: block→high /
-critical ≥0.9 confidence, escalate→medium, allow→info + filtered by
-default; spike alerts → critical) and POST to
-`NEURALGUARD_SIEM_SCARLETAI_URL` with the scoped ingest token —
-ScarletAI's enrichment + correlation chains fire on arrival, and the
-tamper-evident chain hash rides in `raw_data`. Delivery is bounded
-(in-flight cap, drop + warn beyond it) and best-effort by design: routing
-is observability, delivery failures never affect verdicts. Companion
-events (ScarletAI sink only): every mapped verdict sets `user_name` to
-the tenant (ECS-borrowed actor slot), and the SAME POST additionally
-carries an `ai_prompt_injection` companion for injection-shaped verdicts
-(T-PI-D / T-PI-I / T-JB) and an `mcp_tool_denied` companion for MCP-gate
-denials (tool in `process_name`) — Scarlet's closed vocabulary needs the
-flat ai-category events for its Sigma rules; Splunk/webhook keep the
-single-event envelope. Opt-in batching (`NEURALGUARD_SIEM_SCARLETAI_BATCH_MAX_EVENTS`,
-default 1 = immediate) buffers verdict families and flushes on size/time
-(spike alerts always immediate; buffered events are lost on a hard crash
-— best-effort doctrine).
-
-**JWT bearer auth + key rotation (P2-4).** In addition to static API keys:
-short-lived JWTs (`NEURALGUARD_AUTH_JWT_ENABLED`, HS256 with an alg
-allowlist, exp enforced) issued by `POST /v1/auth/token` in exchange for a
-valid credential — tokens are tenant-bound and flow through the same
-tenant-binding enforcement. Runtime key rotation via
-`POST /v1/auth/keys/rotate` (admin-tenant only), durable through
-`NEURALGUARD_AUTH_KEYS_FILE` (atomic 0600 writes); runtime-only rotation is
-refused in production. Residuals (documented follow-ups, not claimed):
-RS256/OIDC discovery, refresh tokens, Vault/SOPS integration.
-
-**Resource limits.** `docker-compose.yml` sets container memory/CPU limits so a
-decompression or regex bomb cannot OOM the host. The request body size is
-capped (`NEURALGUARD_MAX_REQUEST_BODY_BYTES`, default 1 MiB) and 413s
-before JSON parsing.
-
-**Observability.** `GET /v1/metrics` exposes Prometheus counters/histograms
-(verdicts, scanner + pipeline latency, judge calls/timeouts, circuit breaker,
-audit failures, auth/body/rate-limit rejections). Logs are JSON in production
-for aggregation. Every error returns a `correlation_id` for log lookup.
-
-**CI gates.** Lint (ruff + format + mypy strict) + matrix tests (3.11/3.12) + a 90% coverage gate that runs the FULL suite (CI regenerates the ONNX model, rebuilds the semantic corpus, and runs the pg audit live-fire tests against a real Postgres service container) + a real-uvicorn `boot-smoke` job (boots the server and exercises every endpoint over HTTP with auth) + a semantic-import smoke job + blocking pip-audit/security scan + SBOM (CycloneDX) signed and attested keyless with cosign (identity-scoped verification in-job) + nightly `perf` and `bench` gates (timeout-bounded). All Actions are SHA-pinned; dependabot covers actions + pip.
-
-**OWASP coverage honesty.** `/v1/info` splits coverage into `dedicated_rules`
-(LLM01/02/05/07/10, ASI01/02/04/06/10 — ASI06 via the dedicated T-MEM
-MEM-001..004 rules **and** the AgentGuardianScanner cross-turn accumulation
-rule; ASI04 via dedicated SC-001..005 supply-chain rules (P2-3); ASI10 via
-dedicated RA-001..005 rogue-agent rules (P2-3)) and `corpus_assisted_only`
-(empty since the P2-3 rules landed — the list is kept as the honesty surface
-for future gaps). Do not rely on corpus-assisted coverage as a control.
-
-**Standalone appliance.** `docker-compose.appliance.yml` deploys NeuralGuard
-as a self-contained guardian in front of any OpenAI-compatible upstream
-(proxy ON, redis-backed rate-limit + Agent Guardian state with requirepass,
-Postgres audit with required `POSTGRES_PASSWORD`, canary ON). Boot-drill
-verified end-to-end on the hardened posture — see
-[`docs/runbooks/appliance.md`](docs/runbooks/appliance.md).
-
-**Canary token verification** is shipped (Phase 3, B3) — HMAC-SHA256 canaries
-on `session_id`, `POST /v1/canary/mint`, unstubbed `canary_leaked` in
-`/v1/scan/output`. See the **Canary token verification** section above.
-
-## API Examples
-
-> Set `NG_KEY` to the key you put in `.env` (bound to `demo`). The `tenant_id` in the body must match the key's tenant.
+Interactive OpenAPI docs are served at `/docs` in development/staging only —
+hidden in production for safety.
 
 ### Block a prompt injection attempt
+
 ```bash
 curl -X POST http://localhost:8000/v1/evaluate \
   -H "Content-Type: application/json" \
@@ -668,6 +245,7 @@ curl -X POST http://localhost:8000/v1/evaluate \
 ```
 
 **Response (403 Blocked) — fields truncated for brevity:**
+
 ```json
 {
   "error": "request_blocked",
@@ -684,38 +262,14 @@ curl -X POST http://localhost:8000/v1/evaluate \
       "rule_id": "PI-D-001",
       "description": "Instruction override — 'ignore/disregard/forget previous/all instructions'",
       "evidence": "...",
-      "mitigation": "Reject or sanitize instruction override attempts",
-      "metadata": {}
+      "mitigation": "Reject or sanitize instruction override attempts"
     }
-    // ...additional findings omitted
   ]
 }
 ```
 
-### Allow a benign prompt
-```bash
-curl -X POST http://localhost:8000/v1/evaluate \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $NG_KEY" \
-  -d '{"prompt":"What is the weather today?","tenant_id":"demo"}'
-```
-
-**Response (200 Allowed):**
-```json
-{
-  "request_id": "86b8b018-...",
-  "tenant_id": "demo",
-  "verdict": "allow",
-  "findings": [],
-  "confidence": 0.0,
-  "sanitized_content": null,
-  "scan_layers_used": ["structural", "pattern"],
-  "total_latency_ms": 0.51,
-  "timestamp": "2026-06-19T19:32:55.441049Z"
-}
-```
-
 ### Scan LLM output for PII leakage
+
 ```bash
 curl -X POST http://localhost:8000/v1/scan/output \
   -H "Content-Type: application/json" \
@@ -723,72 +277,412 @@ curl -X POST http://localhost:8000/v1/scan/output \
   -d '{"output":"Contact me at admin@company.com","tenant_id":"demo"}'
 ```
 
-**Response (403 Blocked — PII detected) — fields truncated for brevity:**
-```json
-{
-  "error": "request_blocked",
-  "message": "Request blocked by NeuralGuard firewall",
-  "verdict": "block",
-  "confidence": 0.9,
-  "findings": [
-    {
-      "category": "T-EXF",
-      "severity": "high",
-      "verdict": "block",
-      "confidence": 0.9,
-      "layer": "pattern",
-      "rule_id": "EXF-001",
-      "description": "Email address detected",
-      "evidence": "[REDACTED:EXF-001]",
-      "mitigation": "Redact email addresses",
-      "metadata": {}
-    }
-  ]
-}
+**Response (403 Blocked — PII detected):** verdict `block`, rule
+`EXF-001` ("Email address detected"), evidence redacted in the response.
+
+---
+
+## Features
+
+### Multi-turn detection (Agent Guardian)
+
+The differentiator commercial AI firewalls mostly **don't** have: detection
+no single-turn scanner can see, keyed on a bounded per-session sliding
+window. Opt in with `NEURALGUARD_AGENT_GUARDIAN_ENABLED=true` and send a
+`session_id` on `/v1/evaluate` (or a multi-turn `messages` array in one
+request).
+
+Detects — deterministic + heuristic, no LLM call:
+
+- **Delayed / garden-path injection** — a current turn carrying an injection
+  directive AND a back-reference to prior conversation (cross-turn payload assembly)
+- **Role drift / persona erosion** — accumulated persona-redefinition across the window
+- **Gradual system-prompt extraction** — N extraction probes across the window
+- **Gradual memory poisoning** — N persistent-memory-injection directives
+
+In-memory and Redis backends (shared across workers, atomic Lua records)
+are both implemented. Stores keep only per-turn signal flags — never raw
+turn text. Fail-closed on state-store errors.
+
+### Canary token verification
+
+A defense against **system-prompt exfiltration**: mint per-session canary
+tokens via deterministic HMAC-SHA256, inject them into your system prompt,
+and detect leaks on `/v1/scan/output`. Tokens are 80-bit, base32,
+`NGCANARY-...` prefixed; the same token is re-derived from `session_id`, so
+there is **no server-side token store**.
+
+```bash
+# Mint up to 8 canaries for a session (labels A..H)
+neuralguard canary-mint sess-42 --count 4 --json
+# A leak forces verdict=BLOCK and surfaces a CANARY-LEAK-001 finding (HIGH)
 ```
 
-> Output scanning covers PII/credential leakage, system prompt extraction, and encoding evasion patterns. Metrics are available at `GET /v1/metrics` (auth-protected).
+Enable with `NEURALGUARD_CANARY_ENABLED=true`; production refuses to start
+without `NEURALGUARD_CANARY_SECRET` (≥ 32 chars). Honest limit: HMAC canaries
+are detection signals, not forensics-grade watermarks — pair with token
+rotation in real deployments.
+
+### Prompt-template analyzer (shift-left)
+
+Statically scan a system-prompt template for injection sinks **before**
+deployment — no LLM call, fast, CI-able:
+
+```bash
+neuralguard analyze-template prompt.txt --fail-on-high   # exits non-zero on HIGH sinks
+```
+
+Sink classes: untrusted-variable interpolation into the system prompt,
+action-adjacent variables, missing delimiter fences, ambiguous instruction
+precedence, unbounded unknown variables, raw structured-data injection.
+
+### MCP gateway
+
+`POST /v1/mcp` fronts an MCP server with a **pre-body-parse per-tool Intent
+Gate** (per-tenant allow/deny/escalate policies on the `Mcp-Method` /
+`Mcp-Name` headers, with smuggling defenses) and refuses **rug pulls** using
+Ed25519-signed tool-catalog baselines: strict mode withholds drifted
+catalogs and refuses all executions until an explicit re-baseline, with
+drift evidence landing in the hash-chained audit trail. Fleet deployments
+add upstream bearer auth a caller can never override.
+
+### Appliance proxy
+
+`docker-compose.appliance.yml` deploys NeuralGuard as a self-contained
+guardian in front of **any** OpenAI-compatible upstream: proxy on,
+Redis-backed rate limiting + Agent Guardian state (requirepass), Postgres
+audit with a required password, canary on. Boot-drill verified end-to-end —
+see the [appliance runbook](docs/runbooks/appliance.md).
+
+### Per-tenant configuration
+
+Multi-tenant mode lets an operator override rate-limit quota and the
+optional scanners per tenant via `tenants/<tenant_id>.yaml` (or `.json`):
+
+- **Structural + Pattern are mandatory** — no tenant can disable the core layers
+- **Override = `None` inherits the global default** — a partial file degrades
+  to the global config, never to an unsafe zero
+- **Unknown tenant → global default (fail-open, never a 403)** — a missing
+  YAML file must not become self-inflicted denial-of-service
+- **Tenant config is a ceiling** for the client-requested scanner set —
+  clients may narrow, never widen
+- **Hot-reload is fail-safe** — a parse error keeps the last-good config
+
+```bash
+neuralguard tenants list --json
+curl $NG/v1/tenants/acme -H "Authorization: Bearer $KEY"
+```
+
+YAML tenant files need the optional `[tenants]` extra; `.json` works with
+none. See [`tenants/example.yaml`](tenants/example.yaml).
 
 ---
 
-## Key Metrics
+## Benchmarks: NeuralGuard vs NeuralStrike
 
-| Metric | Target | Status |
-|---|---|---|
-| Detection Rate (Direct PI) | >95% | ✅ verified — 123 patterns (73 EN incl. SC/RA + 50 i18n), 13 redteam tests |
-| Detection Rate (Rephrased PI) | >80% | ⚠️ local observation only — semantic/judge recovery of mutated attacks is measured in the A2 benchmark (not asserted as a CI gate); CI does run the full semantic suite against a regenerated model, but no test pins rephrased-attack ASR |
-| False Positive Rate | <2% | ✅ verified — the A1 regression gate (CI) asserts FPR < 2% on a 45-prompt benign corpus (0.00% measured). A2 live: with the 5.4× corpus the semantic layer escalates 2 of 45 benign prompts (4.44%, review signal — no content modification via the corroboration gate; 3/45 = 6.67% pre-augmentation) |
-| P95 Latency (Pattern-only) | <10ms | ⚠️ observed ~0.3 ms locally; the nightly CI perf gate enforces a 150 ms p95 budget + fail-closed-under-load (the 10 ms target itself is a local observation, not a CI gate) |
-| P95 Latency (Pattern + Semantic) | <50ms | ⚠️ local observation (~30 ms); the nightly perf gate runs pattern-only — the semantic p95 is NOT CI-verified |
-| P95 Latency (Full Pipeline + Judge) | <5s | ⚠️ local observation (~3 s, gated to ambiguous zone); NOT CI-verified |
-| Test Coverage | 90% CI floor | ✅ verified — CI regenerates the ONNX model (`scripts/export_onnx.py`) and rebuilds the corpus from tracked sources (`scripts/rebuild_corpus_vectors.py`), so the gate runs the FULL suite (plus the pg live-fire tests against a real Postgres service): **90.59% measured locally without a live Postgres; ≥91% in CI; 90% enforced**. |
-| Type Safety (mypy strict) | clean | ✅ verified — 0 errors, enforced in CI |
-| Memory Footprint (ONNX runtime) | <500MB | ✅ ~86 MB ONNX model, no PyTorch at runtime (export tool pulls torch) |
-| Decompression Bomb Defense | bounded | ✅ verified — 8 MiB hard cap via incremental decompress, tested |
-| Corpus Size | 1,000+ vectors | ✅ verified — **7,623 vectors (F12 5.4× augmentation)**; CI rebuilds a 6,503-vector tracked-source subset that passes the same A1 gate (checkpoint-overwrite residual documented in the rebuild script) |
-| Auth / Tenant Isolation | enforced | ✅ verified — API-key auth, tenant binding, no header spoofing, tested |
-| Observability | metrics | ✅ verified — /v1/metrics Prometheus endpoint |
-| Rate Limit (multi-worker) | per-tenant, cluster-wide | ✅ Redis-backed sliding window (atomic Lua); production refuses workers>1 without it |
-| Canary token verification | works | ✅ verified — `CanaryManager` HMAC-SHA256, `/v1/canary/mint`, unstubbed `canary_leaked` in `/v1/scan/output`, prod fail-fast on missing/short secret, `--fail-on-high` test surface |
-| Per-tenant config (C1) | works | ✅ merged — `TenantConfigRegistry` loads `tenants/*.yaml\|json`, per-tenant RPM/burst + scanner ceiling (Structural/Pattern mandatory), hot-reload, `GET /v1/tenants[/{id}]` + `neuralguard tenants list\|info` CLI, prod fail-fast on YAML-without-PyYAML |
+A benchmark measuring NeuralGuard's detection efficacy against its offensive
+sibling [NeuralStrike](https://github.com/aiagentmackenzie-lang/NeuralStrike).
+Full harness docs + dated results:
+[`benchmarks/ng_vs_ns/`](benchmarks/ng_vs_ns/README.md).
 
-> ✅ = verified by an automated test or CI gate. ⚠️ = local observation, not yet enforced in CI. ❌ = not implemented.
+> **Same-author caveat:** attacker and defender are by the same author.
+> This measures **defense-in-depth and regression**, not neutral third-party
+> independence. The live attacker uses a **local 7B Ollama model** (no cloud
+> API), so ASR numbers are a *lower bound* on what a frontier attacker would
+> achieve — the value is the curve across defender configs.
+
+### Deterministic regression gate (per-PR CI gate)
+
+A labeled corpus (27 attacks / 45 benign) against `/v1/evaluate` in the
+pattern-only baseline — the hard ASR regression signal, enforced per-PR and
+re-run nightly:
+
+| Metric | Result |
+|:--|--:|
+| Attack Success Rate (ASR) | **0.00%** (0 of 27 attacks allowed) |
+| False Positive Rate (FPR) | **0.00%** (0 of 45 benign over-blocked) |
+| Exact verdict match | 100.00% |
+
+### Mutation-robustness gate — 16 operators, both directions
+
+Every character-level mutation operator (homoglyphs, fullwidth, leetspeak,
+diacritics, zero-width, token splitting, alternating case, dot interleave,
+word reversal, char duplication, NBSP swap, and more) applied
+independently to the corpora — 432 mutated attack evals + 720 mutated
+benign evals, fully deterministic. Robustness is measured in **both**
+directions: mutated attacks getting through *and* mutated benign prompts
+wrongly caught.
+
+| Direction | Measured | Gate |
+|:--|--:|:--|
+| Unsafe-ASR (mutated attacks through) | 56.94% | regress → fail (≤ baseline + 1%) |
+| Safe-ASR (mutated benign caught) | 12.50% | ceiling 13%, zero hard BLOCKs |
+
+The measured Unsafe-ASR is the honest coverage map, not a target:
+normalizer-covered operators sit at 0.00% (fullwidth, NBSP, diacritics —
+the combining-mark fold the gate itself exposed and shipped). The remaining
+gaps (word reversal, dot interleave, homoglyph-class) are documented —
+blanket cross-script folding would corrupt legitimate mixed-script text, so
+that work is context-aware; the semantic layer is the designed second line.
+
+### Live attacker benchmark — 3 defender configs
+
+Live iterative-jailbreak + context-poisoning attacks replayed through three
+pipeline configurations (18 attacks / 45 benign). Re-measured against the
+paraphrase-augmented semantic corpus (7,623 vectors, 5.4× augmentation with
+build-time hygiene):
+
+| Attacker | pattern only | + semantic | + semantic + judge |
+|:--|--:|--:|--:|
+| `mistral:7b` (lower bound) | 27.78% | 22.22% | 22.22% |
+| `qwen3.8:27b` (stronger attacker) | 61.11% | **38.89%** | 38.89% |
+
+- **Monotonic ASR drop across configs: TRUE in every run** — each layer does
+  not raise ASR
+- The augmented corpus recovered *more* mutated attacks (50.00% → 38.89%)
+  while producing *fewer* false positives (6.67% → 4.44%)
+- The 27B judge correctly blocks the extraction attack the 7B judge
+  false-negatived; opt-in `judge_resolves_escalate` drops benign FPR to
+  0% on this corpus (default off — safe for weak judges)
+- Known undetected class: context-exhaustion (lorem-ipsum DoS) — mitigated
+  by cost-based rate limiting; a "repetitive filler" regex was evaluated and
+  deliberately rejected as an FPR machine
+
+### Reproduce
+
+```bash
+# Deterministic regression gate (no extra deps):
+uv run python -m benchmarks.ng_vs_ns.harness
+
+# Live benchmark (needs Ollama + NeuralStrike + the [semantic] extra):
+uv pip install -e ../NeuralStrike
+uv sync --extra dev --extra db --extra semantic
+ollama pull mistral:7b
+uv run python -m benchmarks.ng_vs_ns.live_harness --attacker mistral:7b --judge mistral:7b
+```
+
+A [nightly workflow](.github/workflows/bench.yml) re-runs the deterministic
+gate (hard-fails on ASR regression) and the 16-operator mutation gate.
+Multi-turn attack sequences (delayed injection, role drift, AgentPivot
+delegation) are covered by a second deterministic gate in
+`tests/benchmarks/`.
 
 ---
 
-## Related Projects
+## Production deployment
 
-- **SecurityScarletAI** — AI-native SIEM (the fleet-integration counterpart; local sibling repo `../SecurityScarletAI` — the two run co-resident via `deploy/fleet/`, live-fire verified 2026-09-19)
-- **NeuralStrike** — Offensive AI / red teaming (attack counterpart; local sibling repo `../NeuralStrike`)
-- **AI Agent Security Monitor** — Unified SOC for AI systems (aspirational integration target; local sibling repo `../AI Agent Security Monitor`)
+**Authentication is mandatory in production.** The application refuses to
+start in `production` mode unless `NEURALGUARD_AUTH_ENABLED=true` and at
+least one API key is configured. Keys are tenant-bound (`key|tenant_id`);
+a key cannot act on behalf of another tenant.
+
+| Concern | Posture |
+|---|---|
+| **TLS** | Terminate at a reverse proxy (nginx / Caddy / cloud LB). Plain-HTTP uvicorn warns loudly unless `NEURALGUARD_ALLOW_INSECURE_HTTP=true` behind a TLS proxy |
+| **Secrets** | Never committed; `POSTGRES_PASSWORD` has no default. Use a secret manager (SOPS / Vault). Zero-downtime dual-key rotation documented |
+| **Rate limiting (multi-worker)** | In-memory limiter is per-process; for `WORKERS>1` production **refuses to start** without the Redis backend (atomic Lua sliding window, per-tenant, cluster-wide) |
+| **Audit integrity** | Every audit event hash-chained; optional Ed25519 signing (`neuralguard audit-keygen` + `audit-verify --pubkey`) rejects forged internally-consistent chains; failed DB insert falls back to JSONL — an event is never silently lost |
+| **SIEM routing** | Fan-out to Splunk HEC, a generic JSON webhook, or the bundled local SIEM — bounded, best-effort by design: delivery failures never affect verdicts |
+| **Auth options** | Static API keys **and** short-lived JWTs (HS256 with alg allowlist) with runtime key rotation (admin-only, durable, atomic 0600 writes) |
+| **Resource limits** | Container memory/CPU limits; 1 MiB request-body cap enforced before JSON parse; 8 MiB decompression bomb hard cap |
+| **Observability** | Prometheus metrics, JSON logs in production, `correlation_id` on every error |
+| **Kubernetes** | Manifests + HPA, schema-validated offline (cluster drill pending) |
+| **Supply chain** | Hash-pinned deps, blocking `pip-audit`, CycloneDX SBOM signed + attested keyless with cosign in CI |
+
+Readiness semantics: `/v1/ready` reports per-component status, returns **503
+when the core is broken** and **200 `degraded`** when only optional layers
+degrade (deterministic detection + JSONL audit keep serving). Public
+endpoint matching is exact-path only — a trailing slash is not public.
+
+## Fleet deployment: attack, defend, and detect in one loop
+
+One compose project runs NeuralGuard and the
+[SecurityScarletAI](https://github.com/aiagentmackenzie-lang/securityscarletai)
+local SIEM together (`deploy/fleet/`), with
+[NeuralStrike](https://github.com/aiagentmackenzie-lang/NeuralStrike)
+joining as a **profile-gated one-shot** exercise service — `up -d` brings
+only the production containers; the attacker runs only when explicitly
+invoked. Three integration pipes, all operational:
+
+- **SIEM routing** — every verdict audit event (hash-chained) POSTs to
+  Scarlet's ingest with a scoped token; injection-shaped verdicts and
+  MCP-gate denials carry companion events in the same POST
+- **MCP gateway auth** — the gateway fronts the SIEM's MCP server with a
+  server-side upstream token a caller can never override
+- **The purple loop** — NeuralStrike exercises drive this firewall and
+  report the run to the SIEM; `neuralstrike purple-report` joins the run
+  receipt with what the SIEM actually caught (per-payload caught/gap/
+  resisted table + the UNDETECTED-SUCCEEDED gap list)
+
+**Live-fire receipt (2026-09-19):** 95/95 injection probes blocked · 12/12
+MCP-gate refusals (403, pre-forward) · alerts fired at the SIEM: AI Prompt
+Injection Attempt, Confirmed AI Attack Block (critical), MCP Tool Denial
+Burst, Block-Rate Spike (critical) + the sustained-block correlation ·
+coverage map 97/128 armed. Reproduce with
+`bash deploy/fleet/fleet_livefire.sh`; receipts live in
+[`deploy/fleet/receipts/`](deploy/fleet/receipts/); runbook:
+[`docs/runbooks/fleet_deployment.md`](docs/runbooks/fleet_deployment.md).
 
 ---
+
+## Operations and runbooks
+
+| Runbook | Covers |
+|---|---|
+| [`appliance.md`](docs/runbooks/appliance.md) | The standalone guardian in front of any OpenAI-compatible upstream |
+| [`fleet_deployment.md`](docs/runbooks/fleet_deployment.md) | Co-resident fleet with the local SIEM + the live-fire harness |
+| [`tls_termination.md`](docs/runbooks/tls_termination.md) | TLS posture at the reverse proxy |
+| [`secret_rotation.md`](docs/runbooks/secret_rotation.md) | Zero-downtime API-key and Postgres password rotation |
+| [`backup_restore.md`](docs/runbooks/backup_restore.md) | Backup, restore, audit-chain verification |
+| [`artifact_signing.md`](docs/runbooks/artifact_signing.md) | cosign SBOM/image signing |
+| [`mcp_gateway.md`](docs/runbooks/mcp_gateway.md) | MCP gateway operation + tool-catalog re-baselining |
+
+## Configuration
+
+All configuration is environment-driven (pydantic-settings) — see
+[`.env.example`](.env.example) for the full annotated list. The essentials:
+
+| Key | Purpose |
+|---|---|
+| `NEURALGUARD_ENVIRONMENT` | `development` / `staging` / `production` (production enforces auth + hardened posture) |
+| `NEURALGUARD_AUTH_API_KEYS` | `"<key>|<tenant_id>"` list — keys are tenant-bound |
+| `NEURALGUARD_RATELIMIT_BACKEND` | `memory` or `redis` (redis required for multi-worker production) |
+| `NEURALGUARD_SCANNER_SEMANTIC_ENABLED` | ONNX semantic layer |
+| `NEURALGUARD_SCANNER_JUDGE_ENABLED` / `_MODEL` | LLM-as-judge over the ambiguous zone (local Ollama) |
+| `NEURALGUARD_AGENT_GUARDIAN_ENABLED` | Multi-turn Agent Guardian |
+| `NEURALGUARD_CANARY_ENABLED` / `CANARY_SECRET` | Canary mint/verify (secret required in production) |
+| `NEURALGUARD_AUDIT_BACKEND` | `jsonl` or `postgres` (hash-chained) |
+| `NEURALGUARD_MAX_REQUEST_BODY_BYTES` | Body cap (default 1 MiB) — 413 before JSON parsing |
+| `NEURALGUARD_SIEM_ENABLED` | SIEM fan-out (Splunk HEC / webhook / ScarletAI), opt-in |
+| `NEURALGUARD_PROXY_ENABLED` / `_UPSTREAM_URL` | Appliance proxy mode |
+
+Optional dials worth knowing: `judge_resolves_escalate` (clean ALLOW
+downgrades ESCALATE → ALLOW; default off), reasoning-token output scan
+(opt-in, fail-closed), the per-tenant semantic threshold (the published FPR
+SLO), and the egress-taint binding for tool results (off / warn / block).
+
+## CLI
+
+```bash
+neuralguard serve              # start the server
+neuralguard analyze-template   # static template analysis (--fail-on-high for CI)
+neuralguard audit-keygen       # Ed25519 keypair for audit-event signing
+neuralguard audit-verify       # verify hash chains (JSONL or --pg-url for Postgres)
+neuralguard canary-mint        # mint per-session canary tokens
+neuralguard tenants list|info  # read-only effective tenant config
+neuralguard version
+```
+
+---
+
+## Development
+
+```bash
+# Quality gate (what CI enforces)
+uv sync --extra dev --extra db
+ruff check src tests && ruff format --check src tests
+mypy src
+pytest tests/unit tests/integration tests/redteam -q
+
+# Full suite with the semantic layer (regenerates model + corpus first):
+uv run python scripts/export_onnx.py
+uv run python scripts/rebuild_corpus_vectors.py
+pytest --cov=neuralguard --cov-fail-under=90 -q
+
+# Boot smoke (real uvicorn + HTTP against every endpoint):
+./scripts/smoke_test.sh
+
+# Load/perf gate (p95 + fail-closed-under-load):
+uv run python perf/perf_gate.py
+```
+
+CI (`.github/workflows/ci.yml`) runs on every push:
+
+| Job | What it does |
+|---|---|
+| **lint** | ruff check + format check + mypy strict |
+| **test** | unit / integration / redteam suites on Python 3.11 + 3.12 + the deterministic regression gate |
+| **coverage** | ≥90% gate over the FULL suite — regenerates the ONNX model and rebuilds the semantic corpus from tracked sources, including the Postgres live-fire tests against a real pg service |
+| **security** | blocking `pip-audit` |
+| **sbom** / **sbom-sign** | CycloneDX SBOM, signed + attested keyless with cosign |
+| **boot-smoke** | boots real uvicorn and exercises every endpoint over HTTP with auth |
+| **semantic-smoke** | import/construction smoke for the ONNX stack |
+
+Plus nightly jobs: the [perf gate](.github/workflows/perf.yml) and the
+[bench gate](.github/workflows/bench.yml) (deterministic regression gate +
+the 16-operator mutation gate). All Actions are SHA-pinned; dependabot
+covers actions + pip.
+
+**Current state:** 1,288 tests, 91% measured coverage (90% CI floor),
+mypy strict clean. A nightly bench run and the live-fire receipts document
+real numbers, not aspirations.
+
+### Project structure
+
+```
+NeuralGuard-AI-Firewall/
+├── src/neuralguard/
+│   ├── api/                    # FastAPI app, middleware stack, routes
+│   ├── scanners/               # structural, pattern, semantic (ONNX), judge, Agent Guardian
+│   ├── output/                 # output validation + redaction
+│   ├── audit/                  # hash-chained JSONL/Postgres audit + Ed25519 signing
+│   ├── auth/                   # API keys, tenant binding, JWT issuance, rotation
+│   ├── canary/                 # HMAC canary mint/verify
+│   ├── mcp_gateway/            # intent gate + signed tool-catalog baselines
+│   ├── proxy/                  # appliance proxy + reasoning-token output scan
+│   ├── siem/                   # Splunk HEC / webhook / ScarletAI fan-out
+│   ├── tenants/                # per-tenant config registry
+│   └── rules/                  # rule packs (PI/JB/EXT/EXF/MEM/SC/RA, EN + i18n)
+├── benchmarks/ng_vs_ns/        # NeuralStrike↔NeuralGuard harness + dated results
+├── corpus/                     # semantic attack corpus + benign hard negatives
+├── deploy/                     # docker compose (prod, appliance, fleet) + Kubernetes
+├── docs/                       # runbooks, FPR SLO, public roadmap, threat model
+├── models/                     # ONNX export scripts (binaries regenerated, not committed)
+├── perf/                       # load/perf gate
+├── scripts/                    # smoke test, ONNX export, corpus rebuild
+├── tenants/                    # per-tenant config samples
+├── tests/                      # unit / integration / redteam / benchmarks
+├── .github/workflows/          # ci.yml · bench.yml · perf.yml
+└── pyproject.toml              # deps + tool config; uv.lock for reproducibility
+```
+
+### Contributing
+
+1. Fork, create a feature branch.
+2. Run the quality gate (ruff, mypy strict, targeted tests).
+3. Keep commit messages conventional (`feat:`, `fix:`, `docs:`).
+4. Open a PR against `main`; CI must be green.
+
+New detection rules ship with: a deterministic test, a false-positive
+argument for the benign corpus, and an entry in the coverage surface.
+
+### Status and known open items
+
+Shipped and verified: the layered pipeline, Agent Guardian multi-turn
+detection, canary verification, template analyzer, MCP gateway, appliance
+proxy, per-tenant config, hash-chained + signed audit, SIEM routing, JWT
+auth + rotation, K8s manifests, cosign signing, the full benchmark suite,
+and the fleet purple loop.
+
+Known open items (tracked in the
+[public roadmap](docs/ROADMAP.md)):
+
+- **Streaming** — SSE streaming is refused fail-closed (422) by design; hold-back streaming is future work
+- **Kubernetes cluster drill** — manifests are schema-valid but never applied to a live cluster
+- **JWT residuals** — RS256/OIDC discovery, refresh tokens, Vault/SOPS integration
+- **Cross-worker audit ordering** — signing authenticates each per-worker chain; global ordering needs a WORM sink
+- **i18n native-speaker review** — the rule packs had machine self-audit; human native-speaker sign-off is the one human-gated item
+- **Mutation-robustness follow-up** — context-aware cross-script homoglyph folding (the measured gap is documented, blanket folding deliberately rejected)
+
+---
+
+## Related projects
+
+- **[NeuralStrike](https://github.com/aiagentmackenzie-lang/NeuralStrike)** — the offensive counterpart; the two ship a working attack/defend benchmark pairing
+- **[SecurityScarletAI](https://github.com/aiagentmackenzie-lang/securityscarletai)** — the AI-native SIEM this firewall routes verdicts to (co-resident fleet deployment)
 
 ## License
 
-MIT — See [LICENSE](LICENSE)
+[MIT](LICENSE) — see the LICENSE file.
 
----
-
-**Maintained by:** Raphael (aiagentmackenzie-lang)  
-**Last Updated:** 2026-09-07 (v0.2.1 docs flush — every claim re-verified against code)
+**Maintained by** [aiagentmackenzie-lang](https://github.com/aiagentmackenzie-lang).
