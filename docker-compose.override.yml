@@ -1,0 +1,34 @@
+# Full-suite prod override (2026-09-23, Mackenzie) — enables the layers the
+# base compose does not expose: semantic scanner, LLM-as-Judge, agent
+# guardian, canary tokens. Auto-loaded by `docker compose`.
+#
+# Judge egress note (F10.3): judge_allow_egress=true is the documented opt-in
+# for a non-loopback judge endpoint. The endpoint here is the HOST machine's
+# own Ollama (no internet egress); startup logs it loudly and /v1/ready
+# surfaces it.
+services:
+  neuralguard:
+    environment:
+      NEURALGUARD_SCANNER_SEMANTIC_ENABLED: "true"
+      NEURALGUARD_SCANNER_JUDGE_ENABLED: "true"
+      NEURALGUARD_SCANNER_JUDGE_MODEL: phi4-mini:latest
+      NEURALGUARD_SCANNER_JUDGE_OLLAMA_URL: http://host.docker.internal:11434
+      NEURALGUARD_SCANNER_JUDGE_ALLOW_EGRESS: "true"
+      NEURALGUARD_SCANNER_JUDGE_TIMEOUT_SECONDS: "20"
+      NEURALGUARD_AGENT_GUARDIAN_ENABLED: "true"
+      NEURALGUARD_AGENT_GUARDIAN_BACKEND: memory
+      NEURALGUARD_CANARY_ENABLED: "true"
+      NEURALGUARD_CANARY_SECRET: ${NEURALGUARD_CANARY_SECRET:?set in .env}
+      NEURALGUARD_CANARY_TOKEN_COUNT: "4"
+      # FT-003 (fleet Wave F, Raphael-approved): route NG verdicts into
+      # ScarletAI's /api/v1/ingest (same ECS contract NS telemetry uses).
+      # Values live in .env (gitignored); fail-safe fire-and-forget in the
+      # router — a dead SIEM never affects the firewall verdict.
+      NEURALGUARD_SIEM_ENABLED: ${NEURALGUARD_SIEM_ENABLED:-false}
+      NEURALGUARD_SIEM_SCARLETAI_URL: ${NEURALGUARD_SIEM_SCARLETAI_URL:-}
+      NEURALGUARD_SIEM_SCARLETAI_TOKEN: ${NEURALGUARD_SIEM_SCARLETAI_TOKEN:-}
+      NEURALGUARD_SIEM_SCARLETAI_HOST: ${NEURALGUARD_SIEM_SCARLETAI_HOST:-}
+    volumes:
+      - ./models:/app/models:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

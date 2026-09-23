@@ -247,3 +247,79 @@ class TestCircuitGauge:
         assert scanner.circuit_breaker.allow_request()  # flips OPEN -> HALF_OPEN
         scanner.circuit_breaker.record_success()
         assert calls == [True, False]
+
+
+class TestJudgeThinkFlag:
+    """FT-004 (fleet Wave F): opt-in Ollama 'think' flag on the judge payload.
+
+    Live finding: thinking-capable judges (nemotron-3.5-lightning:30b) derail
+    on the judge prompt — the thinking phase burns the token budget, drifts
+    into victim role-play, and can return empty text (8.2s vs 1.4s clean).
+    The knob is opt-in; the default sends NO think field (fail-closed:
+    non-thinking models and older Ollama builds see a byte-identical
+    payload).
+    """
+
+    def _capture_payload(self, **overrides: object) -> dict[str, object]:
+        captured: dict[str, object] = {}
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, object]:
+                return {
+                    "message": {
+                        "content": '{"is_malicious": false, "verdict": "allow", '
+                        '"confidence": 0.5, "reasoning": "ok"}'
+                    },
+                    "total_duration": 0,
+                }
+
+        class _FakeClient:
+            def __init__(self, *a: object, **kw: object) -> None:
+                pass
+
+            def __enter__(self) -> _FakeClient:
+                return self
+
+            def __exit__(self, *a: object) -> None:
+                return None
+
+            def post(self, url: str, json: dict[str, object]) -> _FakeResponse:
+                captured["payload"] = json
+                return _FakeResponse()
+
+        import neuralguard.semantic.judge as judge_mod
+
+        original_client = judge_mod.httpx.Client
+        judge_mod.httpx.Client = _FakeClient  # type: ignore[misc]
+        try:
+            scanner = _scanner(**overrides)  # type: ignore[arg-type]
+            scanner.scan(
+                EvaluateRequest(prompt="What is 2+2?"),
+                {"semantic_verdict": "escalate"},
+            )
+        finally:
+            judge_mod.httpx.Client = original_client  # type: ignore[assignment]
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        return payload
+
+    def test_default_sends_no_think_field(self) -> None:
+        payload = self._capture_payload()
+        assert "think" not in payload
+
+    def test_false_disables_thinking_explicitly(self) -> None:
+        payload = self._capture_payload(judge_ollama_think=False)
+        assert payload["think"] is False
+
+    def test_true_sends_think_true(self) -> None:
+        payload = self._capture_payload(judge_ollama_think=True)
+        assert payload["think"] is True
+
+    def test_rest_of_payload_unchanged(self) -> None:
+        payload = self._capture_payload(judge_ollama_think=False)
+        assert payload["stream"] is False
+        assert payload["model"]  # model tag present
+        assert "options" in payload and "messages" in payload

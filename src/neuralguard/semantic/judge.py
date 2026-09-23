@@ -443,6 +443,11 @@ class JudgeScanner(BaseScanner["ScannerSettings"]):
                 "num_predict": self.settings.judge_max_tokens,
             },
         }
+        if self.settings.judge_ollama_think is not None:
+            # FT-004 (fleet Wave F): explicit opt-in — send Ollama's think
+            # flag only when configured. Default None keeps the payload
+            # byte-identical to the pre-knob contract.
+            payload["think"] = self.settings.judge_ollama_think
 
         logger.debug("judge_call_start", model=model, text_len=len(text))
 
