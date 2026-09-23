@@ -20,6 +20,13 @@ services:
       NEURALGUARD_CANARY_ENABLED: "true"
       NEURALGUARD_CANARY_SECRET: ${NEURALGUARD_CANARY_SECRET:?set in .env}
       NEURALGUARD_CANARY_TOKEN_COUNT: "4"
+      # FT-003 (fleet Wave F, Raphael-approved): route NG verdicts into
+      # ScarletAI's /api/v1/ingest (same ECS contract NS telemetry uses).
+      # Values live in .env (gitignored); fail-safe fire-and-forget in the
+      # router — a dead SIEM never affects the firewall verdict.
+      NEURALGUARD_SIEM_ENABLED: ${NEURALGUARD_SIEM_ENABLED:-false}
+      NEURALGUARD_SIEM_SCARLETAI_URL: ${NEURALGUARD_SIEM_SCARLETAI_URL:-}
+      NEURALGUARD_SIEM_SCARLETAI_TOKEN: ${NEURALGUARD_SIEM_SCARLETAI_TOKEN:-}
     volumes:
       - ./models:/app/models:ro
     extra_hosts:
