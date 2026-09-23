@@ -277,6 +277,19 @@ class ScannerSettings(BaseSettings):
         default=4,
         description="Max concurrent in-flight judge HTTP calls per worker",
     )
+    judge_ollama_think: bool | None = Field(
+        default=None,
+        description=(
+            "FT-004 (fleet Wave F): explicit Ollama 'think' flag for the judge. "
+            "Thinking-capable judges (nemotron …) derail on the judge prompt: "
+            "the thinking phase burns the token budget, drifts into role-play, "
+            "and can return empty text — measured live 2026-09-23. Set FALSE to "
+            "disable thinking for such judges (fast, clean JSON); set True only "
+            "with a thinking-capable judge you WANT to reason. Default None "
+            "sends NO think field at all (fail-closed: non-thinking models and "
+            "older Ollama builds see an identical payload)."
+        ),
+    )
 
 
 class ActionSettings(BaseSettings):
