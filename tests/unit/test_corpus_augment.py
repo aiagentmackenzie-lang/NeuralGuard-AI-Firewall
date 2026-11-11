@@ -84,3 +84,89 @@ class TestParseBatch:
     def test_refusal_yields_all_empty(self):
         raw = "I'm not going to generate those rewrites."
         assert augment.parse_batch(raw, 3, 4) == [[], [], []]
+
+
+class TestCheckpointMerge:
+    """The checkpoint is append-only; the loader must not discard earlier passes.
+
+    Regression: `load_checkpoint` used to assign ``done[index] = paraphrases``,
+    so a re-run parent's earlier paraphrases silently vanished from the merged
+    view — the corpus could only ever shrink between passes.
+    """
+
+    @staticmethod
+    def _write(path: Path, records: list[dict]) -> None:
+        import json
+
+        path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+    def test_duplicate_index_records_are_merged_not_overwritten(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        checkpoint = tmp_path / "augment_checkpoint.jsonl"
+        self._write(
+            checkpoint,
+            [
+                {"index": 7, "text": "parent", "paraphrases": ["first pass a", "first pass b"]},
+                {"index": 7, "text": "parent", "paraphrases": ["second pass c"]},
+            ],
+        )
+        monkeypatch.setattr(augment, "CHECKPOINT", checkpoint)
+
+        done: dict[int, list[str]] = {}
+        augment.load_checkpoint(done)
+
+        assert done[7] == ["first pass a", "first pass b", "second pass c"]
+
+    def test_identical_paraphrases_across_passes_are_deduped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        checkpoint = tmp_path / "augment_checkpoint.jsonl"
+        self._write(
+            checkpoint,
+            [
+                {"index": 3, "text": "parent", "paraphrases": ["same rewrite"]},
+                {"index": 3, "text": "parent", "paraphrases": ["same rewrite", "new rewrite"]},
+            ],
+        )
+        monkeypatch.setattr(augment, "CHECKPOINT", checkpoint)
+
+        done: dict[int, list[str]] = {}
+        augment.load_checkpoint(done)
+
+        assert done[3] == ["same rewrite", "new rewrite"]
+
+    def test_missing_checkpoint_is_a_noop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(augment, "CHECKPOINT", tmp_path / "absent.jsonl")
+        done: dict[int, list[str]] = {1: ["kept"]}
+        augment.load_checkpoint(done)
+        assert done == {1: ["kept"]}
+
+
+class TestSelectTodo:
+    def test_short_row_is_topped_up(self) -> None:
+        metadata = [{"index": 0, "text": "a", "source": "dataset"}]
+        todo = augment.select_todo(metadata, {0: ["one of three"]}, n_per_vector=3)
+        assert todo == [(0, "a")]
+
+    def test_complete_row_is_skipped(self) -> None:
+        metadata = [{"index": 0, "text": "a", "source": "dataset"}]
+        todo = augment.select_todo(metadata, {0: ["p1", "p2", "p3"]}, n_per_vector=3)
+        assert todo == []
+
+    def test_paraphrase_rows_are_never_re_augmented(self) -> None:
+        metadata = [{"index": 0, "text": "derived", "source": "paraphrase-mistral:7b"}]
+        assert augment.select_todo(metadata, {}, n_per_vector=3) == []
+
+    def test_order_and_limit_preserved(self) -> None:
+        metadata = [
+            {"index": 0, "text": "a", "source": "dataset"},
+            {"index": 1, "text": "b", "source": "dataset"},
+            {"index": 2, "text": "c", "source": "dataset"},
+        ]
+        assert augment.select_todo(metadata, {}, n_per_vector=1, limit=2) == [
+            (0, "a"),
+            (1, "b"),
+        ]

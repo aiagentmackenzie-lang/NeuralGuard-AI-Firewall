@@ -17,16 +17,34 @@ git-tracked sources that capture its end state:
     parent index (the F12 checkpoint the finalize step consumed).
 
 Replaying dedup → conversational hygiene → embedding → benign guard over those
-sources is deterministic given the embedding model. HONEST NOTE (measured
-2026-09-05): the rebuild yields 6,503 vectors vs the shipped 7,623 — the
-augment script's checkpoint OVERWRITES the row per parent index on every
-pass, so paraphrases from earlier passes for re-attempted parents (~1,120)
-are in the shipped artifact but not reconstructible from the final checkpoint.
-The rebuild is therefore a faithful SUBSET, not an identical copy. The arbiter
-of its fitness is the A1 regression gate: run with the rebuilt corpus it
-PASSES (ASR 0.00% / FPR 0.00%, exit 0), so CI tests a corpus that is
-detection-equivalent on the gated set. The shipped appliance artifact (7,623)
-is built on the operator machine and stays gitignored.
+sources is deterministic given the embedding model.
+
+HONEST NOTE (measured 2026-09-05, re-verified 2026-11-11): the rebuild yields
+**6,503 vectors**, not the 7,623 the README used to headline. The tracked
+checkpoint holds 5,176 paraphrases across 1,331 unique parent indexes; the
+1,120-vector difference came from an operator-machine artifact whose
+generation checkpoint was never fully captured in the tracked copy, so it is
+not reconstructible from what is committed. The rebuild is therefore a
+faithful SUBSET, not an identical copy. The arbiter of its fitness is the A1
+regression gate: run with the rebuilt corpus it PASSES (ASR 0.00% / FPR
+0.00%, exit 0), so CI tests a corpus that is **detection-equivalent on the
+gated set**. README + ``docs/FPR_SLO.md`` state 6,503 as the reproducible
+figure.
+
+Root cause fixed 2026-11-11: ``scripts/augment_attack_corpus.py`` loaded the
+checkpoint last-write-wins per parent index and treated a short row as
+complete. ``load_checkpoint`` now merges + dedupes (the file is append-only,
+so earlier passes are no longer discarded) and ``generate`` tops up a parent
+with fewer than ``n_per_vector`` paraphrases instead of accepting it
+permanently. The committed checkpoint predates that fix, which is why the
+1,120 remain gone from this file.
+
+They are, however, re-achievable. The tracked checkpoint averages 3.69
+paraphrases per parent and 67 parents hold none, so a re-run at the default
+``--n 4`` queues 139 parents and projects to ~7,100 vectors before the
+hygiene drops (~10 in the shipped run). That is a generation job (local
+Ollama), not a source-control fix: the tracked rebuild stays at 6,503 until
+it runs.
 
 Usage (CI order):
 
