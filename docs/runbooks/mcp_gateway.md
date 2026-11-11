@@ -1,4 +1,4 @@
-# Runbook — MCP Gateway (NG-7 / NG-8)
+# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10)
 
 *Shipped 2026-09-07. The MCP gateway turns NeuralGuard into an intent-gated,
 rug-pull-refusing passthrough in front of ONE MCP server (streamable-HTTP
@@ -56,6 +56,70 @@ mcp:
 
 Most-restrictive-wins when both a method rule and a tool rule apply
 (DENY > ESCALATE > ALLOW).
+
+### Argument and resource constraints (NG-10)
+
+The Intent Gate says *whether* a tool may run; `tool_constraints` says *how* it
+may be asked. Constraints are evaluated on the parsed `params.arguments` of a
+`tools/call`, before the upstream is contacted, and every configured rule is
+evaluated so the strictest violation wins (DENY > ESCALATE > ALLOW) regardless
+of declaration order.
+
+```yaml
+tenant_id: acme
+mcp:
+  tool_rules:
+    delete_file: deny
+  tool_constraints:
+    read_file:
+      - argument: path
+        kind: required
+      - argument: path
+        kind: path_prefix
+        values: ["/srv/tenant-data"]
+        reason: "tenant data lives under /srv/tenant-data"
+    http_get:
+      - argument: url
+        kind: url_host
+        values: ["api.internal.example"]      # host + subdomains
+    run_query:
+      - argument: ""
+        kind: key_allowlist                   # top-level keys only
+        values: ["query", "limit"]
+      - argument: "query"
+        kind: regex_deny
+        values: ["(?i)\\b(drop|truncate|grant)\\b"]
+      - argument: "limit"
+        kind: max_length
+        values: ["4"]
+```
+
+Kinds: `required`, `key_allowlist`, `enum`, `max_length`, `regex_deny`,
+`path_prefix`, `path_glob`, `url_host`. `argument` is a dotted path
+(`options.format`); `""` addresses the arguments object (key_allowlist).
+Set `action: escalate` to refuse-but-audit instead of a hard DENY.
+
+Semantics worth knowing before writing a policy:
+
+- **Absent is vacuous** — a rule for an argument that is not present does not
+  fire. Add `required` when the argument must exist. Without this, every
+  optional argument would need a paired rule and one omission would widen the
+  policy.
+- **Non-strings fail closed** — a list or boolean where a path/URL is expected
+  is `MCP-ARG-009`, not a skipped check.
+- **Path checks normalize first** — `..` segments, backslashes and NUL bytes
+  are refused outright; prefix matching is boundary-aware (`/srv/data-evil`
+  does not match `/srv/data`).
+- **URL host checks resolve the real host** — scheme must be http(s);
+  `https://allowed.example@evil.test/` is evaluated as `evil.test`.
+- **Values never reach the audit trail** — findings carry the argument path,
+  the rule id, and the failure kind. `key_allowlist` names the extra keys, not
+  their values.
+
+This is a boundary check on declared arguments, **not a sandbox**: it stops a
+confused or coerced agent from asking for the wrong thing. It does not confine
+an upstream tool that ignores its own arguments, and path checks are
+string-level — no symlink resolution.
 
 ## Drift recovery (the operator's part)
 
@@ -124,6 +188,13 @@ have not fetched).
   immediate follow-up for the indirect-injection-in-tool-results class.
 - **ESCALATE = refuse + audit** in this build. A human-approval callback
   flow is future work.
+- **NG-10 is not confinement.** Argument constraints are string-level boundary
+  checks on what the caller *declares*. They do not sandbox the upstream tool,
+  do not resolve symlinks, and do not cover arguments a tool derives on its
+  own. Tool-result scanning (above) remains the other half of the story.
+- **No trusted workload identity yet.** Constraints are per tenant, not per
+  agent: every caller authenticated as the same tenant is treated alike. Agent
+  identity and per-tool scoped credentials are the next gate.
 
 ## Verification drill
 

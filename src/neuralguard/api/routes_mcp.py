@@ -10,7 +10,12 @@ Flow (in order):
    path and the seam the MCP 2026-07-28 spec created for gateways.
 2. **Body parse + smuggling check**: the JSON-RPC body's declared intent
    must agree with the headers (a mismatch is smuggling — BLOCK).
-3. **NG-7 baseliner**:
+3. **NG-10 argument constraints (pre-forward)**: for ``tools/call``, the
+   tenant's per-tool constraints over the parsed arguments (path/URL
+   allowlists, enums, lengths, deny patterns, required keys). A violation is
+   refused before the upstream is contacted; findings carry the argument
+   *path* and rule, never the value.
+4. **NG-7 baseliner**:
    - ``tools/list``  -> the fetched catalog is checked against the signed
      baseline; strict mode withholds a drifted catalog (403 + drift
      report), advisory passes it with an alert header + audit event.
@@ -18,7 +23,7 @@ Flow (in order):
      the catalog never contained is a rug-pull execute — refused in every
      mode).
    - anything else   -> passthrough (the Intent Gate verdict already applied).
-4. **Audit**: every gate decision and baseline transition is a hash-chained
+5. **Audit**: every gate decision and baseline transition is a hash-chained
    audit event (P2-10 machinery) — SIEM routing sees MCP denials and drift
    in the same tamper-evident trail as scan verdicts.
 
@@ -43,6 +48,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from neuralguard.logging.audit import AuditLogger  # noqa: TC001 - runtime state access
+from neuralguard.mcp.argument_gate import evaluate_arguments
 from neuralguard.mcp.intent_gate import (
     GateDecision,
     McpToolPolicy,
@@ -171,13 +177,17 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         return round((time.perf_counter() - start) * 1000, 2)
 
     def _audit_event(
-        *, verdict: Verdict, decision: GateDecision | None, details: dict[str, Any]
+        *,
+        verdict: Verdict,
+        decision: GateDecision | None,
+        details: dict[str, Any],
+        rule_id: str | None = None,
     ) -> None:
         audit.log_mcp_event(
             request_id=request_id,
             tenant_id=tenant,
             verdict=verdict,
-            rule_id=decision.rule_id if decision else "MCP-ROUTE",
+            rule_id=rule_id or (decision.rule_id if decision else "MCP-ROUTE"),
             method=decision.declared_method if decision else None,
             tool=decision.declared_tool if decision else None,
             details=details,
@@ -235,6 +245,43 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         return _gate_response(mismatch, 403, request_id, _elapsed())
 
     method = body_method or ""
+
+    # ── NG-10: argument / resource constraints (parsed body, before forward) ──
+    # The Intent Gate decided *whether* this tool may run; these decide *how*
+    # it may be asked. Runs pre-network so a denied call never reaches the
+    # upstream. Argument VALUES never enter the audit trail — only the path
+    # and the rule that fired.
+    if method == "tools/call":
+        params = payload.get("params")
+        call_arguments: Any = params.get("arguments") if isinstance(params, dict) else None
+        arg_decision = evaluate_arguments(policy, body_tool or "", call_arguments)
+        if arg_decision.action is not ToolAction.ALLOW:
+            escalated = arg_decision.action is ToolAction.ESCALATE
+            metrics.record_mcp_gate("argument_escalate" if escalated else "argument_deny")
+            _audit_event(
+                verdict=Verdict.ESCALATE if escalated else Verdict.BLOCK,
+                decision=None,
+                rule_id=arg_decision.rule_id,
+                details={
+                    "outcome": "argument_escalate" if escalated else "argument_deny",
+                    "argument": arg_decision.argument,
+                    "constraint_kind": arg_decision.kind,
+                    "reason": arg_decision.reason,
+                },
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "mcp_argument_escalated" if escalated else "mcp_argument_denied",
+                    "rule_id": arg_decision.rule_id,
+                    "reason": arg_decision.reason,
+                    "argument": arg_decision.argument,
+                    "tool": body_tool,
+                    "request_id": request_id,
+                },
+                headers={_VERDICT_HEADER: (Verdict.ESCALATE if escalated else Verdict.BLOCK).value},
+            )
+
     catalog_sig = lower_headers.get(_CATALOG_SIG_HEADER.lower())
     # NG-9: session attribution (MCP spec header). None = session-less client;
     # the provenance gate then uses the shared tenant bucket (or refuses,

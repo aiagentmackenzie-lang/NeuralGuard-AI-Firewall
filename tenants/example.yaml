@@ -26,3 +26,34 @@ scanners:
   agent_guardian: null   # inherit global NEURALGUARD_AGENT_GUARDIAN_ENABLED
   semantic: false        # this tenant opts out of the semantic layer
   judge: null            # inherit global NEURALGUARD_SCANNER_JUDGE_ENABLED
+# --- MCP policy (NG-8 Intent Gate + NG-10 argument constraints) -------------
+# Only applies when the gateway is enabled (NEURALGUARD_MCP_ENABLED=true).
+# mcp:
+#   tool_rules:                 # per-tool intent: allow | deny | escalate
+#     delete_file: deny
+#     deploy_prod: escalate
+#   method_rules:               # per-MCP-method intent
+#     resources/list: allow
+#   default_tool_action: allow  # set deny for a default-deny tenant
+#   egress_tools: ["send_email"]  # NG-9 provenance checks apply to these only
+#   tool_constraints:           # NG-10: HOW a tool may be asked
+#     read_file:
+#       - argument: path
+#         kind: required
+#       - argument: path
+#         kind: path_prefix
+#         values: ["/srv/tenant-data"]
+#     http_get:
+#       - argument: url
+#         kind: url_host
+#         values: ["api.internal.example"]
+#     run_query:
+#       - argument: ""
+#         kind: key_allowlist
+#         values: ["query", "limit"]
+#       - argument: query
+#         kind: regex_deny
+#         values: ['(?i)\\b(drop|truncate)\\b']
+#   # Kinds: required, key_allowlist, enum, max_length, regex_deny,
+#   #        path_prefix, path_glob, url_host. Absent arguments are vacuous;
+#   #        add `required` when an argument must be present.

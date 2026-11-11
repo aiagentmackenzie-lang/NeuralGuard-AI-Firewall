@@ -7,7 +7,7 @@
 > the public repo.
 >
 > **Plan, not a promise:** scope and ordering adjust with evidence from
-> each phase. **Last updated:** 2026-09-21.
+> each phase. **Last updated:** 2026-11-11.
 
 ---
 
@@ -22,7 +22,7 @@ All of the following are merged, CI-gated, and documented in the
 | Agent Guardian — multi-turn detection (delayed injection, role drift, gradual extraction/memory poisoning) | Shipped |
 | Canary token mint/verify (HMAC-SHA256, no server-side token store) | Shipped |
 | Prompt-template analyzer (static injection-sink analysis, CI-able) | Shipped |
-| MCP gateway — per-tool intent gate + Ed25519-signed tool-catalog baselines (rug-pull refusal) | Shipped |
+| MCP gateway — per-tool intent gate, per-tool argument/resource constraints (NG-10), Ed25519-signed tool-catalog baselines (rug-pull refusal) | Shipped |
 | Appliance proxy in front of any OpenAI-compatible upstream | Shipped |
 | Per-tenant configuration (fail-safe overlay, hot-reload, mandatory core layers) | Shipped |
 | JWT bearer auth + runtime key rotation | Shipped |
@@ -52,6 +52,7 @@ done until it is merged, CI-gated, and documented.
 | **Cross-worker audit ordering** | Per-worker chains are hash-authenticated; **global** write ordering needs a WORM sink or DB sequence | Full-order tamper evidence | Planned |
 | **i18n native-speaker sign-off** | The rule packs had a machine self-audit (all 5 defects it found were fixed and re-verified); one language needs a human native-speaker pass (~10 min worksheet in [`i18n_native_review_request.md`](i18n_native_review_request.md)); the other languages stay deferred with an honest README residual | Machine self-audit is not human review — say so | Open (human-gated) |
 | **Context-aware homoglyph folding** | The mutation-robustness gate measured the cross-script homoglyph gap (~96% for that class); blanket folding would corrupt legitimate mixed-script text, so the fix is deliberately context-aware | Closes the largest documented deterministic-layer gap | Planned (feeds the i18n/normalizer item) |
+| **Trusted agent identity + scoped per-tool credentials** | Constraints are per tenant today, so every caller authenticated as the same tenant is treated alike — and one upstream bearer token serves all tools. Workload identity + per-tool credentials is the missing half of "enforced tool authorization" | A shared tenant identity cannot express "agent A may read, agent B may not" | Planned |
 | **HITL callback for MCP ESCALATE** | The MCP gateway currently refuses + audits on ESCALATE; a human-in-the-loop callback would complete the loop | Completeness of the intent-gate story | Under consideration |
 
 ---
