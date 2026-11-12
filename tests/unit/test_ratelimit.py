@@ -122,3 +122,56 @@ class TestCostBasedKnobWiring:
         assert settings.cost_units_per_minute == 123
         assert RateLimitSettings().cost_based is False
         assert RateLimitSettings().cost_units_per_minute == 100_000
+
+
+class TestProbePathsBypassRateLimit:
+    """Kubelet probes must never be rate-limited (K8s cluster drill finding).
+
+    With the limiter in front of /v1/ready, a 429 marks a healthy pod
+    NotReady; with redis down the dependency-aware 503 was masked by 429.
+    Probes are unauthenticated, share the node IP, and do constant work.
+    """
+
+    @staticmethod
+    def _client():
+        from httpx import ASGITransport, AsyncClient
+
+        from neuralguard.config.settings import (
+            AuditSettings,
+            AuthSettings,
+            NeuralGuardConfig,
+            RateLimitSettings,
+            ServerSettings,
+        )
+        from neuralguard.main import create_app
+
+        config = NeuralGuardConfig(
+            environment="development",
+            server=ServerSettings(log_level="ERROR"),
+            auth=AuthSettings(enabled=False),
+            rate_limit=RateLimitSettings(
+                enabled=True,
+                backend="memory",
+                requests_per_minute=1,
+                burst_size=0,
+            ),
+            audit=AuditSettings(enabled=False),
+        )
+        return AsyncClient(transport=ASGITransport(app=create_app(config)), base_url="http://b")
+
+    async def test_health_and_ready_never_429(self):
+        async with self._client() as client:
+            codes = []
+            for _ in range(6):
+                codes.append((await client.get("/v1/health")).status_code)
+                codes.append((await client.get("/v1/ready")).status_code)
+        assert 429 not in codes, f"probe paths were rate-limited: {codes}"
+
+    async def test_evaluate_still_rate_limited(self):
+        async with self._client() as client:
+            payload = {"prompt": "hello"}
+            codes = [
+                (await client.post("/v1/evaluate", json=payload)).status_code for _ in range(4)
+            ]
+        assert 200 in codes
+        assert 429 in codes, f"the limiter stopped limiting the real API: {codes}"

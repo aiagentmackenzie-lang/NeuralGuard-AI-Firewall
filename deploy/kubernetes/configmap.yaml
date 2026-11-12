@@ -20,6 +20,11 @@ data:
   # ── Auth ── (keys + jwt secret injected from Secret)
   NEURALGUARD_AUTH_ENABLED: "true"
   NEURALGUARD_AUTH_ENFORCE_TENANT_FROM_KEY: "true"
+  # Kubelet readiness probes cannot send an API key. /v1/ready is auth-gated
+  # by default (and 401s every probe, so the pod never goes Ready —
+  # drill-found); the route docstring documents this exact opt-in. /v1/info
+  # and /v1/metrics stay auth-gated.
+  NEURALGUARD_AUTH_PUBLIC_ENDPOINTS: '["/v1/health","/v1/ready"]'
   # Runtime key rotation: NOT enabled here on purpose — multi-replica
   # rotation needs a shared durable keys file (RWX volume). Env/redeploy is
   # the documented multi-worker rotation path (P2-4); the rotate endpoint

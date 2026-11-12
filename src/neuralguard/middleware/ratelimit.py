@@ -33,6 +33,14 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+# Probe endpoints are NEVER rate-limited. A 429 on /v1/ready makes the kubelet
+# mark a perfectly healthy pod NotReady (and on /v1/health it can restart it):
+# probes cannot send an API key, share the node IP, and are constant-work
+# requests, so counting them turns the limiter into a self-inflicted outage.
+# Found by the Kubernetes cluster drill (2026-11-12): with redis down the
+# readiness probe returned 429 instead of the dependency-aware 503.
+_PROBE_PATHS = frozenset({"/v1/health", "/v1/ready"})
+
 
 class SlidingWindowCounter:
     """In-memory sliding window rate limiter.
@@ -196,6 +204,11 @@ class RateLimitMiddleware:
 
         # Skip non-API paths
         if not request.url.path.startswith("/v1/"):
+            await self.app(scope, receive, send)
+            return
+
+        # Probe paths bypass the limiter (see _PROBE_PATHS).
+        if request.url.path in _PROBE_PATHS:
             await self.app(scope, receive, send)
             return
 
