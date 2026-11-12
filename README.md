@@ -346,6 +346,16 @@ catalogs and refuses all executions until an explicit re-baseline, with
 drift evidence landing in the hash-chained audit trail. Fleet deployments
 add upstream bearer auth a caller can never override.
 
+Beyond *whether* a tool may run, per-tenant **argument and resource
+constraints** decide *how* it may be asked: path prefixes and globs, URL host
+allowlists, enums, length caps, deny patterns, required keys, and a key
+allowlist — evaluated on the parsed arguments before the upstream is
+contacted, most-restrictive-wins, with argument *values* never entering the
+audit trail. Path checks are traversal-hardened and boundary-aware
+(`/srv/data-evil` does not match `/srv/data`). This is a boundary check on
+declared arguments, not a sandbox — the [runbook](docs/runbooks/mcp_gateway.md)
+says so explicitly.
+
 ### Appliance proxy
 
 `docker-compose.appliance.yml` deploys NeuralGuard as a self-contained

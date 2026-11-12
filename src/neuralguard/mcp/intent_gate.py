@@ -26,6 +26,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from neuralguard.mcp.constraints import (
+    ArgumentConstraint,  # noqa: TC001 - runtime pydantic field type
+)
 from neuralguard.models.schemas import Verdict
 
 
@@ -90,6 +93,16 @@ class McpToolPolicy(BaseModel):
             "tools."
         ),
     )
+    tool_constraints: dict[str, list[ArgumentConstraint]] = Field(
+        default_factory=dict,
+        description=(
+            "NG-10: per-tool constraints over the parsed call arguments "
+            "(path/URL allowlists, enums, lengths, deny patterns, required "
+            "keys). Evaluated after the body is parsed and before the call is "
+            "forwarded; absent tools are unconstrained. The Intent Gate decides "
+            "whether a tool may run, these decide how it may be asked."
+        ),
+    )
 
     def action_for(self, method: str, tool: str | None) -> ToolAction:
         """Most-restrictive-wins resolution for one intent.
@@ -122,6 +135,10 @@ class McpToolPolicy(BaseModel):
             "default_tool_action": self.default_tool_action.value,
             "default_method_action": self.default_method_action.value,
             "egress_tools": sorted(self.egress_tools),
+            "tool_constraints": {
+                tool: [c.model_dump(mode="json") for c in rules]
+                for tool, rules in sorted(self.tool_constraints.items())
+            },
         }
 
 
