@@ -240,11 +240,16 @@ class TestResolutionAndMalformedInput:
 class _StubTransport:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.tokens: list[str | None] = []
 
     async def forward(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+        self,
+        payload: dict[str, Any],
+        headers: dict[str, str] | None = None,
+        upstream_token: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append(payload)
+        self.tokens.append(upstream_token)
         if payload.get("method") == "tools/list":
             return {
                 "jsonrpc": "2.0",

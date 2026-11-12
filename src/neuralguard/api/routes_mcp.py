@@ -53,6 +53,7 @@ from fastapi.responses import JSONResponse
 
 from neuralguard.logging.audit import AuditLogger  # noqa: TC001 - runtime state access
 from neuralguard.mcp.argument_gate import evaluate_arguments
+from neuralguard.mcp.credentials import CredentialError, ToolCredentialResolver
 from neuralguard.mcp.intent_gate import (
     GateDecision,
     McpToolPolicy,
@@ -96,6 +97,13 @@ def _baseliner(request: Request) -> Any:
     if baseliner is None:  # pragma: no cover - assembly bug, fail loud
         raise RuntimeError("MCP baseliner not installed on app state")
     return baseliner
+
+
+def _credentials(request: Request) -> ToolCredentialResolver:
+    resolver: ToolCredentialResolver | None = getattr(request.app.state, "mcp_credentials", None)
+    if resolver is None:  # pragma: no cover - assembly bug, fail loud
+        raise RuntimeError("MCP credential resolver not installed on app state")
+    return resolver
 
 
 def _provenance_gate(request: Request) -> ProvenanceGate:
@@ -369,9 +377,52 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         elif prov_state.outcome == "clean":
             metrics.record_mcp_gate("provenance_clean")
 
+    # ── NG-12: select the upstream credential for THIS tool ──
+    # Resolved server-side from the operator's mapping. A mapped-but-unresolvable
+    # reference is refused (503) rather than falling back to the default token:
+    # falling back would hand a scoped call the broad credential.
+    credential_source = "default" if config.mcp.upstream_auth_token else "none"
+    # None = "let the transport use the configured default" (catalog methods
+    # and any non-tool call). Only a resolved per-tool credential pins a value.
+    upstream_token: str | None = None
+    if method == "tools/call":
+        resolver = _credentials(request)
+        try:
+            resolved = resolver.for_tool(body_tool or "")
+        except CredentialError as exc:
+            metrics.record_mcp_gate("credential_unavailable")
+            _audit_event(
+                verdict=Verdict.BLOCK,
+                decision=gate,
+                rule_id="MCP-CRED-001",
+                details={
+                    "outcome": "credential_unavailable",
+                    "credential_source": resolver.source_for(body_tool or ""),
+                    # Message carries the reference/path, never a secret.
+                    "reason": str(exc),
+                },
+            )
+            logger.error(
+                "mcp_credential_unavailable",
+                tool=body_tool,
+                source=resolver.source_for(body_tool or ""),
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "mcp_credential_unavailable",
+                    "rule_id": "MCP-CRED-001",
+                    "tool": body_tool,
+                    "request_id": request_id,
+                },
+                headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+            )
+        upstream_token = resolved.token
+        credential_source = resolved.source
+
     # ── Forward ──
     try:
-        upstream = await transport.forward(payload)
+        upstream = await transport.forward(payload, upstream_token=upstream_token)
     except McpUpstreamError as exc:
         logger.warning("mcp_forward_failed", error=str(exc), method=method)
         return JSONResponse(
@@ -429,7 +480,11 @@ async def mcp_gateway(request: Request) -> JSONResponse:
     _audit_event(
         verdict=Verdict.ALLOW,
         decision=gate,
-        details={"outcome": "forwarded", "body_method": method or None},
+        details={
+            "outcome": "forwarded",
+            "body_method": method or None,
+            "credential_source": credential_source,
+        },
     )
     resp = JSONResponse(status_code=200, content=upstream)
 

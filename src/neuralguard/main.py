@@ -625,6 +625,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     # (NG-8) and the baseliner refuses rug pulls (NG-7).
     app.state.mcp_transport = None
     app.state.mcp_baseliner = None
+    app.state.mcp_credentials = None
     if config.mcp.enabled:
         if not config.mcp.upstream_url.strip():
             raise RuntimeError(
@@ -632,9 +633,28 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
                 "have nowhere to forward. Set NEURALGUARD_MCP_UPSTREAM_URL."
             )
         from neuralguard.mcp.baseliner import McpBaseliner
+        from neuralguard.mcp.credentials import ToolCredentialResolver
         from neuralguard.mcp.provenance import ProvenanceGate
         from neuralguard.mcp.transport import McpTransport
 
+        # NG-12: per-tool upstream credentials (references only; secrets are
+        # read per call so an orchestrator can inject them after boot).
+        app.state.mcp_credentials = ToolCredentialResolver(
+            tool_credentials=config.mcp.tool_credentials,
+            default_token=config.mcp.upstream_auth_token,
+            require_tool_credential=config.mcp.require_tool_credential,
+        )
+        # Loud but non-fatal: an unresolved reference fails the call it gates
+        # (503) and shows up here by NAME at boot, so a mis-mounted secret is
+        # visible before the first tool call rather than only after it.
+        unresolved = app.state.mcp_credentials.unresolved()
+        if unresolved:
+            structlog.get_logger("neuralguard").warning(
+                "mcp_credential_unresolved",
+                references=unresolved,
+                msg="MCP tool credentials are configured but currently unresolvable; "
+                "calls for those tools will be refused until the secrets are present.",
+            )
         app.state.mcp_transport = McpTransport(config.mcp)
         app.state.mcp_baseliner = McpBaseliner(
             server_id=config.mcp.server_id,
@@ -658,6 +678,8 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             signed_baselines=bool(config.mcp.signing_seed),
             require_signature_on_change=config.mcp.require_signature_on_change,
             provenance_mode=config.mcp.provenance_mode,
+            tool_credentials=len(config.mcp.tool_credentials),
+            require_tool_credential=config.mcp.require_tool_credential,
             msg="MCP gateway ENABLED (NG-7/NG-8). Intent Gate on headers "
             "pre-body-parse; tool-catalog rug-pull detection "
             f"({config.mcp.mode} mode).",

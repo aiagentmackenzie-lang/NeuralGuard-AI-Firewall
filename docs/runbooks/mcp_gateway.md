@@ -1,4 +1,4 @@
-# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10 / NG-11)
+# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10 / NG-11 / NG-12)
 
 *Shipped 2026-09-07. The MCP gateway turns NeuralGuard into an intent-gated,
 rug-pull-refusing passthrough in front of ONE MCP server (streamable-HTTP
@@ -178,6 +178,50 @@ Resolution rules, all fail-closed:
 - **Every audit event carries `agent_id`** — explicitly `null` for tenant-level
   credentials, so "which agent did this" is answerable from the trail alone.
 
+### Scoped per-tool upstream credentials (NG-12)
+
+One token for every tool meant the upstream could not tell a read from a
+delete. A tool can now carry its **own** credential, resolved server-side:
+
+```bash
+# JSON in the env var. REFERENCES only — a secret pasted here fails at boot.
+NEURALGUARD_MCP_TOOL_CREDENTIALS='{
+  "read_file":   "env:READONLY_TOKEN",
+  "admin_sql":   "file:/run/secrets/admin-token"
+}'
+NEURALGUARD_MCP_REQUIRE_TOOL_CREDENTIAL=true   # optional: refuse unmapped tools
+```
+
+Resolution order for `tools/call`:
+
+1. **Mapped tool** → its reference is resolved per call (`env:` or `file:`).
+2. **Unmapped tool** → `UPSTREAM_AUTH_TOKEN` (the default), unless
+   `REQUIRE_TOOL_CREDENTIAL=true`, in which case the call is refused.
+3. **Catalog methods** (`tools/list`, …) → the default token, as before.
+
+Fail-closed rules:
+
+- **A mapped reference that cannot be resolved refuses the call** (`503
+  mcp_credential_unavailable`, `MCP-CRED-001`) — it never falls back to the
+  default. Falling back would hand a deliberately-scoped call the broad token.
+- **Secrets are read per call**, not cached at boot, so an orchestrator can
+  mount/project them after the process starts. Unresolvable references are
+  listed **by name** in a boot warning (`mcp_credential_unresolved`).
+- **Only the reference reaches the audit trail** — never the value. The
+  forwarded event records `credential_source: "env:READONLY_TOKEN"`.
+- **A caller can never supply its own upstream token.** The transport strips
+  any `Authorization` header the caller sent (any casing) before setting the
+  server-side one.
+
+Stated limits, not hidden:
+
+- `file:` references read whatever the process can read. This module checks the
+  secret is non-empty and under 4 KiB (so a mis-pointed PEM bundle fails
+  loudly); it does **not** police filesystem permissions — use a 0600 mount.
+- Credentials are keyed by **tool**, not by agent. Identity (NG-11) narrows
+  *what* an agent may call; the credential narrows *which upstream principal*
+  carries it. Per-(agent, tool) credential selection is future work.
+
 ## Drift recovery (the operator's part)
 
 When strict mode poisons the gateway (drift detected):
@@ -253,10 +297,9 @@ have not fetched).
   key are one agent; per-agent policy is only as precise as the key hygiene
   behind it. Issue one key per agent (the rotation API mints tenant-level keys
   only, so agent-bound keys currently come from configuration).
-- **Scoped credentials are still missing.** One `UPSTREAM_AUTH_TOKEN` serves
-  every tool: identity narrows *what* an agent may call, not *which upstream
-  credential* the call carries. Per-tool credential selection is the next
-  gate, and it stays a server-side mapping — never a caller-supplied header.
+- **Credentials are per tool, not per (agent, tool).** Two agents that may call
+  the same tool share its credential. Selecting by agent as well is future
+  work; it would stay server-side, like the tool mapping.
 
 ## Verification drill
 
