@@ -5,10 +5,9 @@
 #
 # CUSTOM-METRIC scaling (verdict throughput, BLOCK-rate) needs a
 # prometheus-adapter (or KEDA) mapping NeuralGuard's /v1/metrics into the
-# metrics.k8s.io custom metrics API — that mapping cannot be validated
-# without a cluster, so it ships here as a COMMENTED template, to be enabled
-# and validated in the PENDING cluster drill (see deploy/kubernetes/README.md
-# — honestly: not cluster-tested).
+# metrics.k8s.io custom metrics API. The 2026-11-12 cluster drill validated
+# RESOURCE-metric scaling only; no in-cluster Prometheus was installed, so
+# this stays a COMMENTED template (see deploy/kubernetes/README.md).
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

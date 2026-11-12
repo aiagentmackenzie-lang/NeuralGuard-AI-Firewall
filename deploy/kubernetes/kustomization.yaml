@@ -5,9 +5,14 @@
 # VALIDATION STATUS (honest):
 #   - Schema-validated offline with kubeconform against the Kubernetes 1.31
 #     schemas (`kubeconform -strict -summary deploy/kubernetes/`).
-#   - NOT cluster-tested. No cluster exists on the dev machine; the cluster
-#     drill (apply, probes, HPA scaling, prometheus-adapter custom metrics,
-#     rotation path) is PENDING and must not be claimed as done.
+#   - CLUSTER-DRILLED 2026-11-12 (kind v0.33.0 / k8s v1.37.0 on colima):
+#     apply, 2/2 Ready, dependency-aware probes, allow/block verdicts, signed
+#     postgres audit rows, HPA 2->4 on CPU and back down. Seven drill-found
+#     defects were fixed (privilege-drop crash loops, non-numeric USER,
+#     Service env collision, non-setting NEURALGUARD_* helpers, auth-gated
+#     readiness probe, probe rate-limiting). See README.md in this directory.
+#   - NOT drilled: prometheus-adapter custom-metric scaling (template in
+#     hpa.yaml stays commented), ingress/TLS, multi-replica runtime rotation.
 #
 # Topology mirrors docker-compose.appliance.yml:
 #   neuralguard (this chart) + redis (rate-limit + AG session state)

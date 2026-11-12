@@ -28,12 +28,13 @@ All of the following are merged, CI-gated, and documented in the
 | JWT bearer auth + runtime key rotation | Shipped |
 | Hash-chained audit (JSONL/Postgres) + Ed25519 event signing + chain verification | Shipped |
 | SIEM routing (Splunk HEC / webhook / SecurityScarletAI) + block-spike alerting | Shipped |
-| Kubernetes manifests + HPA (schema-validated; cluster drill pending — see open register) | Shipped, drill pending |
+| Kubernetes manifests + HPA (schema-validated **and cluster-drilled** 2026-11-12: apply, probes, HPA scale-out/in, signed audit rows) | Shipped |
 | SBOM + keyless cosign signing/attestation | Shipped |
 | Reasoning-token output scan, decode-then-activate detection, overflow-resistant windowed aggregation | Shipped |
 | Context-aware cross-script homoglyph folding (Cyrillic/Greek confusables; mutation-gate class 96.30% → 0.00%) | Shipped |
 | Benchmark suite: deterministic regression gate, 16-operator mutation gate, live attacker benchmark, multi-turn harness | Shipped |
 | Fleet deployment: co-resident SIEM + the NeuralStrike purple loop (live-fire receipts) | Shipped |
+| Kubernetes cluster drill (kind): apply, 2/2 Ready, dependency-aware probes, HPA 2→4→2, signed postgres audit rows, 7 drill-found fixes | Shipped |
 
 Shipped items carry their detailed status in the README's capability table
 and the benchmark section; this roadmap does not duplicate them.
@@ -48,7 +49,6 @@ done until it is merged, CI-gated, and documented.
 | Item | What it is | Why it matters | Status |
 |---|---|---|---|
 | **SSE hold-back streaming** | Streaming requests are currently refused fail-closed (`422`) by design. Hold-back scanning would let streams start after the prefix is scanned | Real deployments increasingly stream; the refusal is honest but blocks adoption | Planned (demand-driven) |
-| **Kubernetes cluster drill** | Manifests + HPA are schema-validated offline but have never been applied to a live cluster | Schema-valid ≠ applied; the drill is the evidence | Planned |
 | **JWT residuals** | RS256/OIDC discovery (JWKS), refresh tokens, Vault/SOPS secret-manager integration | Enterprise auth completeness | Planned (demand-driven) |
 | **Cross-worker audit ordering** | Per-worker chains are hash-authenticated; **global** write ordering needs a WORM sink or DB sequence | Full-order tamper evidence | Planned |
 | **i18n native-speaker sign-off** | The rule packs had a machine self-audit (all 5 defects it found were fixed and re-verified); one language needs a human native-speaker pass (~10 min worksheet in [`i18n_native_review_request.md`](i18n_native_review_request.md)); the other languages stay deferred with an honest README residual | Machine self-audit is not human review — say so | Open (human-gated) |
