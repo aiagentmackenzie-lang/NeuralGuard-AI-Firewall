@@ -23,7 +23,11 @@ Flow (in order):
      the catalog never contained is a rug-pull execute — refused in every
      mode).
    - anything else   -> passthrough (the Intent Gate verdict already applied).
-5. **Audit**: every gate decision and baseline transition is a hash-chained
+5. **NG-11 identity**: the workload agent comes from the authenticated
+   credential (key binding ``key|tenant|agent`` or a JWT ``agent`` claim) and
+   narrows, never widens, the tenant's policy. It is recorded on every audit
+   event.
+6. **Audit**: every gate decision and baseline transition is a hash-chained
    audit event (P2-10 machinery) — SIEM routing sees MCP denials and drift
    in the same tamper-evident trail as scan verdicts.
 
@@ -170,6 +174,10 @@ async def mcp_gateway(request: Request) -> JSONResponse:
     transport = _mcp_transport(request)
     baseliner = _baseliner(request)
     tenant = getattr(request.state, "auth_tenant", None) or "default"
+    # NG-11: workload identity, set by the auth middleware from the credential
+    # (key binding or JWT claim). Never read from a header — a caller-supplied
+    # agent id would make every per-agent rule decorative.
+    agent: str | None = getattr(request.state, "auth_agent", None)
     request_id = getattr(request.state, "request_id", None) or f"mcp-{time.time_ns()}"
     start = time.perf_counter()
 
@@ -190,14 +198,19 @@ async def mcp_gateway(request: Request) -> JSONResponse:
             rule_id=rule_id or (decision.rule_id if decision else "MCP-ROUTE"),
             method=decision.declared_method if decision else None,
             tool=decision.declared_tool if decision else None,
-            details=details,
+            # NG-11: attribution is explicit on EVERY event, including the
+            # tenant-level ones (agent_id: null) — "which agent did this" must
+            # be answerable from the audit trail alone.
+            details={**details, "agent_id": agent},
             total_latency_ms=_elapsed(),
         )
 
     # ── NG-8: Intent Gate on headers, BEFORE body parse ──
     lower_headers = {k.lower(): v for k, v in request.headers.items()}
     policy = _tenant_policy(request, tenant)
-    gate = evaluate_intent(lower_headers, policy, headers_required=config.mcp.headers_required)
+    gate = evaluate_intent(
+        lower_headers, policy, headers_required=config.mcp.headers_required, agent=agent
+    )
     metrics.record_mcp_gate(gate.action.value)
 
     if gate.action == ToolAction.DENY:
@@ -254,7 +267,7 @@ async def mcp_gateway(request: Request) -> JSONResponse:
     if method == "tools/call":
         params = payload.get("params")
         call_arguments: Any = params.get("arguments") if isinstance(params, dict) else None
-        arg_decision = evaluate_arguments(policy, body_tool or "", call_arguments)
+        arg_decision = evaluate_arguments(policy, body_tool or "", call_arguments, agent=agent)
         if arg_decision.action is not ToolAction.ALLOW:
             escalated = arg_decision.action is ToolAction.ESCALATE
             metrics.record_mcp_gate("argument_escalate" if escalated else "argument_deny")
