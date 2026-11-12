@@ -85,11 +85,16 @@ class StubTransport:
         self._response = response
         self._by_method = by_method or {}
         self.calls: list[dict[str, Any]] = []
+        self.tokens: list[str | None] = []
 
     async def forward(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+        self,
+        payload: dict[str, Any],
+        headers: dict[str, str] | None = None,
+        upstream_token: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append(payload)
+        self.tokens.append(upstream_token)
         return self._by_method.get(str(payload.get("method")), self._response)
 
     async def aclose(self) -> None:  # pragma: no cover - symmetry

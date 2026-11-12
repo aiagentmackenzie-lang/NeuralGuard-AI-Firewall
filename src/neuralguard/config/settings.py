@@ -956,6 +956,36 @@ class McpGatewaySettings(BaseSettings):
         ),
     )
 
+    tool_credentials: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "NG-12: per-tool upstream credential REFERENCES, e.g. "
+            '{"read_file": "env:READONLY_TOKEN", "admin_sql": "file:/run/secrets/admin"} '
+            "(JSON in the env var). A mapped tool carries ITS credential instead "
+            "of upstream_auth_token. Values are references, never secrets: they "
+            "never appear in audit events or responses. If a mapped reference "
+            "cannot be resolved the call is REFUSED — it never falls back to "
+            "the default token."
+        ),
+    )
+    require_tool_credential: bool = Field(
+        default=False,
+        description=(
+            "NG-12 fail-closed edge: when True, a tools/call for a tool with no "
+            "entry in tool_credentials is REFUSED rather than inheriting "
+            "upstream_auth_token. Set this once every tool has its own "
+            "credential."
+        ),
+    )
+
+    @field_validator("tool_credentials")
+    @classmethod
+    def _validate_credential_refs(cls, v: dict[str, str]) -> dict[str, str]:
+        """Fail at configuration load on a malformed reference, not at call time."""
+        from neuralguard.mcp.credentials import validate_reference
+
+        return {tool: validate_reference(ref) for tool, ref in v.items()}
+
     # NG-9: provenance-lite egress binding (opt-in; off by default).
     provenance_mode: Literal["off", "warn", "block"] = Field(
         default="off",

@@ -43,9 +43,18 @@ class McpTransport:
         return self._client
 
     async def forward(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+        self,
+        payload: dict[str, Any],
+        headers: dict[str, str] | None = None,
+        upstream_token: str | None = None,
     ) -> dict[str, Any]:
         """POST one JSON-RPC message to the upstream MCP endpoint.
+
+        ``upstream_token`` (NG-12) is the credential the route resolved for this
+        call — per-tool when the operator mapped one, otherwise the configured
+        default. Passing ``""`` explicitly sends NO Authorization header. When
+        None, the configured ``upstream_auth_token`` is used (single-token
+        deployments and direct callers).
 
         Raises:
             McpUpstreamError: on connection failure, timeout, non-2xx, or
@@ -63,7 +72,13 @@ class McpTransport:
         # to smuggle its own credentials upstream. The token is held
         # server-side and never logged (log lines carry url/status/body_len
         # only; httpx exception reprs carry the URL, never headers).
-        token = str(getattr(self._settings, "upstream_auth_token", "") or "")
+        if upstream_token is None:
+            token = str(getattr(self._settings, "upstream_auth_token", "") or "")
+        else:
+            token = upstream_token
+        # Caller headers can never win, in any casing.
+        for key in [k for k in forward_headers if k.lower() == "authorization"]:
+            forward_headers.pop(key)
         if token:
             forward_headers["Authorization"] = f"Bearer {token}"
 

@@ -346,6 +346,11 @@ catalogs and refuses all executions until an explicit re-baseline, with
 drift evidence landing in the hash-chained audit trail. Fleet deployments
 add upstream bearer auth a caller can never override.
 
+Each tool can carry its **own** upstream credential (`env:`/`file:` references
+resolved per call, never secrets in config): a mapped tool uses its credential,
+an unresolvable reference refuses the call rather than falling back to the
+broad default, and `require_tool_credential` refuses unmapped tools outright.
+
 Identity is derived from the **credential**, never a request header, and an
 agent can only *narrow* what its tenant allows: `key|tenant|agent` bindings (or
 the `agent` claim on a minted token) drive per-agent tool rules and constraints
