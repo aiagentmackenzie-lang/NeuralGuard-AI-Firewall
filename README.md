@@ -52,8 +52,8 @@ user:
 | Layer | What it catches | Config |
 |---|---|---|
 | **Structural** | Malformed payloads, decompression bombs (8 MiB hard cap) | Always on |
-| **Pattern** | 123 regex/heuristic rules: instruction override, jailbreaks, system-prompt extraction, exfiltration, PII — EN + 50 i18n patterns | Always on |
-| **Semantic** | ONNX embedding similarity (7,623-vector corpus) catches paraphrased/mutated attacks regex misses; windowed pass for Prompt-Overflow-style fragmentation | Optional (`[semantic]` extra) |
+| **Pattern** | 123 regex/heuristic rules (73 English + 50 i18n): instruction override, jailbreaks, system-prompt extraction, exfiltration, PII | Always on |
+| **Semantic** | ONNX embedding similarity (6,503-vector corpus, rebuilt from tracked sources) catches paraphrased/mutated attacks regex misses; windowed pass for Prompt-Overflow-style fragmentation | Optional (`[semantic]` extra) |
 | **Judge** | LLM adjudication (local Ollama) of the ambiguous zone only | Optional |
 | **Agent Guardian** | **Multi-turn** attacks: delayed/garden-path injection, role drift, gradual extraction, gradual memory poisoning | Optional, session-based |
 | **Output validation** | PII redaction, exfil detection, system-prompt leakage, canary-leak detection | On `/v1/scan/output` and the proxy |
@@ -430,7 +430,8 @@ that work is context-aware; the semantic layer is the designed second line.
 Live iterative-jailbreak + context-poisoning attacks replayed through three
 pipeline configurations (18 attacks / 45 benign). Re-measured against the
 paraphrase-augmented semantic corpus (7,623 vectors, 5.4× augmentation with
-build-time hygiene):
+build-time hygiene — the operator-machine artifact at measurement time; a
+clean rebuild from tracked sources yields 6,503, see [Reproduce](#reproduce)):
 
 | Attacker | pattern only | + semantic | + semantic + judge |
 |:--|--:|--:|--:|

@@ -43,6 +43,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -184,6 +185,15 @@ def parse_batch(raw: str, k: int, max_n: int) -> list[list[str]]:
 
 
 def load_checkpoint(done: dict[int, list[str]]) -> None:
+    """Merge every checkpoint record into ``done`` (append-only file).
+
+    Records for the same parent index may appear more than once when a pass is
+    re-run (changed metadata index space, a resumed batch, or a topped-up short
+    row). The file is append-only, so every paraphrase ever generated is still
+    on disk; taking the last record alone would silently drop the earlier ones
+    and shrink the corpus. Merge instead, deduplicating on text and preserving
+    first-seen order, so replaying the file is order-independent.
+    """
     if not CHECKPOINT.exists():
         return
     with open(CHECKPOINT) as f:
@@ -192,7 +202,10 @@ def load_checkpoint(done: dict[int, list[str]]) -> None:
             if not line:
                 continue
             rec = json.loads(line)
-            done[rec["index"]] = rec["paraphrases"]
+            bucket = done.setdefault(rec["index"], [])
+            for paraphrase in rec["paraphrases"]:
+                if paraphrase not in bucket:
+                    bucket.append(paraphrase)
 
 
 def append_checkpoint(index: int, text: str, paraphrases: list[str], model: str) -> None:
@@ -211,6 +224,32 @@ def append_checkpoint(index: int, text: str, paraphrases: list[str], model: str)
         )
 
 
+def select_todo(
+    metadata: list[dict[str, Any]],
+    done: dict[int, list[str]],
+    n_per_vector: int,
+    limit: int | None = None,
+) -> list[tuple[int, str]]:
+    """Parents still owed paraphrases, in metadata order.
+
+    A parent counts as done only once it holds ``n_per_vector`` paraphrases. A
+    short row is re-queued so a later pass tops it up — previously any record
+    at all marked the parent complete, so one partial pass capped it forever.
+    Paraphrase rows are never re-augmented (they are already derived).
+    """
+    todo: list[tuple[int, str]] = []
+    for m in metadata:
+        idx = m["index"]
+        if len(done.get(idx, [])) >= n_per_vector:
+            continue
+        if m.get("source", "").startswith("paraphrase"):
+            continue
+        todo.append((idx, m["text"]))
+        if limit is not None and len(todo) >= limit:
+            break
+    return todo
+
+
 def generate(
     host: str,
     model: str,
@@ -224,16 +263,7 @@ def generate(
     load_checkpoint(done)
     print(f"checkpoint: {len(done)} vector(s) already augmented")
 
-    todo: list[tuple[int, str]] = []
-    for m in metadata:
-        idx = m["index"]
-        if idx in done:
-            continue
-        if m.get("source", "").startswith("paraphrase"):
-            continue
-        todo.append((idx, m["text"]))
-        if limit is not None and len(todo) >= limit:
-            break
+    todo = select_todo(metadata, done, n_per_vector, limit)
     print(f"to augment: {len(todo)} vector(s) in batches of {batch}")
 
     token = f"ATK-{int(time.time())}"
@@ -279,7 +309,10 @@ def generate(
                 fail += 1
                 continue
             append_checkpoint(idx, text, paraphrases, model)
-            done[idx] = paraphrases
+            bucket = done.setdefault(idx, [])
+            for paraphrase in paraphrases:
+                if paraphrase not in bucket:
+                    bucket.append(paraphrase)
             wrote += 1
         ok += wrote
         finished = pos + len(chunk)
