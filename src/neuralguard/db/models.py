@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import TIMESTAMP, Float, Index, Integer, String
+from sqlalchemy import TIMESTAMP, BigInteger, Float, Index, Integer, Sequence, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -54,6 +54,17 @@ class AuditEventORM(Base):
     # postgres-audit deployment keeps its signatures at rest; previously only
     # the JSONL path carried event_sig (the pg insert dropped it).
     event_sig: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # P2-10 residual (closed 2026-11-12): cross-worker global ordering.
+    # global_seq is a DB sequence (total order of insert); the global hash
+    # links each event to its true committed predecessor. Nullable so rows
+    # written before this column existed (added via the lifespan's idempotent
+    # ALTER) remain readable — verification treats NULL as "outside the
+    # global chain" and starts the walk at the first chained row.
+    global_seq: Mapped[int | None] = mapped_column(
+        BigInteger, Sequence("audit_global_seq"), index=True, nullable=True
+    )
+    global_prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    global_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
 
     __table_args__ = (Index("ix_audit_tenant_timestamp", "tenant_id", "timestamp"),)
 

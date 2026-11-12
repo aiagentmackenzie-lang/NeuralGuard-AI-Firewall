@@ -191,6 +191,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS event_sig VARCHAR(128)"
                     )
                 )
+                # P2-10 residual: cross-worker global ordering (2026-11-12).
+                # Same idempotent-migration pattern: create_all does not
+                # alter existing tables, so add the sequence + columns for
+                # deployments that predate them. Nullable by design — legacy
+                # rows stay readable and are reported as outside the chain.
+                await conn.execute(_text("CREATE SEQUENCE IF NOT EXISTS audit_global_seq"))
+                await conn.execute(
+                    _text("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS global_seq BIGINT")
+                )
+                await conn.execute(
+                    _text(
+                        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS "
+                        "global_prev_hash VARCHAR(64)"
+                    )
+                )
+                await conn.execute(
+                    _text(
+                        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS global_hash VARCHAR(64)"
+                    )
+                )
+                await conn.execute(
+                    _text(
+                        "CREATE INDEX IF NOT EXISTS ix_audit_events_global_seq "
+                        "ON audit_events (global_seq)"
+                    )
+                )
             structlog.get_logger("neuralguard").info("db_tables_created", backend="postgres")
         except ImportError:
             structlog.get_logger("neuralguard").warning(

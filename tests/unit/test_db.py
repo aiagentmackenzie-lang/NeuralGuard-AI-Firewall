@@ -102,6 +102,9 @@ class TestAuditEventORM:
             "prev_hash",
             "event_hash",
             "event_sig",
+            "global_seq",
+            "global_prev_hash",
+            "global_hash",
         }
         actual_columns = {c.name for c in AuditEventORM.__table__.columns}
         assert expected_columns == actual_columns

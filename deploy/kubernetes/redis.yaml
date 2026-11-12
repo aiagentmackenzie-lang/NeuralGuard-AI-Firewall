@@ -21,18 +21,37 @@ spec:
       labels:
         app.kubernetes.io/name: redis
     spec:
+      # The official redis image's entrypoint drops privileges via setpriv when
+      # it starts as root; with allowPrivilegeEscalation:false + capabilities
+      # dropped (correct), that setresuid FAILS and the container crash-loops.
+      # Pin the image's own user/group instead so no privilege drop is needed.
+      # uids verified from the published image: uid 999, gid 1000.
+      # Kubernetes injects every Service as <NAME>_<PORT> env (here
+      # NEURALGUARD_PORT=tcp://...), which collides with the app's own
+      # NEURALGUARD_PORT setting and crashes boot (drill-found). Also stops
+      # cluster topology leaking into the container env.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: redis
           image: redis:7-alpine
           # requirepass: the rate-limit and AG-state backends are shared
           # security state (mirrors the appliance compose posture) — the
           # password comes from neuralguard-secrets (redis-password key).
+          # --save "" : state here is ephemeral coordination state; RDB saves
+          # are pointless and need a writable CWD (readOnlyRootFilesystem).
           args:
             - "redis-server"
             - "--maxmemory"
             - "256mb"
             - "--maxmemory-policy"
             - "noeviction"
+            - "--save"
+            - ""
             - "--requirepass"
             - "$(REDIS_PASSWORD)"
           # REDISCLI_AUTH authenticates the probes without the password on a
@@ -65,11 +84,17 @@ spec:
               command: ["redis-cli", "ping"]
             initialDelaySeconds: 10
             periodSeconds: 30
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+      volumes:
+        - name: redis-data
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

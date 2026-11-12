@@ -27,7 +27,7 @@ import sqlalchemy
 from neuralguard.config.settings import AuditSettings
 from neuralguard.db.engine import get_engine
 from neuralguard.logging.audit import AuditLogger
-from neuralguard.logging.verify import verify_audit_postgres
+from neuralguard.logging.verify import GLOBAL_CHAIN_ID, verify_audit_postgres
 from neuralguard.models.schemas import (
     EvaluateRequest,
     EvaluateResponse,
@@ -182,7 +182,11 @@ class TestVerifyAuditPostgresLive:
         report = await verify_audit_postgres(PG_URL, pubkey_hex=public_key_from_seed(SIGNING_SEED))
         assert report.parse_errors == 0
         assert report.events_parsed == 6
-        assert {c.worker_id for c in report.chains} == {"workerA", "workerB"}
+        assert {c.worker_id for c in report.chains} == {
+            "workerA",
+            "workerB",
+            GLOBAL_CHAIN_ID,
+        }
         assert report.all_valid, f"chains: {report.chains}"
 
     async def test_unsigned_table_rejected_with_pubkey(self, _seeded_db) -> None:
@@ -200,7 +204,10 @@ class TestVerifyAuditPostgresLive:
         await engine.dispose()
         report = await verify_audit_postgres(PG_URL, pubkey_hex="cd" * 32)
         assert not report.all_valid
-        assert all(not c.valid for c in report.chains)
+        # The global-order chain is a hash link, not a signature: it stays
+        # valid here (signing is what rejects unsigned rows, per worker).
+        per_worker = [c for c in report.chains if c.worker_id != GLOBAL_CHAIN_ID]
+        assert per_worker and all(not c.valid for c in per_worker)
 
     async def test_hash_tampering_is_broken(self, _seeded_db) -> None:
         """The core tamper-evidence promise: a modified row breaks its own
@@ -220,7 +227,93 @@ class TestVerifyAuditPostgresLive:
         assert not by_worker["workerB"].valid
 
     async def test_unreachable_postgres_raises(self) -> None:
+        from neuralguard.logging.verify import GLOBAL_CHAIN_ID
         from neuralguard.logging.verify import verify_audit_postgres as v
 
         with pytest.raises(OSError):
             await v("postgresql+asyncpg://postgres:drillpg@127.0.0.1:59999/nodb")
+
+
+class TestGlobalOrderChainLive:
+    """P2-10 residual: cross-worker global ordering, LIVE-FIRE.
+
+    Rows are written by the REAL AuditLogger through the REAL postgres writer
+    (advisory-lock serialized, global hash linked), then verified/re-tampered.
+    """
+
+    @staticmethod
+    def _global_report(report):
+        return next((c for c in report.chains if c.worker_id == GLOBAL_CHAIN_ID), None)
+
+    async def test_honest_table_has_a_valid_global_chain(self, _seeded_db) -> None:
+        report = await verify_audit_postgres(PG_URL)
+        g = self._global_report(report)
+        assert g is not None, "no global-order chain in the report"
+        assert g.event_count == 6
+        assert g.valid, "honest table's global chain reported BROKEN"
+
+    async def test_deleted_middle_row_breaks_the_global_chain(self, _seeded_db) -> None:
+        from sqlalchemy import text
+
+        from neuralguard.db.engine import create_engine
+
+        engine = create_engine(PG_URL)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "DELETE FROM audit_events WHERE global_seq = ("
+                        "SELECT global_seq FROM audit_events ORDER BY global_seq "
+                        "OFFSET 2 LIMIT 1)"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+        report = await verify_audit_postgres(PG_URL)
+        g = self._global_report(report)
+        assert g is not None and not g.valid
+
+    async def test_swapped_write_order_breaks_the_global_chain(self, _seeded_db) -> None:
+        from sqlalchemy import text
+
+        from neuralguard.db.engine import create_engine
+
+        engine = create_engine(PG_URL)
+        try:
+            async with engine.begin() as conn:
+                # Negate two adjacent seq values: their relative order flips
+                # while every hash stays self-consistent.
+                await conn.execute(
+                    text(
+                        "UPDATE audit_events SET global_seq = -global_seq "
+                        "WHERE global_seq IN (SELECT global_seq FROM audit_events "
+                        "ORDER BY global_seq OFFSET 1 LIMIT 2)"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+        report = await verify_audit_postgres(PG_URL)
+        g = self._global_report(report)
+        assert g is not None and not g.valid
+
+    async def test_legacy_rows_without_global_fields_are_not_false_broken(self, _seeded_db) -> None:
+        from sqlalchemy import text
+
+        from neuralguard.db.engine import create_engine
+
+        engine = create_engine(PG_URL)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE audit_events SET global_hash = NULL, "
+                        "global_prev_hash = NULL, global_seq = NULL"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+        report = await verify_audit_postgres(PG_URL)
+        assert self._global_report(report) is None

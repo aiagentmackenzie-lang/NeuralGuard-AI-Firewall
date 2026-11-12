@@ -25,8 +25,19 @@ spec:
         app.kubernetes.io/name: neuralguard
         app.kubernetes.io/part-of: neuralguard-appliance
     spec:
+      # Kubernetes injects every Service as <NAME>_<PORT> env (here
+      # NEURALGUARD_PORT=tcp://...), which collides with the app's own
+      # NEURALGUARD_PORT setting and crashes boot (drill-found). Also stops
+      # cluster topology leaking into the container env.
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
+        # Numeric uid: the image's USER is the NAME "neuralguard", and kubelet
+        # refuses runAsNonRoot against a non-numeric USER (drill-found:
+        # CreateContainerConfigError "container has runAsNonRoot and image has
+        # non-numeric user"). Verified uid/gid from the built image = 999.
+        runAsUser: 999
+        runAsGroup: 999
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -71,7 +82,7 @@ spec:
                 secretKeyRef:
                   name: neuralguard-secrets
                   key: audit-signing-key
-            - name: NEURALGUARD_POSTGRES_PASSWORD
+            - name: PG_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: neuralguard-secrets
@@ -81,19 +92,22 @@ spec:
             # $(VAR) interpolation), not in the non-secret ConfigMap. The
             # password ref must be defined EARLIER in this list than its
             # consumers.
-            - name: NEURALGUARD_REDIS_PASSWORD
+            # Interpolation-only helpers: NOT settings fields. A NEURALGUARD_*
+            # name here trips the production unknown-key refusal at boot
+            # (drill-found) — they would map to no settings field anyway.
+            - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: neuralguard-secrets
                   key: redis-password
             - name: NEURALGUARD_AGENT_GUARDIAN_REDIS_URL
-              value: "redis://:$(NEURALGUARD_REDIS_PASSWORD)@redis:6379/1"
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/1"
             - name: NEURALGUARD_RATELIMIT_REDIS_URL
-              value: "redis://:$(NEURALGUARD_REDIS_PASSWORD)@redis:6379/0"
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
             # K8s $(VAR) interpolation resolves from env defined EARLIER in
             # this same list — the password ref above is deliberately first.
             - name: NEURALGUARD_AUDIT_POSTGRES_URL
-              value: "postgresql+asyncpg://neuralguard:$(NEURALGUARD_POSTGRES_PASSWORD)@postgres:5432/neuralguard"
+              value: "postgresql+asyncpg://neuralguard:$(PG_PASSWORD)@postgres:5432/neuralguard"
           readinessProbe:
             # P1-3 readiness: dependency-aware (refuses ready when a required
             # backend is unreachable).

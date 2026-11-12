@@ -23,6 +23,22 @@ spec:
       labels:
         app.kubernetes.io/name: postgres
     spec:
+      # postgres:16-alpine's entrypoint starts as root, chowns/chmods PGDATA,
+      # then drops to uid 70. With allowPrivilegeEscalation:false + caps
+      # dropped (correct), that drop fails and the container crash-loops with
+      # "chmod: /var/run/postgresql: Operation not permitted". Run AS uid/gid 70
+      # from the start (verified from the published image) and let fsGroup own
+      # the PVC mount.
+      # Kubernetes injects every Service as <NAME>_<PORT> env (here
+      # NEURALGUARD_PORT=tcp://...), which collides with the app's own
+      # NEURALGUARD_PORT setting and crashes boot (drill-found). Also stops
+      # cluster topology leaking into the container env.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
       containers:
         - name: postgres
           image: postgres:16-alpine
@@ -61,10 +77,19 @@ spec:
           volumeMounts:
             - name: pgdata
               mountPath: /var/lib/postgresql/data
+            # The entrypoint chmods /var/run/postgresql; as uid 70 that fails
+            # on the image's root-owned path (drill-found). Give it a tmpfs it
+            # owns.
+            - name: pg-run
+              mountPath: /var/run/postgresql
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+      volumes:
+        - name: pg-run
+          emptyDir:
+            medium: Memory
   volumeClaimTemplates:
     - metadata:
         name: pgdata

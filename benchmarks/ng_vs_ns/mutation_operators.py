@@ -47,13 +47,69 @@ class MutationOperator:
         return self.fn(text)
 
 
-# ── Translation tables (source and target MUST be equal length) ───────────
+# ── Translation tables ───────────────────────────────────────────────────
+#
+# These are written as PAIR-EXPLICIT dicts (not the two-string maketrans
+# form): the two-string form silently accepts a misaligned pair list, and it
+# shipped one — the Cyrillic uppercase rows were rotated by one (P→U+041E,
+# O→U+0425, X→U+0420, C→U+0423, Y→U+0421), plus two "Greek" entries that
+# were actually Cyrillic and one that is not a confusable at all (n→U+03BD,
+# which is a lookalike of v, not n).
+# A substitution that is not a real lookalike is unrecoverable information
+# loss — it measures noise, not a homoglyph attack. The invariant is pinned
+# by `test_operator_substitutions_round_trip_through_the_fold`.
 
-# Latin → Cyrillic lookalikes (the classic homoglyph set).
-_CYRILLIC_MAP = str.maketrans("aeoxpycijsAEPOXCY", "аеохрусіјѕАЕОХРУС")
+# Latin → Cyrillic lookalikes (Unicode confusables.txt, the classic set).
+_CYRILLIC_PAIRS = {
+    "a": "\u0430",
+    "e": "\u0435",
+    "o": "\u043e",
+    "x": "\u0445",
+    "p": "\u0440",
+    "y": "\u0443",
+    "c": "\u0441",
+    "i": "\u0456",
+    "j": "\u0458",
+    "s": "\u0455",
+    "A": "\u0410",
+    "E": "\u0415",
+    "P": "\u0420",
+    "O": "\u041e",
+    "X": "\u0425",
+    "C": "\u0421",
+    "Y": "\u0423",
+}
+_CYRILLIC_MAP = str.maketrans(_CYRILLIC_PAIRS)
 
-# Latin → Greek lookalikes.
-_GREEK_MAP = str.maketrans("aeiopcnxujAEIOPCNX", "αειορсνχυјΑΕΙΟΡСΝΧ")
+# Latin → Greek lookalikes (Unicode confusables.txt). Latin v→U+03BD (nu),
+# and Latin c→U+03F2 (lunate sigma) — the previous table used Cyrillic
+# U+0441 for c.
+_GREEK_PAIRS = {
+    "a": "\u03b1",
+    "e": "\u03b5",
+    "i": "\u03b9",
+    "o": "\u03bf",
+    "p": "\u03c1",
+    "c": "\u03f2",  # U+03F2 lunate sigma
+    "x": "\u03c7",
+    "u": "\u03c5",
+    "v": "\u03bd",  # U+03BD nu (looks like v)
+    "A": "\u0391",
+    "B": "\u0392",
+    "E": "\u0395",
+    "Z": "\u0396",
+    "H": "\u0397",
+    "I": "\u0399",
+    "K": "\u039a",
+    "M": "\u039c",
+    "N": "\u039d",
+    "O": "\u039f",
+    "P": "\u03a1",
+    "T": "\u03a4",
+    "Y": "\u03a5",
+    "X": "\u03a7",
+}
+_GREEK_MAP = str.maketrans(_GREEK_PAIRS)
 
 # Leetspeak: a→4 e→3 i→1 o→0 s→5 t→7 l→1 g→9.
 _LEET_MAP = str.maketrans("aeiostlgAEIOSTLG", "4310571943105719")

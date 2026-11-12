@@ -132,10 +132,12 @@ as write order).
 
 ## What is NOT covered here
 
-- Cross-worker chain ordering (residual): chains are per-worker; signing
-  (P2-10) authenticates each chain, but restoring the global timeline
-  requires joining on `timestamp` across chains, which is approximate, not
-  strict. A WORM sink / DB-level sequence is the future fix.
+- Cross-worker chain ordering: the postgres backend has a global sequence
+  + hash link (`global_seq`/`global_prev_hash`/`global_hash`) and
+  `audit-verify --pg-url` reports it as `(global-order)`. Restoring a BACKUP
+  keeps the chain intact (it restores the sequence values with the rows).
+  JSONL files remain per-worker, so a cross-backend timeline is still
+  approximate. A WORM sink remains the evidentiary-grade next step.
 - WORM sink: a true write-once target (object lock, S3 Object Lock in
   compliance mode, or a dedicated WORM appliance) is the next step beyond
   these backups for evidentiary-grade retention.

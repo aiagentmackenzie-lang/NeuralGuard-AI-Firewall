@@ -111,6 +111,9 @@ class TestAuditEventORMMapping:
             "prev_hash",
             "event_hash",
             "event_sig",
+            "global_seq",
+            "global_prev_hash",
+            "global_hash",
         }
         actual = {c.name for c in AuditEventORM.__table__.columns}
         assert actual == expected

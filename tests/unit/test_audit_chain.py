@@ -168,3 +168,34 @@ class TestAuditLoggerChain:
         events = self._read_events(tmp_path)
         assert events[1].prev_hash == first_hash
         assert events[1].prev_hash == events[0].event_hash
+
+
+class TestGlobalChainHash:
+    """Cross-worker global ordering (P2-10 residual closed 2026-11-12).
+
+    The pure link function is what the postgres writer stamps and what
+    ``audit-verify --pg-url`` recomputes; the DB-level behaviour is proven
+    live in tests/integration/test_audit_verify_pg.py.
+    """
+
+    def test_global_hash_is_deterministic(self):
+        from neuralguard.logging.chain import compute_global_hash
+
+        a = compute_global_hash("prev", "event")
+        assert a == compute_global_hash("prev", "event")
+        assert len(a) == 64
+
+    def test_global_hash_binds_the_predecessor(self):
+        from neuralguard.logging.chain import compute_global_hash
+
+        assert compute_global_hash("prev-a", "event") != compute_global_hash("prev-b", "event")
+
+    def test_global_hash_binds_the_event(self):
+        from neuralguard.logging.chain import compute_global_hash
+
+        assert compute_global_hash("prev", "event-a") != compute_global_hash("prev", "event-b")
+
+    def test_genesis_uses_empty_predecessor(self):
+        from neuralguard.logging.chain import compute_global_hash
+
+        assert compute_global_hash(None, "event") == compute_global_hash("", "event")

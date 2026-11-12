@@ -10,7 +10,10 @@ ordering + signing), and verifies each chain with
 audit backend: rows are read from the ``audit_events`` table, grouped per
 worker, and each chain is reconstructed by LINK-WALK (prev_hash links —
 SQL row order is not trusted as write order) before hash + signature
-verification.
+verification. It ALSO verifies the cross-worker global chain
+(``global_seq`` order + ``global_prev_hash``/``global_hash`` links) and
+reports it as the ``(global-order)`` chain — a deleted or reordered middle
+row breaks it.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ import structlog
 if TYPE_CHECKING:
     from pathlib import Path
 
-from neuralguard.logging.chain import verify_chain
+from neuralguard.logging.chain import compute_global_hash, verify_chain
 from neuralguard.models.schemas import AuditEvent
 
 logger = structlog.get_logger(__name__)
@@ -188,6 +191,45 @@ def reconstruct_chain_order(events: list[AuditEvent]) -> list[AuditEvent] | None
     return ordered
 
 
+#: Synthetic chain name for the cross-worker global-order check in reports.
+GLOBAL_CHAIN_ID = "(global-order)"
+
+
+def _verify_global_chain(
+    rows: list[tuple[int, str | None, str | None, str | None]],
+) -> ChainReport | None:
+    """Verify the cross-worker global chain (P2-10 residual, postgres).
+
+    ``rows`` are ``(global_seq, global_prev_hash, global_hash, event_hash)``
+    in ANY order; they are sorted by ``global_seq`` (the DB-assigned total
+    order). Every chained row after the first must point at its predecessor's
+    ``global_hash`` and recompute its own, so a middle row deleted or two
+    rows swapped breaks the walk.
+
+    The FIRST chained row's predecessor is not constrained: retention can trim
+    the head, and (like a per-worker chain whose head file was removed) that
+    is undetectable from what remains — the honest limit, documented.
+
+    Returns ``None`` when the table carries no global-chain data at all
+    (pre-upgrade rows / JSONL-only deployments), so old tables do not report
+    a false BROKEN.
+    """
+    chained = [r for r in rows if r[2] is not None]
+    if not chained:
+        return None
+    chained.sort(key=lambda r: r[0])
+    prev: str | None = None
+    for i, (_seq, gprev, ghash, ehash) in enumerate(chained):
+        if ehash is None:
+            return ChainReport(worker_id=GLOBAL_CHAIN_ID, event_count=len(chained), valid=False)
+        if i > 0 and gprev != prev:
+            return ChainReport(worker_id=GLOBAL_CHAIN_ID, event_count=len(chained), valid=False)
+        if ghash != compute_global_hash(gprev, ehash):
+            return ChainReport(worker_id=GLOBAL_CHAIN_ID, event_count=len(chained), valid=False)
+        prev = ghash
+    return ChainReport(worker_id=GLOBAL_CHAIN_ID, event_count=len(chained), valid=True)
+
+
 async def verify_audit_postgres(pg_url: str, pubkey_hex: str | None = None) -> AuditVerifyReport:
     """Verify per-worker chains + optional signatures in the audit_events table.
 
@@ -208,6 +250,7 @@ async def verify_audit_postgres(pg_url: str, pubkey_hex: str | None = None) -> A
 
     engine = db_create_engine(pg_url)
     events: list[AuditEvent] = []
+    global_rows: list[tuple[int, str | None, str | None, str | None]] = []
     parse_errors = 0
     try:
         # ORM entity results REQUIRE a session context — a bare
@@ -218,6 +261,11 @@ async def verify_audit_postgres(pg_url: str, pubkey_hex: str | None = None) -> A
         async with factory() as session:
             rows = (await session.execute(select(AuditEventORM))).scalars().all()
         for row in rows:
+            global_seq = getattr(row, "global_seq", None)
+            if global_seq is not None:
+                global_rows.append(
+                    (int(global_seq), row.global_prev_hash, row.global_hash, row.event_hash)
+                )
             try:
                 events.append(
                     AuditEvent(
@@ -272,4 +320,7 @@ async def verify_audit_postgres(pg_url: str, pubkey_hex: str | None = None) -> A
         report.chains.append(
             ChainReport(worker_id=worker_id, event_count=len(worker_events), valid=valid)
         )
+    global_report = _verify_global_chain(global_rows)
+    if global_report is not None:
+        report.chains.append(global_report)
     return report
