@@ -31,6 +31,14 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in_minutes: int
     tenant: str
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "NG-11 workload identity carried by the token. Echoes the CALLER'S "
+            "binding — it is not requestable: a tenant-level key always mints "
+            "a tenant-level token."
+        ),
+    )
 
 
 class RotateRequest(BaseModel):
@@ -57,19 +65,24 @@ async def issue_token(token_request: TokenRequest, request: Request) -> Any:
     """Exchange a valid credential for a short-lived JWT (P2-4).
 
     The caller is already authenticated (middleware). The token is bound to
-    the caller's tenant — privilege cannot be widened by exchanging.
+    the caller's tenant — privilege cannot be widened by exchanging. NG-11:
+    the caller's workload agent rides along as a claim, so per-agent policy
+    survives token exchange. The agent is taken from the credential's binding,
+    never from the request body: a tenant-level key cannot mint an
+    agent-scoped token.
     """
     jwt_manager = getattr(request.app.state, "jwt_manager", None)
     tenant = getattr(request.state, "auth_tenant", None)
+    agent: str | None = getattr(request.state, "auth_agent", None)
     if jwt_manager is None:
         return JSONResponse(
             status_code=404,
             content={"error": "not_available", "message": "JWT auth is not enabled"},
         )
     assert tenant is not None  # middleware guarantees for authenticated /v1/* calls
-    token = jwt_manager.issue(tenant, ttl_minutes=token_request.ttl_minutes)
+    token = jwt_manager.issue(tenant, ttl_minutes=token_request.ttl_minutes, agent=agent)
     ttl = token_request.ttl_minutes or request.app.state.config.auth.jwt_ttl_minutes
-    return TokenResponse(access_token=token, expires_in_minutes=ttl, tenant=tenant)
+    return TokenResponse(access_token=token, expires_in_minutes=ttl, tenant=tenant, agent=agent)
 
 
 @router.post("/v1/auth/keys/rotate", response_model=RotateResponse)

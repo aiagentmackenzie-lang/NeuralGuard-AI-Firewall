@@ -38,7 +38,7 @@ async def test_middleware_exception_hits_global_handler(monkeypatch: pytest.Monk
     async def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("middleware blew up")
 
-    # Break the runtime-state lookup to simulate an unexpected failure INSIDE
+    # Break the runtime-state resolution to simulate an unexpected failure INSIDE
     # the middleware (not in a route).
     for mw in app.user_middleware:
         pass  # user_middleware entries are factories; patch the built stack below
@@ -56,7 +56,9 @@ async def test_middleware_exception_hits_global_handler(monkeypatch: pytest.Monk
         node = getattr(node, "app", None)
         seen += 1
     assert auth_mw is not None, "AuthMiddleware not found in the built stack"
-    monkeypatch.setattr(type(auth_mw._state), "lookup", boom, raising=True)
+    # NG-11: the middleware resolves a Principal (tenant + agent) rather than
+    # a bare tenant string, so the seam to break is `resolve`.
+    monkeypatch.setattr(type(auth_mw._state), "resolve", boom, raising=True)
 
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

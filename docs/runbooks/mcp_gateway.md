@@ -1,4 +1,4 @@
-# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10)
+# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10 / NG-11)
 
 *Shipped 2026-09-07. The MCP gateway turns NeuralGuard into an intent-gated,
 rug-pull-refusing passthrough in front of ONE MCP server (streamable-HTTP
@@ -121,6 +121,63 @@ confused or coerced agent from asking for the wrong thing. It does not confine
 an upstream tool that ignores its own arguments, and path checks are
 string-level — no symlink resolution.
 
+### Workload identity and per-agent policy (NG-11)
+
+Every caller already authenticates as a tenant. Identity now also names the
+**workload agent** inside that tenant, and the agent can only ever *narrow* what
+the tenant allows.
+
+The identity comes from the credential, never from a header:
+
+```bash
+# config: a key can be bound to one agent
+NEURALGUARD_AUTH_API_KEYS="key-abc...|acme|support-bot,key-def...|acme"
+#                                 ^tenant ^agent      ^tenant only (no agent)
+```
+
+A JWT minted in exchange for that key carries the binding as an `agent` claim,
+so it survives token exchange. **A caller cannot request an agent** — there is
+no field for it on `POST /v1/auth/token`. A header claiming to be an agent is
+ignored, which is the whole point: otherwise every per-agent rule would be
+decorative.
+
+```yaml
+tenant_id: acme
+mcp:
+  tool_rules:
+    read_file: allow          # tenant-wide
+  agent_rules:
+    support-bot:
+      tool_rules:
+        delete_file: deny     # this bot may not delete
+      tool_constraints:       # stacked ON TOP of the tenant's
+        read_file:
+          - argument: path
+            kind: path_prefix
+            values: ["/srv/support"]
+    report-writer:
+      tool_rules:
+        read_file: deny
+  # Callers whose agent is not listed here (including tenant-level keys):
+  default_agent_action: allow   # set deny to enumerate your fleet strictly
+```
+
+Resolution rules, all fail-closed:
+
+- **Narrowing only.** The strictest of the tenant rule and the agent rule wins
+  (DENY > ESCALATE > ALLOW). An agent rule can deny what the tenant allows; it
+  can never allow what the tenant denies, and cannot downgrade ESCALATE.
+- **Constraints stack.** Agent constraints are evaluated *in addition to* the
+  tenant's — a violation of either denies. There is no way to remove a tenant
+  constraint from an agent policy.
+- **Agent rules are tool-scoped.** They apply to `tools/call`; method rules
+  stay a tenant-level concern.
+- **Unlisted is not "any agent".** Once `agent_rules` exists, a caller with an
+  unknown or absent agent is governed by `default_agent_action` (default
+  `allow`, so adding rules for one bot does not lock out everyone else).
+- **Every audit event carries `agent_id`** — explicitly `null` for tenant-level
+  credentials, so "which agent did this" is answerable from the trail alone.
+
 ## Drift recovery (the operator's part)
 
 When strict mode poisons the gateway (drift detected):
@@ -192,9 +249,14 @@ have not fetched).
   checks on what the caller *declares*. They do not sandbox the upstream tool,
   do not resolve symlinks, and do not cover arguments a tool derives on its
   own. Tool-result scanning (above) remains the other half of the story.
-- **No trusted workload identity yet.** Constraints are per tenant, not per
-  agent: every caller authenticated as the same tenant is treated alike. Agent
-  identity and per-tool scoped credentials are the next gate.
+- **Identity is per credential, not per process.** Two workloads sharing one
+  key are one agent; per-agent policy is only as precise as the key hygiene
+  behind it. Issue one key per agent (the rotation API mints tenant-level keys
+  only, so agent-bound keys currently come from configuration).
+- **Scoped credentials are still missing.** One `UPSTREAM_AUTH_TOKEN` serves
+  every tool: identity narrows *what* an agent may call, not *which upstream
+  credential* the call carries. Per-tool credential selection is the next
+  gate, and it stays a server-side mapping — never a caller-supplied header.
 
 ## Verification drill
 

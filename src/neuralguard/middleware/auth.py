@@ -106,6 +106,7 @@ class AuthMiddleware:
             # scope dict, so this is visible to every later layer.
             scope.setdefault("state", {})["authenticated"] = False
             scope["state"]["auth_tenant"] = None
+            scope["state"]["auth_agent"] = None
             await self.app(scope, receive, send)
             return
 
@@ -115,6 +116,7 @@ class AuthMiddleware:
         if path in self.settings.public_endpoints:
             scope.setdefault("state", {})["authenticated"] = False
             scope["state"]["auth_tenant"] = None
+            scope["state"]["auth_agent"] = None
             await self.app(scope, receive, send)
             return
 
@@ -122,6 +124,7 @@ class AuthMiddleware:
         if not path.startswith("/v1/"):
             scope.setdefault("state", {})["authenticated"] = False
             scope["state"]["auth_tenant"] = None
+            scope["state"]["auth_agent"] = None
             await self.app(scope, receive, send)
             return
 
@@ -132,24 +135,28 @@ class AuthMiddleware:
             await self._unauthorized(scope, receive, send, "Missing API key")
             return
 
-        tenant = self._state.lookup(candidate)
-        if tenant is None and self._jwt_manager is not None:
+        principal = self._state.resolve(candidate)
+        if principal is None and self._jwt_manager is not None:
             # Not a static key — try JWT verification (P2-4). Bearer-only:
             # an X-API-Key header is a key by definition, not a token.
             if candidate != candidate.strip() or " " in candidate:
-                tenant = None
+                principal = None
             else:
-                tenant = self._jwt_manager.verify(candidate)
-                if tenant is None:
+                principal = self._jwt_manager.verify_principal(candidate)
+                if principal is None:
                     metrics.record_auth_rejection("invalid_token")
-        if tenant is None:
+        if principal is None:
             logger.warning("auth_invalid_key", path=path)
             metrics.record_auth_rejection("invalid_key")
             await self._unauthorized(scope, receive, send, "Invalid API key")
             return
 
         scope.setdefault("state", {})["authenticated"] = True
-        scope["state"]["auth_tenant"] = tenant
+        # NG-11: identity comes from the credential, never a header. The agent
+        # is None for a tenant-level key, which per-agent policy reads as "not
+        # an enumerated agent" rather than "any agent".
+        scope["state"]["auth_tenant"] = principal.tenant
+        scope["state"]["auth_agent"] = principal.agent
 
         # Enforce tenant binding: the body may carry a tenant_id that must
         # agree with the key's bound tenant. We cannot fully parse the JSON

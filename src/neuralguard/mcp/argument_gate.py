@@ -229,15 +229,24 @@ def evaluate_arguments(
     policy: McpToolPolicy,
     tool: str,
     arguments: Any,
+    agent: str | None = None,
 ) -> ArgumentDecision:
-    """Evaluate a tenant's argument constraints for one ``tools/call``.
+    """Evaluate a tenant's (and agent's) argument constraints for one call.
 
     Every constraint is evaluated; the strictest matching violation wins
     (DENY > ESCALATE > ALLOW) so declaration order cannot widen the policy.
     Returns ALLOW when the tool has no constraints, when every constraint
     passes, or when a non-required constraint's argument is absent. Never raises.
+
+    NG-11: the tenant's constraints and the caller's agent constraints are
+    **stacked**, not replaced — a per-agent policy can add restrictions on top
+    of the tenant's but has no way to remove one (that is why the lists are
+    concatenated rather than overridden).
     """
-    constraints = policy.tool_constraints.get(tool, [])
+    constraints = list(policy.tool_constraints.get(tool, []))
+    agent_layer = policy.agent_policy_for(agent)
+    if agent_layer is not None:
+        constraints.extend(agent_layer.tool_constraints.get(tool, []))
     if not constraints:
         return ArgumentDecision()
 

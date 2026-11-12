@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from neuralguard.auth.principal import Principal, normalize_agent
+
 
 class ServerSettings(BaseSettings):
     """HTTP server configuration."""
@@ -350,7 +352,11 @@ class AuthSettings(BaseSettings):
     enabled: bool = Field(default=False, description="Enable API-key authentication")
     api_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
-        description="API keys. Bare key -> tenant 'default'; '<key>|<tenant>' binds a tenant.",
+        description=(
+            "API keys. Bare key -> tenant 'default'; '<key>|<tenant>' binds a "
+            "tenant; '<key>|<tenant>|<agent>' also binds the NG-11 workload "
+            "agent identity."
+        ),
     )
     public_endpoints: list[str] = Field(
         default_factory=lambda: ["/v1/health"],
@@ -415,16 +421,31 @@ class AuthSettings(BaseSettings):
             return [str(k).strip() for k in v if str(k).strip()]
         return v if isinstance(v, list) else []
 
-    def key_to_tenant(self) -> dict[str, str]:
-        """Return {api_key: tenant_id} mapping from the configured key list."""
-        mapping: dict[str, str] = {}
+    def key_to_principal(self) -> dict[str, Principal]:
+        """Return {api_key: Principal} from the configured key list.
+
+        Entry forms (NG-11 adds the third field):
+
+        - ``<key>``                 -> tenant ``default``, no agent
+        - ``<key>|<tenant>``        -> that tenant, no agent
+        - ``<key>|<tenant>|<agent>``-> that tenant, that workload agent
+
+        The agent id is validated here, at boot: a malformed binding raises
+        rather than silently degrading to a tenant-only credential, because
+        "no agent" is exactly what turns per-agent policy off.
+        """
+        mapping: dict[str, Principal] = {}
         for entry in self.api_keys:
-            if "|" in entry:
-                key, tenant = entry.split("|", 1)
-                mapping[key.strip()] = tenant.strip().lower() or "default"
-            else:
-                mapping[entry.strip()] = "default"
+            parts = entry.split("|")
+            key = parts[0].strip()
+            tenant = (parts[1].strip().lower() if len(parts) > 1 else "") or "default"
+            agent = normalize_agent(parts[2] if len(parts) > 2 else None)
+            mapping[key] = Principal(tenant=tenant, agent=agent)
         return mapping
+
+    def key_to_tenant(self) -> dict[str, str]:
+        """Return {api_key: tenant_id} (tenant-only view; see key_to_principal)."""
+        return {key: principal.tenant for key, principal in self.key_to_principal().items()}
 
 
 class AuditSettings(BaseSettings):

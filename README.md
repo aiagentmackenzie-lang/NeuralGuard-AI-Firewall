@@ -346,6 +346,12 @@ catalogs and refuses all executions until an explicit re-baseline, with
 drift evidence landing in the hash-chained audit trail. Fleet deployments
 add upstream bearer auth a caller can never override.
 
+Identity is derived from the **credential**, never a request header, and an
+agent can only *narrow* what its tenant allows: `key|tenant|agent` bindings (or
+the `agent` claim on a minted token) drive per-agent tool rules and constraints
+that are resolved strictest-wins and stacked on top of the tenant's. Every
+audit event records `agent_id` — explicitly `null` for tenant-level callers.
+
 Beyond *whether* a tool may run, per-tenant **argument and resource
 constraints** decide *how* it may be asked: path prefixes and globs, URL host
 allowlists, enums, length caps, deny patterns, required keys, and a key

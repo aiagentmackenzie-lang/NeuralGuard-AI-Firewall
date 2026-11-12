@@ -49,6 +49,40 @@ _ACTION_TO_VERDICT: dict[ToolAction, Verdict] = {
 }
 
 
+class AgentToolPolicy(BaseModel):
+    """NG-11: what one workload agent may do, inside its tenant.
+
+    Agent rules are **narrowing only**: every applicable action is resolved
+    with the tenant's rules and the strictest wins, and agent constraints are
+    ADDED to the tenant's (both must pass). There is no field here that can
+    widen a tenant policy, which is the property that makes this safe to hand
+    to a per-agent config.
+
+    Tool-scoped on purpose: an agent's rules apply to ``tools/call``. Method
+    rules stay a tenant-level concern (an agent that could allow
+    ``resources/list`` for itself would be re-shaping the gateway, not its own
+    authority).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    tool_rules: dict[str, ToolAction] = Field(
+        default_factory=dict,
+        description="Per-tool action for this agent; resolved strictest-wins "
+        "against the tenant's rule for the same tool.",
+    )
+    default_tool_action: ToolAction | None = Field(
+        default=None,
+        description="Action for a tool with no agent rule. None inherits the "
+        "tenant's default_agent_action (which defaults to allow).",
+    )
+    tool_constraints: dict[str, list[ArgumentConstraint]] = Field(
+        default_factory=dict,
+        description="NG-10 constraints for this agent, evaluated IN ADDITION "
+        "to the tenant's — a violation of either denies.",
+    )
+
+
 class McpToolPolicy(BaseModel):
     """A tenant's per-tool / per-method MCP policy (NG-8).
 
@@ -93,6 +127,25 @@ class McpToolPolicy(BaseModel):
             "tools."
         ),
     )
+    agent_rules: dict[str, AgentToolPolicy] = Field(
+        default_factory=dict,
+        description=(
+            "NG-11: per-workload-agent narrowing, keyed by agent id from the "
+            "authenticated credential. Empty = identity is audited but not "
+            "used for authorization. Non-empty = the agent layer applies to "
+            "every caller, including callers with no agent identity (see "
+            "default_agent_action)."
+        ),
+    )
+    default_agent_action: ToolAction = Field(
+        default=ToolAction.ALLOW,
+        description=(
+            "Action for a caller whose agent is not enumerated in agent_rules "
+            "(including a tenant-level credential with no agent). Deliberately "
+            "ALLOW so adding agent_rules for one bot cannot lock everyone else "
+            "out; operators who are enumerating their fleet set this to deny."
+        ),
+    )
     tool_constraints: dict[str, list[ArgumentConstraint]] = Field(
         default_factory=dict,
         description=(
@@ -104,13 +157,34 @@ class McpToolPolicy(BaseModel):
         ),
     )
 
-    def action_for(self, method: str, tool: str | None) -> ToolAction:
+    def agent_policy_for(self, agent: str | None) -> AgentToolPolicy | None:
+        """The narrowing layer for this caller, or None if identity is unused.
+
+        An unknown or absent agent is NOT "any agent": when the operator has
+        started enumerating agents, an unenumerated caller is governed by
+        ``default_agent_action`` instead of silently escaping the agent layer.
+        """
+        if not self.agent_rules:
+            return None
+        if agent is not None:
+            enumerated = self.agent_rules.get(agent)
+            if enumerated is not None:
+                return enumerated
+        return AgentToolPolicy(default_tool_action=self.default_agent_action)
+
+    def action_for(self, method: str, tool: str | None, agent: str | None = None) -> ToolAction:
         """Most-restrictive-wins resolution for one intent.
 
         Both the method rule and the tool rule apply; the strictest of the
         applicable actions wins (DENY > ESCALATE > ALLOW). Unknown methods
         take ``default_method_action``; unknown tools take
         ``default_tool_action``.
+
+        NG-11: when the caller carries an agent identity and the tenant has
+        agent rules, that agent's layer joins the resolution as one more
+        candidate — so an agent can narrow what its tenant allows but can
+        never widen it. Agent rules are tool-scoped: for a non-``tools/call``
+        method (``tool is None``) the agent layer does not participate.
         """
         candidates: list[ToolAction] = []
         method_rule = self.method_rules.get(method)
@@ -124,6 +198,17 @@ class McpToolPolicy(BaseModel):
                 candidates.append(tool_rule)
             else:
                 candidates.append(self.default_tool_action)
+            agent_layer = self.agent_policy_for(agent)
+            if agent_layer is not None:
+                agent_rule = agent_layer.tool_rules.get(tool)
+                if agent_rule is not None:
+                    candidates.append(agent_rule)
+                else:
+                    candidates.append(
+                        agent_layer.default_tool_action
+                        if agent_layer.default_tool_action is not None
+                        else self.default_agent_action
+                    )
         # strictness: DENY(2) > ESCALATE(1) > ALLOW(0)
         return max(candidates, key=lambda a: _STRICTNESS[a])
 
@@ -138,6 +223,11 @@ class McpToolPolicy(BaseModel):
             "tool_constraints": {
                 tool: [c.model_dump(mode="json") for c in rules]
                 for tool, rules in sorted(self.tool_constraints.items())
+            },
+            "default_agent_action": self.default_agent_action.value,
+            "agent_rules": {
+                agent: rule.model_dump(mode="json")
+                for agent, rule in sorted(self.agent_rules.items())
             },
         }
 
@@ -181,12 +271,17 @@ def evaluate_intent(
     policy: McpToolPolicy,
     *,
     headers_required: bool = True,
+    agent: str | None = None,
 ) -> GateDecision:
     """NG-8 Intent Gate: decide on headers ALONE, before body parse.
 
     ``headers`` is a case-insensitive-able dict (the route passes
     ``{k.lower(): v}``). Returns the decision; the route turns DENY/ESCALATE
     into the right HTTP outcome + audit event and ALLOW into the parse step.
+
+    ``agent`` (NG-11) is the authenticated workload identity, threaded from
+    the credential — never from a header. It participates in resolution only
+    (see :meth:`McpToolPolicy.action_for`).
     """
     method = headers.get(_MCP_METHOD_HEADER.lower(), "").strip()
     tool = headers.get(_MCP_NAME_HEADER.lower(), "").strip() or None
@@ -210,7 +305,7 @@ def evaluate_intent(
             None,
         )
 
-    action = policy.action_for(method, tool)
+    action = policy.action_for(method, tool, agent)
     if action == ToolAction.DENY:
         return _decision(
             ToolAction.DENY,
