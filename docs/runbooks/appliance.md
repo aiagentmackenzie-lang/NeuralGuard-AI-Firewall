@@ -141,10 +141,11 @@ deterministic).
 - Streaming (`stream: true`) is refused with 422 — SSE hold-back scanning is
   a planned follow-up. A control that silently passes unscanned chunks would
   be worse than refusing.
-- Cross-worker audit ordering: chains are per-worker (verify with
-  `audit-verify`, which scopes per worker); signatures authenticate each
-  chain but global ordering still needs a WORM sink / DB sequence. Ed25519
-  event signing itself IS shipped (P2-10) — set `NEURALGUARD_AUDIT_SIGNING_KEY`
+- Cross-worker audit ordering: the POSTGRES backend has a DB-sequence
+  global chain (advisory-lock serialized insert; verify with
+  `audit-verify --pg-url`, the `(global-order)` line). JSONL keeps
+  per-worker chains only — no shared sequencer exists for files. Ed25519
+  event signing IS shipped (P2-10) — set `NEURALGUARD_AUDIT_SIGNING_KEY`
   and verify with `audit-verify --pubkey <hex>`.
 - The 27B judge takes ~20 s/call on the reference box — keep the default
   mistral:7b judge unless the latency budget allows it.

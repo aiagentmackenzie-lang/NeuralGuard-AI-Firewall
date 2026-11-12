@@ -75,6 +75,7 @@ image built locally from this repo's Dockerfile and loaded with
 | Benign request | `200 {"verdict":"allow",...}` |
 | Injection request | `403 {"verdict":"block","rule_id":"PI-D-001",...}` |
 | Postgres audit | 2 rows in `audit_events`, both with `event_sig` (Ed25519) |
+| Global audit chain | 3 chained rows (`global_seq` 7–9, each linked to its predecessor); deleting the middle row made `audit-verify --pg-url` report `(global-order)` **BROKEN** and exit 1 |
 | HPA metrics | `cpu: 1%/70%, memory: 52%/75%`, `ScalingActive=True` |
 | HPA scale-out | 2 → 4 replicas on CPU 118%/70% (`SuccessfulRescale`) |
 | HPA scale-down | 4 → 3 → 2 on the 300 s stabilization window |

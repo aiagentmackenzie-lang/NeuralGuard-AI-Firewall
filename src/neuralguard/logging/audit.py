@@ -40,6 +40,10 @@ logger = structlog.get_logger(__name__)
 # Maximum JSONL file size before rotation (100 MB)
 _MAX_JSONL_BYTES = 100 * 1024 * 1024
 
+# Fixed advisory-lock key for the cross-worker audit chain (arbitrary but
+# stable: 'NGAU' in ASCII). One lock, one writer at a time, per database.
+_GLOBAL_CHAIN_LOCK_KEY = 0x4E474155
+
 
 def tokenize_value(value: str) -> str:
     """Replace a value with its SHA-256 hash prefix for PII-safe logging."""
@@ -342,10 +346,35 @@ class AuditLogger:
         path previously logged the error and dropped the event).
         """
         try:
+            from sqlalchemy import select, text
+
+            from neuralguard.db.models import AuditEventORM
             from neuralguard.db.session import session_factory
+            from neuralguard.logging.chain import compute_global_hash
 
             factory = session_factory()
             async with factory() as session:
+                # Global ordering (P2-10 residual): serialize audit inserts
+                # with a transaction-scoped advisory lock so the predecessor
+                # read below cannot race another worker. The lock is released
+                # on commit, so the next insert sees this row. Cost is one
+                # lock per audit write (a few hundred microseconds) — audit
+                # writes are already fire-and-forget background tasks.
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:k)"),
+                    {"k": _GLOBAL_CHAIN_LOCK_KEY},
+                )
+                prev_global = (
+                    await session.execute(
+                        select(AuditEventORM.global_hash)
+                        .where(AuditEventORM.global_hash.is_not(None))
+                        .order_by(AuditEventORM.global_seq.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                orm_obj.global_prev_hash = prev_global
+                if getattr(orm_obj, "event_hash", None):
+                    orm_obj.global_hash = compute_global_hash(prev_global, orm_obj.event_hash)
                 session.add(orm_obj)
                 await session.commit()
         except Exception as exc:

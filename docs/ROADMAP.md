@@ -32,6 +32,7 @@ All of the following are merged, CI-gated, and documented in the
 | SBOM + keyless cosign signing/attestation | Shipped |
 | Reasoning-token output scan, decode-then-activate detection, overflow-resistant windowed aggregation | Shipped |
 | Context-aware cross-script homoglyph folding (Cyrillic/Greek confusables; mutation-gate class 96.30% → 0.00%) | Shipped |
+| Cross-worker audit ordering (postgres: DB sequence + global hash link, advisory-lock serialized; `audit-verify --pg-url` reports `(global-order)`) | Shipped |
 | Benchmark suite: deterministic regression gate, 16-operator mutation gate, live attacker benchmark, multi-turn harness | Shipped |
 | Fleet deployment: co-resident SIEM + the NeuralStrike purple loop (live-fire receipts) | Shipped |
 | Kubernetes cluster drill (kind): apply, 2/2 Ready, dependency-aware probes, HPA 2→4→2, signed postgres audit rows, 7 drill-found fixes | Shipped |
@@ -50,7 +51,6 @@ done until it is merged, CI-gated, and documented.
 |---|---|---|---|
 | **SSE hold-back streaming** | Streaming requests are currently refused fail-closed (`422`) by design. Hold-back scanning would let streams start after the prefix is scanned | Real deployments increasingly stream; the refusal is honest but blocks adoption | Planned (demand-driven) |
 | **JWT residuals** | RS256/OIDC discovery (JWKS), refresh tokens, Vault/SOPS secret-manager integration | Enterprise auth completeness | Planned (demand-driven) |
-| **Cross-worker audit ordering** | Per-worker chains are hash-authenticated; **global** write ordering needs a WORM sink or DB sequence | Full-order tamper evidence | Planned |
 | **i18n native-speaker sign-off** | The rule packs had a machine self-audit (all 5 defects it found were fixed and re-verified); one language needs a human native-speaker pass (~10 min worksheet in [`i18n_native_review_request.md`](i18n_native_review_request.md)); the other languages stay deferred with an honest README residual | Machine self-audit is not human review — say so | Open (human-gated) |
 | **Per-(agent, tool) upstream credentials** | Credentials are keyed by tool, so two agents permitted the same tool share its upstream principal. Selecting the credential by identity *and* tool would let the upstream enforce per-agent authority too | An upstream that logs a tool call cannot say which agent it was | Under consideration |
 | **HITL callback for MCP ESCALATE** | The MCP gateway currently refuses + audits on ESCALATE; a human-in-the-loop callback would complete the loop | Completeness of the intent-gate story | Under consideration |

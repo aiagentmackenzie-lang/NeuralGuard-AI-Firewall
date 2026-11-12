@@ -12,10 +12,14 @@ Signing closes exactly that gap: the worker signs each event's
 audit-verify --pubkey <hex>``). Forging a chain now requires the private
 key, not just file access.
 
-Honest scope (unchanged from the ledger):
-- Cross-worker ORDERING is still not established — signing authenticates
-  each per-worker chain; a WORM sink or DB sequence (future) is what
-  proves global ordering.
+Honest scope:
+- Cross-worker ORDERING is established for the POSTGRES backend by the
+  global sequence + hash link in ``logging/chain.py`` (verified by
+  ``audit-verify --pg-url`` as the ``(global-order)`` chain). JSONL keeps
+  per-worker chains only — the file backend has no shared sequencer.
+- Signing authenticates each per-worker chain and the event content the
+  global link binds; a DB writer who rewrites every hash still fails a
+  pubkey verification because the signatures cannot be recomputed.
 - Key rotation: signatures verify against the public key of the key that
   made them. Rotate = new key epoch; verify per-epoch (documented in the
   secret-rotation runbook).

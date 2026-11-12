@@ -693,7 +693,6 @@ Known open items (tracked in the
 
 - **Streaming** — SSE streaming is refused fail-closed (422) by design; hold-back streaming is future work
 - **JWT residuals** — RS256/OIDC discovery, refresh tokens, Vault/SOPS integration
-- **Cross-worker audit ordering** — signing authenticates each per-worker chain; global ordering needs a WORM sink
 - **i18n native-speaker review** — the rule packs had machine self-audit; human native-speaker sign-off is the one human-gated item
 
 ---

@@ -15,8 +15,9 @@ event's ``prev_hash`` — so post-hoc tampering is detectable per chain.
 What this is NOT (documented honestly):
 What this is NOT (documented honestly):
 - It does not prevent a privileged operator from deleting a whole chain.
-- It does not order events across workers. Cross-worker tamper-evidence
-  requires a WORM sink or a DB-level sequence (still open).
+- It does not order events across workers BY ITSELF. The postgres backend
+  closes that with a DB sequence + global hash link (see the global-chain
+  section at the bottom of this module); JSONL keeps per-worker chains only.
 - It does not sign events (no key material in this module) — Ed25519 signing
   closes the forged-chain gap (P2-10, `logging/signing.py`; verify with
   `neuralguard audit-verify --pubkey <hex>`).
@@ -78,3 +79,44 @@ def verify_chain(events: list[AuditEvent]) -> bool:
             return False
         prev = event.event_hash
     return True
+
+
+# ── Global (cross-worker) ordering chain ────────────────────────────────────
+#
+# Per-worker chains (above) prove integrity WITHIN a process but say nothing
+# about the order events from different workers hit durable storage. That gap
+# is closed for the postgres backend by a DB-level global sequence plus a
+# second hash link over it (P2-10 residual, closed 2026-11-12):
+#
+#   global_seq        BIGINT from ``audit_global_seq`` — total order of insert
+#   global_prev_hash  the previous COMMITTED event's global_hash
+#   global_hash       SHA-256(domain || global_prev_hash || event_hash)
+#
+# The writer serializes audit inserts with a Postgres transaction-scoped
+# advisory lock, reads the last committed global hash, and stamps the link in
+# the same transaction — so every chained event points at its true
+# predecessor. Deleting or reordering a middle row breaks the link and is
+# reported BROKEN by ``audit-verify --pg-url``.
+#
+# Honest limits (unchanged in kind from the per-worker chain):
+# - Trimming the HEAD (retention) is not detectable from the table alone; the
+#   chain is verified from the first observed row, exactly like a per-worker
+#   chain whose head file was removed.
+# - A DB writer who can rewrite every row can recompute this hash chain. The
+#   per-event Ed25519 signatures (P2-10) are what make a rewritten chain fail
+#   when verification is given a pubkey.
+# - JSONL fallback events are outside the global chain (documented: the DB
+#   was unavailable; the JSONL per-worker chain still covers them).
+
+_GLOBAL_CHAIN_DOMAIN = "neuralguard.audit.global.v1"
+
+
+def compute_global_hash(prev_global_hash: str | None, event_hash: str) -> str:
+    """Hash-link one event into the cross-worker global chain."""
+    h = hashlib.sha256()
+    h.update(_GLOBAL_CHAIN_DOMAIN.encode("utf-8"))
+    h.update(b"\x00")
+    h.update((prev_global_hash or "").encode("utf-8"))
+    h.update(b"\x00")
+    h.update(event_hash.encode("utf-8"))
+    return h.hexdigest()
