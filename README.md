@@ -436,15 +436,17 @@ wrongly caught.
 
 | Direction | Measured | Gate |
 |:--|--:|:--|
-| Unsafe-ASR (mutated attacks through) | 56.94% | regress → fail (≤ baseline + 1%) |
+| Unsafe-ASR (mutated attacks through) | 38.89% | regress → fail (≤ baseline + 1%) |
 | Safe-ASR (mutated benign caught) | 12.50% | ceiling 13%, zero hard BLOCKs |
 
 The measured Unsafe-ASR is the honest coverage map, not a target:
 normalizer-covered operators sit at 0.00% (fullwidth, NBSP, diacritics —
-the combining-mark fold the gate itself exposed and shipped). The remaining
-gaps (word reversal, dot interleave, homoglyph-class) are documented —
-blanket cross-script folding would corrupt legitimate mixed-script text, so
-that work is context-aware; the semantic layer is the designed second line.
+the combining-mark fold the gate itself exposed and shipped — and, since
+2026-11-12, the full Cyrillic/Greek homoglyph class via a context-aware
+confusable fold: **96.30% → 0.00%** on both scripts and the accent-mix
+operator). The remaining gaps (word reversal, dot interleave, leetspeak,
+char duplication, vowel stretch) are documented; the semantic layer is the
+designed second line.
 
 ### Live attacker benchmark — 3 defender configs
 
@@ -694,7 +696,6 @@ Known open items (tracked in the
 - **JWT residuals** — RS256/OIDC discovery, refresh tokens, Vault/SOPS integration
 - **Cross-worker audit ordering** — signing authenticates each per-worker chain; global ordering needs a WORM sink
 - **i18n native-speaker review** — the rule packs had machine self-audit; human native-speaker sign-off is the one human-gated item
-- **Mutation-robustness follow-up** — context-aware cross-script homoglyph folding (the measured gap is documented, blanket folding deliberately rejected)
 
 ---
 

@@ -63,6 +63,155 @@ ZERO_WIDTH_CHARS = {
 ZW_PATTERN = re.compile("[" + "".join(ZERO_WIDTH_CHARS) + "]+")
 
 
+# ── Cross-script homoglyph folding (NG-13, context-aware) ────────────────
+#
+# Latin → Cyrillic/Greek lookalike substitution defeats every literal keyword
+# rule (Cyrillic-implanted "ignore" is not "ignore" to a \b-anchored regex).
+# Blanket folding is
+# NOT acceptable: it would mangle legitimate Russian/Greek text. Two gates,
+# both context-aware:
+#
+#   1. If ≥90% of the non-Latin letters present are Latin confusables, the
+#      text can only be a mutated Latin document → fold the whole copy.
+#   2. Otherwise fold only MIXED-SCRIPT tokens (a token carrying both Latin
+#      and Cyrillic/Greek letters). No natural-language word mixes scripts, so
+#      this is the homoglyph-implant signature; native words stay intact.
+#
+# Genuine Russian/Greek documents sit near ~40-60% confusable letters: they
+# use non-confusable letters (Cyrillic b/d/zh/i/k/l/m/n/p/t/f/ts/sh/ya; Greek
+# beta/gamma/delta/zeta/eta/theta/kappa/lambda/mu/xi/pi/sigma/tau/phi/psi/
+# omega), so both gates stay shut. Detection-copy only, same contract as
+# NFKD and the NG-5 mark fold.
+#
+# Deliberate limit (documented, not hidden): a prompt consisting EXCLUSIVELY
+# of confusable characters (no Latin letter survives anywhere in the text)
+# cannot be distinguished from native Cyrillic/Greek and is not folded.
+
+_CONFUSABLE_TO_LATIN = {
+    # Cyrillic lowercase lookalikes
+    "\u0430": "a",
+    "\u0435": "e",
+    "\u043e": "o",
+    "\u0440": "p",
+    "\u0441": "c",
+    "\u0443": "y",
+    "\u0445": "x",
+    "\u0456": "i",
+    "\u0458": "j",
+    "\u0455": "s",
+    "\u0501": "d",
+    "\u04bb": "h",
+    "\u04cf": "l",
+    "\u051b": "q",
+    "\u051d": "w",
+    "\u0475": "v",
+    "\u0261": "g",  # U+0261 IPA script g (in confusable sets)
+    "\u0131": "i",  # U+0131 dotless i (NFKD does not fold it)
+    # Cyrillic uppercase lookalikes
+    "\u0410": "A",
+    "\u0412": "B",
+    "\u0415": "E",
+    "\u041a": "K",
+    "\u041c": "M",
+    "\u041d": "H",
+    "\u041e": "O",
+    "\u0420": "P",
+    "\u0421": "C",
+    "\u0422": "T",
+    "\u0423": "Y",
+    "\u0425": "X",
+    "\u0406": "I",
+    "\u0408": "J",
+    "\u0405": "S",
+    "\u051a": "Q",
+    "\u051c": "W",
+    # Greek lowercase lookalikes
+    "\u03b1": "a",
+    "\u03b5": "e",
+    "\u03b9": "i",
+    "\u03bf": "o",
+    "\u03c1": "p",
+    "\u03bd": "v",
+    "\u03c7": "x",
+    "\u03c5": "u",
+    "\u03f2": "c",  # U+03F2 lunate sigma
+    "\u03c2": "c",  # U+03C2 final sigma (NFKD folds U+03F2 to U+03C2 first)
+    # Greek uppercase lookalikes
+    "\u0391": "A",
+    "\u0392": "B",
+    "\u0395": "E",
+    "\u0396": "Z",
+    "\u0397": "H",
+    "\u0399": "I",
+    "\u039a": "K",
+    "\u039c": "M",
+    "\u039d": "N",
+    "\u039f": "O",
+    "\u03a1": "P",
+    "\u03a4": "T",
+    "\u03a5": "Y",
+    "\u03a7": "X",
+}
+_CONFUSABLE_TABLE = str.maketrans(_CONFUSABLE_TO_LATIN)
+_CONFUSABLE_CHARS = frozenset(_CONFUSABLE_TO_LATIN)
+
+# Letter runs only (no digits/underscore): the unit for mixed-script testing.
+_LETTER_RUN = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def _fold_cross_script_confusables(text: str) -> str:
+    """Fold Cyrillic/Greek homoglyphs to Latin, context-aware.
+
+    Returns the text unchanged unless the confusable-ratio gate or the
+    mixed-script-token gate fires (see the block comment above). One O(n)
+    pass to classify characters; a single C-level ``str.translate`` per
+    folded span when it applies.
+    """
+    latin = non_latin = confusable = 0
+    for ch in text:
+        cp = ord(ch)
+        if (
+            0x0400 <= cp <= 0x052F  # Cyrillic + Supplement
+            or 0x0370 <= cp <= 0x03FF  # Greek
+            or 0x1F00 <= cp <= 0x1FFF  # Greek Extended
+        ):
+            non_latin += 1
+            if ch in _CONFUSABLE_CHARS:
+                confusable += 1
+        elif (
+            0x41 <= cp <= 0x5A  # A-Z
+            or 0x61 <= cp <= 0x7A  # a-z
+            or 0xC0 <= cp <= 0x24F  # Latin-1 Supplement + Extended
+            or cp in (0x0131, 0x0261)  # U+0131 / U+0261 Latin lookalikes
+        ):
+            latin += 1
+
+    if non_latin == 0 or latin == 0:
+        # Nothing to fold, or a native non-Latin document (nothing to anchor
+        # the decision on). Leave it untouched.
+        return text
+
+    if confusable * 10 >= non_latin * 9:
+        # ≥90% of the non-Latin letters are Latin confusables: this is a
+        # mutated Latin document, not native text.
+        return text.translate(_CONFUSABLE_TABLE)
+
+    def _fold_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        has_latin = has_non_latin = False
+        for ch in token:
+            cp = ord(ch)
+            if 0x0400 <= cp <= 0x052F or 0x0370 <= cp <= 0x03FF or 0x1F00 <= cp <= 0x1FFF:
+                has_non_latin = True
+            elif ch.isalpha():
+                has_latin = True
+            if has_latin and has_non_latin:
+                return token.translate(_CONFUSABLE_TABLE)
+        return token
+
+    return _LETTER_RUN.sub(_fold_token, text)
+
+
 def _strip_marks_after_ascii(text: str) -> str:
     """Remove combining marks (Mn) that directly follow an ASCII letter.
 
@@ -256,7 +405,16 @@ class StructuralScanner(BaseScanner["ScannerSettings"]):
         # 3. NFKD normalization
         normalized = unicodedata.normalize("NFKD", text)
 
-        # 3b. Latin-script combining-mark fold (NG-5 mutation-gate finding):
+        # 3b. Cross-script homoglyph fold (NG-13 mutation-gate finding):
+        # Latin→Cyrillic/Greek lookalikes break literal keyword rules at
+        # 96.3% Unsafe-ASR. Context-aware (confusable-ratio + mixed-script
+        # token gates), so genuine Russian/Greek prompts are left untouched.
+        # Runs BEFORE the mark fold: in the accent+homoglyph combo attack the
+        # combining mark sits on a Cyrillic base, and folding the base to
+        # Latin first is what lets the mark fold see it. Detection copy only.
+        normalized = _fold_cross_script_confusables(normalized)
+
+        # 3c. Latin-script combining-mark fold (NG-5 mutation-gate finding):
         # NFKD("é") = "e" + U+0301, and a stray combining mark between ASCII
         # letters breaks every literal keyword regex ("i\u0301gnore" no longer
         # matches (?i)\bignore\b) — the diacritics mutation sailed through at
