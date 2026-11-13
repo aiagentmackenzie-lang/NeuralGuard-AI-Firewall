@@ -1,4 +1,4 @@
-# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10 / NG-11 / NG-12 / NG-14)
+# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10 / NG-11 / NG-12 / NG-14 / NG-15)
 
 *Shipped 2026-09-07. The MCP gateway turns NeuralGuard into an intent-gated,
 rug-pull-refusing passthrough in front of ONE MCP server (streamable-HTTP
@@ -297,6 +297,88 @@ BEFORE the upstream forward — a refused call is never executed. Only
 `tools/list` forwards before its check (you cannot baseline a catalog you
 have not fetched).
 
+## NG-15 — Human-in-the-loop approval for ESCALATE
+
+An `ESCALATE` verdict means "a human must approve this". Before NG-15 the
+gateway refused the call and left the approval to a human reading the audit
+trail. Now the loop is closed, on the same fail-closed terms.
+
+```bash
+NEURALGUARD_MCP_HITL_ENABLED=true
+NEURALGUARD_MCP_HITL_TIMEOUT_SECONDS=10        # 1-60s the request may be held
+NEURALGUARD_MCP_HITL_TTL_SECONDS=300           # pending lifetime (>= timeout)
+NEURALGUARD_MCP_HITL_MAX_PENDING=256           # per worker; at the cap, refuse
+NEURALGUARD_MCP_HITL_APPROVER_TENANTS=admin    # empty = the admin tenant only
+```
+
+Flow for a `tools/call` the tenant policy escalates:
+
+1. The gateway raises an escalation bound to the **exact** call — tenant,
+   agent, tool, method and a SHA-256 digest of the canonical JSON-RPC body.
+   A smuggling mismatch is blocked *before* the human is asked.
+2. It waits, bounded by `HITL_TIMEOUT_SECONDS`, for a decision.
+3. An approver decides via the API (below).
+4. **Approved** → the request continues through every remaining gate: argument
+   constraints, the signed-catalog baseliner, the provenance gate and the
+   credential resolver. **Denied, timed out, expired or capacity-refused** →
+   the call is refused, exactly as before.
+
+### Approver API
+
+```bash
+# What is waiting (oldest first; ids, digest, bounded argument preview)
+curl -H "Authorization: Bearer $APPROVER_KEY" https://gateway/v1/mcp/escalations
+
+# Decide — single-shot, audited, attributed
+curl -X POST -H "Authorization: Bearer $APPROVER_KEY"   -d '{"approve": true, "reason": "change window CHG-1041"}'   https://gateway/v1/mcp/escalations/<escalation_id>
+```
+
+Responses: `200` decision recorded · `400` invalid decision body · `403` not an
+approver / agent-bound credential · `404` unknown or already consumed · `409`
+already decided · `503` HITL disabled.
+
+Audit events: `MCP-HITL-RAISED`, `MCP-HITL-APPROVED`, `MCP-HITL-DENIED`,
+`MCP-HITL-TIMEOUT`, `MCP-HITL-CAPACITY`, and `MCP-HITL-DECISION` on the
+approver's action. Every one carries the escalation id, the request digest,
+the source gate (`intent_gate` / `argument_gate`), `agent_id`, and — for
+decisions — `decided_by`. Argument **values** never enter the audit trail; the
+digest is the binding. The approver view carries a bounded argument preview
+because reviewing the call is the point of the review.
+
+### Fail-closed rules
+
+- **A decision requires a tenant-level credential.** An agent-bound credential
+  (NG-11) is refused with `mcp_escalation_agent_forbidden`: an agent raising an
+  escalation for itself and approving it is the abuse case this feature would
+  otherwise create.
+- **Only named approvers decide.** The deciding tenant must be in
+  `HITL_APPROVER_TENANTS` (default: the admin tenant). No approver configured
+  means no approval path — `hitl_enabled` is off by default and the old
+  refusal is unchanged.
+- **Approval is single-use and digest-bound.** An approval authorizes exactly
+  the request that raised it; the id is consumed on use and a replay finds
+  nothing. It cannot be applied to different arguments.
+- **Approval is not authority.** A human "yes" cannot make a rug-pull execute:
+  the baseliner still refuses an unbaselined tool, the argument gate still
+  denies, the provenance gate still blocks, and the credential resolver still
+  fails closed.
+- **Timeouts and capacity are refusals.** There is no path from an unanswered
+  escalation to an approved call.
+
+### Operability limits
+
+- **Per worker, in memory.** A decision must reach the worker holding the
+  pending request. With more than one replica, route
+  `/v1/mcp/escalations` with sticky sessions or run one replica; a shared
+  broker is not in this build (same shape as the per-worker baselines).
+- **A held request is a resource.** The wait is capped at 60 s and pending
+  records at `HITL_MAX_PENDING`; at the cap a new `ESCALATE` is refused
+  (`503 mcp_escalation_capacity`) rather than queued.
+- **Notification is the SIEM's job.** The gateway does not page anyone: the
+  raised escalation lands in the audit chain, which your existing SIEM routing
+  (Splunk HEC / webhook / SecurityScarletAI) already forwards. Approvers poll
+  or consume that alert; the decision API is the callback surface.
+
 ## Honest limits (documented, not hidden)
 
 - **In-memory baselines per worker.** Restart → `BASELINE_RECREATED_RESTART`
@@ -309,8 +391,10 @@ have not fetched).
 - **Tool RESULT content** is taint-fingerprinted (NG-9) but not yet
   scanned through the output-scan pattern semantics — that remains the
   immediate follow-up for the indirect-injection-in-tool-results class.
-- **ESCALATE = refuse + audit** in this build. A human-approval callback
-  flow is future work.
+- **HITL is per worker and in memory.** An approval only reaches the worker
+  holding the pending call (sticky routing or a single replica); the request is
+  held for at most `HITL_TIMEOUT_SECONDS`, and notification is delegated to the
+  SIEM routing of the raised audit event.
 - **NG-10 is not confinement.** Argument constraints are string-level boundary
   checks on what the caller *declares*. They do not sandbox the upstream tool,
   do not resolve symlinks, and do not cover arguments a tool derives on its
@@ -319,9 +403,10 @@ have not fetched).
   key are one agent; per-agent policy is only as precise as the key hygiene
   behind it. Issue one key per agent (the rotation API mints tenant-level keys
   only, so agent-bound keys currently come from configuration).
-- **Credentials are per tool, not per (agent, tool).** Two agents that may call
-  the same tool share its credential. Selecting by agent as well is future
-  work; it would stay server-side, like the tool mapping.
+- **Scoped credentials select a principal, not authority.** Per-(agent, tool)
+  credentials (NG-14) let the upstream attribute a call to the agent that made
+  it, but two agent entries pointing at the same token are attributable without
+  being distinct authority — the upstream's own authorization still decides.
 
 ## Verification drill
 
