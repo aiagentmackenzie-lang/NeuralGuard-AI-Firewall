@@ -1,4 +1,4 @@
-# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10 / NG-11 / NG-12)
+# Runbook — MCP Gateway (NG-7 / NG-8 / NG-10 / NG-11 / NG-12 / NG-14)
 
 *Shipped 2026-09-07. The MCP gateway turns NeuralGuard into an intent-gated,
 rug-pull-refusing passthrough in front of ONE MCP server (streamable-HTTP
@@ -178,37 +178,57 @@ Resolution rules, all fail-closed:
 - **Every audit event carries `agent_id`** — explicitly `null` for tenant-level
   credentials, so "which agent did this" is answerable from the trail alone.
 
-### Scoped per-tool upstream credentials (NG-12)
+### Scoped upstream credentials, per tool and per agent (NG-12 / NG-14)
 
 One token for every tool meant the upstream could not tell a read from a
-delete. A tool can now carry its **own** credential, resolved server-side:
+delete (NG-12). One token per *tool* still meant two agents permitted that tool
+shared an upstream principal, so the upstream could not say **which agent**
+made the call. A mapping key is now `tool` (tool-wide) or `agent|tool`:
 
 ```bash
 # JSON in the env var. REFERENCES only — a secret pasted here fails at boot.
 NEURALGUARD_MCP_TOOL_CREDENTIALS='{
-  "read_file":   "env:READONLY_TOKEN",
-  "admin_sql":   "file:/run/secrets/admin-token"
+  "read_file":            "env:READONLY_TOKEN",
+  "billing-bot|refund":   "file:/run/secrets/refund-billing",
+  "support-bot|refund":   "env:REFUND_SUPPORT"
 }'
 NEURALGUARD_MCP_REQUIRE_TOOL_CREDENTIAL=true   # optional: refuse unmapped tools
 ```
 
-Resolution order for `tools/call`:
+The agent half is the **authenticated** NG-11 identity (a `key|tenant|agent`
+binding or a JWT `agent` claim) — never a header, and normalized/validated at
+boot (lowercased, `[a-z0-9._-]`, 1–64 chars), exactly like the policy key.
 
-1. **Mapped tool** → its reference is resolved per call (`env:` or `file:`).
-2. **Unmapped tool** → `UPSTREAM_AUTH_TOKEN` (the default), unless
-   `REQUIRE_TOOL_CREDENTIAL=true`, in which case the call is refused.
-3. **Catalog methods** (`tools/list`, …) → the default token, as before.
+Resolution order for `tools/call`, most specific first:
+
+1. **`(agent, tool)`** → that agent's own reference, resolved per call.
+2. **`tool`** → the tool-wide reference (any agent, or a tenant-level caller).
+3. **No mapping and no default fallback available** → refuse if the tool is
+   agent-scoped, or if `REQUIRE_TOOL_CREDENTIAL=true`; otherwise the default.
+4. **Catalog methods** (`tools/list`, …) → the default token, as before.
 
 Fail-closed rules:
 
 - **A mapped reference that cannot be resolved refuses the call** (`503
   mcp_credential_unavailable`, `MCP-CRED-001`) — it never falls back to the
   default. Falling back would hand a deliberately-scoped call the broad token.
+- **An agent-scoped tool never degrades to the default.** Once any
+  `agent|tool` entry exists for a tool, a caller with no matching entry is
+  refused — including a tenant-level (agent-less) credential. Otherwise
+  configuring `billing-bot|refund` would hand every other agent the broad
+  default for `refund`, which is exactly the sharing this removes. Add a
+  `tool` key when the fallback is genuinely intended.
+- **The denial is attributable.** The refused audit event records
+  `agent_id`, `credential_source: "agent-scoped-unmapped"` and a reason naming
+  the tool and agent — so "why was billing refused and support allowed" is
+  answerable from the trail.
 - **Secrets are read per call**, not cached at boot, so an orchestrator can
   mount/project them after the process starts. Unresolvable references are
-  listed **by name** in a boot warning (`mcp_credential_unresolved`).
+  listed **by name** in a boot warning (`mcp_credential_unresolved`), with
+  `agent_scoped_tools` so the operator can see which tools lost their fallback.
 - **Only the reference reaches the audit trail** — never the value. The
-  forwarded event records `credential_source: "env:READONLY_TOKEN"`.
+  forwarded event records `credential_source: "env:READONLY_TOKEN"` alongside
+  `agent_id`.
 - **A caller can never supply its own upstream token.** The transport strips
   any `Authorization` header the caller sent (any casing) before setting the
   server-side one.
@@ -218,9 +238,11 @@ Stated limits, not hidden:
 - `file:` references read whatever the process can read. This module checks the
   secret is non-empty and under 4 KiB (so a mis-pointed PEM bundle fails
   loudly); it does **not** police filesystem permissions — use a 0600 mount.
-- Credentials are keyed by **tool**, not by agent. Identity (NG-11) narrows
-  *what* an agent may call; the credential narrows *which upstream principal*
-  carries it. Per-(agent, tool) credential selection is future work.
+- Agent-scoped credentials select *which upstream principal* carries the call;
+  they do not constrain *what* the agent may ask (NG-10/NG-11 do that). The
+  operator must still make the upstream principals differ in authority — two
+  agent entries pointing at the same token are audited, but attribution is
+  only as strong as the upstream's own logging.
 
 ## Drift recovery (the operator's part)
 

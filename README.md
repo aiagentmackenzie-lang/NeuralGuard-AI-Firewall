@@ -350,6 +350,11 @@ Each tool can carry its **own** upstream credential (`env:`/`file:` references
 resolved per call, never secrets in config): a mapped tool uses its credential,
 an unresolvable reference refuses the call rather than falling back to the
 broad default, and `require_tool_credential` refuses unmapped tools outright.
+Credentials can be scoped to a **workload agent** as well as a tool
+(`"billing-bot|refund"`), so the upstream sees the authority that actually
+made the call instead of one principal shared by every agent permitted the
+tool; an agent-scoped tool never degrades to the broad default for a caller
+it has no entry for.
 
 Identity is derived from the **credential**, never a request header, and an
 agent can only *narrow* what its tenant allows: `key|tenant|agent` bindings (or
