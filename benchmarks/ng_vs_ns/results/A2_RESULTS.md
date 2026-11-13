@@ -1,5 +1,23 @@
 # A2 results — live NeuralStrike vs NeuralGuard (reference snapshot)
 
+> **Which run is which (added 2026-11-13).** `a2_results.json` in this
+> directory holds the **current** run: attacker and judge both
+> `qwen3.8:27b`, 18 attacks / 45 benign, measured **after** the 5.4× corpus
+> augmentation → ASR **61.11% → 38.89% → 38.89%**, FPR **0.00% → 4.44% →
+> 4.44%**. That is the pair quoted as the `qwen3.8:27b` row in the README.
+>
+> The sections **below are dated historical runs** and are kept unedited:
+> the headline table is the **2026-06-28 `mistral:7b`** run (44.44% ASR,
+> 6.67% FPR) and the **2026-09-04** re-measurement is the pre-augmentation
+> 27B run (50.00% ASR, 6.67% FPR — its run A, `mistral:7b`/`mistral:7b` at
+> 27.78%, is the README's 7B row). Always read a section's own date and
+> model before quoting a number.
+>
+> **Known traceability gap:** the JSON records models, iterations and
+> configs but **no timestamp and no corpus digest**, so the tracked artifact
+> cannot prove which corpus built it. The harness should stamp both; until
+> it does, this notice is the provenance record.
+
 **Run date:** 2026-06-28 · **Attacker:** `mistral:7b` (local Ollama, no cloud
 API) · **NeuralGuard judge:** `mistral:7b` · **JailbreakForge iterations:** 3
 · **Attacks:** 18 (15 JailbreakForge + 3 ContextPoison) · **Benign:** 45

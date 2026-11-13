@@ -475,6 +475,11 @@ clean rebuild from tracked sources yields 6,503, see [Reproduce](#reproduce)):
 | `mistral:7b` (lower bound) | 27.78% | 22.22% | 22.22% |
 | `qwen3.8:27b` (stronger attacker) | 61.11% | **38.89%** | 38.89% |
 
+Each row is a dated run recorded in
+[`A2_RESULTS.md`](benchmarks/ng_vs_ns/results/A2_RESULTS.md); the tracked
+`a2_results.json` holds the post-augmentation `qwen3.8:27b` run quoted in the
+second row, and the 7B row is that file's 2026-09-04 run A.
+
 - **Monotonic ASR drop across configs: TRUE in every run** — each layer does
   not raise ASR
 - The augmented corpus recovered *more* mutated attacks (50.00% → 38.89%)
