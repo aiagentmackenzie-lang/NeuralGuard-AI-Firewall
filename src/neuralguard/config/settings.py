@@ -1027,6 +1027,76 @@ class McpGatewaySettings(BaseSettings):
         "otherwise share the tenant-level taint window (documented).",
     )
 
+    # ── NG-15: human-in-the-loop approval for ESCALATE ──
+
+    hitl_enabled: bool = Field(
+        default=False,
+        description=(
+            "NG-15: when True, an ESCALATE verdict raises a pending escalation "
+            "and waits (bounded) for a human decision instead of refusing "
+            "immediately. When False the build refuses ESCALATE fail-closed "
+            "and audits it, as before."
+        ),
+    )
+    hitl_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description=(
+            "NG-15: how long the gateway holds the request open waiting for a "
+            "decision. A timeout is a REFUSAL, never an implicit approval; the "
+            "ceiling is deliberate (a blocked request is a resource)."
+        ),
+    )
+    hitl_ttl_seconds: float = Field(
+        default=300.0,
+        ge=5.0,
+        le=3600.0,
+        description=(
+            "NG-15: lifetime of a pending escalation. Expired records are "
+            "purged and can never be approved late; must be at least the wait "
+            "timeout (validated)."
+        ),
+    )
+    hitl_max_pending: int = Field(
+        default=256,
+        ge=1,
+        le=10_000,
+        description=(
+            "NG-15: cap on concurrently pending escalations per worker. At the "
+            "cap a new ESCALATE is REFUSED (fail-closed, audited) rather than "
+            "queued — an unbounded backlog is its own denial of service."
+        ),
+    )
+    hitl_approver_tenants: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description=(
+            "NG-15: tenants whose TENANT-LEVEL credentials may decide MCP "
+            "escalations (comma-separated or JSON). Empty = the admin tenant "
+            "only. An agent-bound credential can never decide — an agent "
+            "approving its own escalation is the abuse case this rule closes."
+        ),
+    )
+
+    @field_validator("hitl_approver_tenants", mode="before")
+    @classmethod
+    def _parse_approver_tenants(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            return [t.strip().lower() for t in v.split(",") if t.strip()]
+        if isinstance(v, (list, tuple)):
+            return [str(t).strip().lower() for t in v if str(t).strip()]
+        return v  # type: ignore[no-any-return]
+
+    @model_validator(mode="after")
+    def _hitl_ttl_covers_timeout(self) -> McpGatewaySettings:
+        """A record that expires before the wait ends could never be approved."""
+        if self.hitl_enabled and self.hitl_ttl_seconds < self.hitl_timeout_seconds:
+            raise ValueError(
+                "hitl_ttl_seconds must be >= hitl_timeout_seconds "
+                f"({self.hitl_ttl_seconds} < {self.hitl_timeout_seconds})"
+            )
+        return self
+
     @property
     def is_configured(self) -> bool:
         """Enabled AND pointed at an upstream."""

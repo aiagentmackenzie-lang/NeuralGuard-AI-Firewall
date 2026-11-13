@@ -356,6 +356,15 @@ made the call instead of one principal shared by every agent permitted the
 tool; an agent-scoped tool never degrades to the broad default for a caller
 it has no entry for.
 
+An `ESCALATE` policy verdict is actionable, not decorative: the gateway raises
+a pending escalation bound to the exact call (tenant, agent, tool and a
+SHA-256 digest of the JSON-RPC body), holds the request for a bounded wait, and
+a **tenant-level** approver decides over `GET/POST /v1/mcp/escalations`. An
+agent-bound credential can never decide (no self-approval), approvals are
+single-use and digest-bound, and a timeout, denial or capacity overflow is
+always a refusal. Approval is not authority: an approved call still faces the
+argument, baseline, provenance and credential gates.
+
 Identity is derived from the **credential**, never a request header, and an
 agent can only *narrow* what its tenant allows: `key|tenant|agent` bindings (or
 the `agent` claim on a minted token) drive per-agent tool rules and constraints

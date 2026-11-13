@@ -22,7 +22,7 @@ All of the following are merged, CI-gated, and documented in the
 | Agent Guardian — multi-turn detection (delayed injection, role drift, gradual extraction/memory poisoning) | Shipped |
 | Canary token mint/verify (HMAC-SHA256, no server-side token store) | Shipped |
 | Prompt-template analyzer (static injection-sink analysis, CI-able) | Shipped |
-| MCP gateway — per-tool intent gate, argument/resource constraints (NG-10), workload identity + per-agent narrowing (NG-11), per-tool upstream credentials (NG-12), per-(agent, tool) upstream credentials (NG-14), Ed25519-signed tool-catalog baselines (rug-pull refusal) | Shipped |
+| MCP gateway — per-tool intent gate, argument/resource constraints (NG-10), workload identity + per-agent narrowing (NG-11), per-tool upstream credentials (NG-12), per-(agent, tool) upstream credentials (NG-14), human-in-the-loop approval for ESCALATE (NG-15), Ed25519-signed tool-catalog baselines (rug-pull refusal) | Shipped |
 | Appliance proxy in front of any OpenAI-compatible upstream | Shipped |
 | Per-tenant configuration (fail-safe overlay, hot-reload, mandatory core layers) | Shipped |
 | JWT bearer auth + runtime key rotation | Shipped |
@@ -53,7 +53,7 @@ done until it is merged, CI-gated, and documented.
 | **JWT residuals** | RS256/OIDC discovery (JWKS), refresh tokens, Vault/SOPS secret-manager integration | Enterprise auth completeness | Planned (demand-driven) |
 | **i18n native-speaker sign-off** | The rule packs had a machine self-audit (all 5 defects it found were fixed and re-verified); one language needs a human native-speaker pass (~10 min worksheet in [`i18n_native_review_request.md`](i18n_native_review_request.md)); the other languages stay deferred with an honest README residual | Machine self-audit is not human review — say so | Open (human-gated) |
 | **Per-(agent, tool) upstream credentials** | Credentials were keyed by tool, so two agents permitted the same tool shared its upstream principal. Mapping keys are now `tool` or `agent|tool` (exact NG-11 identity), most-specific-wins; once a tool has any agent-scoped entry a caller without one is refused rather than handed the default | An upstream that logs a tool call can now say which agent made it | Implemented on `feat/ng14-agent-tool-credentials`; not claimed shipped until merged |
-| **HITL callback for MCP ESCALATE** | The MCP gateway currently refuses + audits on ESCALATE; a human-in-the-loop callback would complete the loop | Completeness of the intent-gate story | Under consideration |
+| **HITL callback for MCP ESCALATE** | The gateway refused + audited on ESCALATE with no approval path. NG-15 adds a bounded, digest-bound request/decision loop: tenant-level approvers only, single-use approvals, and every remaining gate still enforced after a "yes" | The intent-gate story is only complete if a human decision is actually actionable — and only if an agent cannot approve itself | Implemented on `feat/ng15-hitl-escalate`; not claimed shipped until merged |
 
 ---
 

@@ -652,6 +652,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     app.state.mcp_transport = None
     app.state.mcp_baseliner = None
     app.state.mcp_credentials = None
+    app.state.mcp_hitl = None
     if config.mcp.enabled:
         if not config.mcp.upstream_url.strip():
             raise RuntimeError(
@@ -660,6 +661,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             )
         from neuralguard.mcp.baseliner import McpBaseliner
         from neuralguard.mcp.credentials import ToolCredentialResolver
+        from neuralguard.mcp.hitl import HitlBroker
         from neuralguard.mcp.provenance import ProvenanceGate
         from neuralguard.mcp.transport import McpTransport
 
@@ -697,6 +699,14 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             max_sessions=config.mcp.provenance_max_sessions,
             require_session=config.mcp.provenance_require_session,
         )
+        # NG-15: human-in-the-loop for ESCALATE. Per-worker and in memory (the
+        # documented limit); constructed only when enabled, so a disabled
+        # gateway keeps the old refuse-and-audit posture exactly.
+        if config.mcp.hitl_enabled:
+            app.state.mcp_hitl = HitlBroker(
+                ttl_seconds=config.mcp.hitl_ttl_seconds,
+                max_pending=config.mcp.hitl_max_pending,
+            )
         structlog.get_logger("neuralguard").info(
             "mcp_gateway_enabled",
             server_id=config.mcp.server_id,
@@ -709,6 +719,12 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             tool_credentials=len(config.mcp.tool_credentials),
             agent_scoped_tools=resolver.agent_scoped_tools(),
             require_tool_credential=config.mcp.require_tool_credential,
+            hitl_enabled=config.mcp.hitl_enabled,
+            hitl_approvers=sorted(
+                {t.lower() for t in config.mcp.hitl_approver_tenants if t}
+                or {config.auth.admin_tenant.lower()}
+            ),
+            hitl_timeout_seconds=config.mcp.hitl_timeout_seconds,
             msg="MCP gateway ENABLED (NG-7/NG-8). Intent Gate on headers "
             "pre-body-parse; tool-catalog rug-pull detection "
             f"({config.mcp.mode} mode).",

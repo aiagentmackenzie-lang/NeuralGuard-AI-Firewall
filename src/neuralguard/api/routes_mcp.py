@@ -54,6 +54,13 @@ from fastapi.responses import JSONResponse
 from neuralguard.logging.audit import AuditLogger  # noqa: TC001 - runtime state access
 from neuralguard.mcp.argument_gate import evaluate_arguments
 from neuralguard.mcp.credentials import CredentialError, ToolCredentialResolver
+from neuralguard.mcp.hitl import (
+    STATUS_APPROVED,
+    STATUS_DENIED,
+    STATUS_PENDING,
+    HitlCapacityError,
+    HitlError,
+)
 from neuralguard.mcp.intent_gate import (
     GateDecision,
     McpToolPolicy,
@@ -70,6 +77,7 @@ from neuralguard.scanners.pipeline import ScannerPipeline  # noqa: TC001 - runti
 logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
+    from neuralguard.mcp.hitl import HitlBroker
     from neuralguard.mcp.provenance import ProvenanceGate
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
@@ -228,18 +236,12 @@ async def mcp_gateway(request: Request) -> JSONResponse:
             details={"outcome": "gate_deny"},
         )
         return _gate_response(gate, 403, request_id, _elapsed())
-    if gate.action == ToolAction.ESCALATE:
-        # HITL posture: the intent is policy-gated for human approval. This
-        # build refuses (fail-closed) and audits the escalation — an approval
-        # workflow is the operator's follow-up, never a silent pass.
-        _audit_event(
-            verdict=Verdict.ESCALATE,
-            decision=gate,
-            details={"outcome": "gate_escalate"},
-        )
-        return _gate_response(gate, 403, request_id, _elapsed())
 
     # ── Body parse ──
+    # Moved ahead of the ESCALATE handling for two reasons: NG-15 binds an
+    # approval to the exact payload (a digest), and a smuggled request must be
+    # BLOCKED before a human is asked to approve it. DENY still precedes the
+    # parse, so the cheapest rejection path (the header gate) is unchanged.
     try:
         payload = await request.json()
     except ValueError:
@@ -266,6 +268,145 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         return _gate_response(mismatch, 403, request_id, _elapsed())
 
     method = body_method or ""
+    params = payload.get("params")
+    call_arguments: Any = params.get("arguments") if isinstance(params, dict) else None
+
+    # ── NG-15: human-in-the-loop for ESCALATE ──
+    # ``None`` means "approved, continue"; otherwise the refusal response is
+    # returned. With HITL disabled the old fail-closed refusal is unchanged.
+    broker: HitlBroker | None = getattr(request.app.state, "mcp_hitl", None)
+
+    async def _await_human(
+        *,
+        rule_id: str,
+        reason: str,
+        source: str,
+        extra: dict[str, Any],
+        disabled_response: JSONResponse,
+    ) -> JSONResponse | None:
+        if not (config.mcp.hitl_enabled and broker is not None):
+            _audit_event(
+                verdict=Verdict.ESCALATE,
+                decision=gate,
+                rule_id=rule_id,
+                details={"outcome": f"{source}_escalate", **extra},
+            )
+            return disabled_response
+
+        try:
+            record = await broker.raise_escalation(
+                tenant=tenant,
+                agent=agent,
+                method=method or gate.declared_method,
+                tool=body_tool if method == "tools/call" else None,
+                rule_id=rule_id,
+                reason=reason,
+                source=source,
+                payload=payload,
+                arguments=call_arguments,
+            )
+        except HitlCapacityError:
+            # Capacity is a refusal, never a queue and never an implicit pass.
+            metrics.record_mcp_gate("hitl_capacity")
+            _audit_event(
+                verdict=Verdict.BLOCK,
+                decision=gate,
+                rule_id="MCP-HITL-CAPACITY",
+                details={"outcome": "escalation_capacity", "source": source, **extra},
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "mcp_escalation_capacity",
+                    "rule_id": "MCP-HITL-CAPACITY",
+                    "reason": "too many pending escalations; refused rather than queued",
+                    "request_id": request_id,
+                },
+                headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+            )
+
+        # The escalation id is returned ONLY to the waiting request's audit
+        # record (never in the caller's response): the caller cannot decide its
+        # own escalation, and knowing the id buys nothing.
+        _audit_event(
+            verdict=Verdict.ESCALATE,
+            decision=gate,
+            rule_id="MCP-HITL-RAISED",
+            details={
+                "outcome": "escalation_raised",
+                "source": source,
+                "escalation_id": record.escalation_id,
+                "request_digest": record.digest,
+                **extra,
+            },
+        )
+        decided = await broker.wait(record.escalation_id, config.mcp.hitl_timeout_seconds)
+        approved = decided is not None and decided.status == STATUS_APPROVED
+
+        if approved:
+            try:
+                await broker.consume(record.escalation_id)
+            except HitlError:
+                # Approval vanished between wake and use (expired). Fail closed.
+                approved = False
+
+        if not approved:
+            denied = decided is not None and decided.status == STATUS_DENIED
+            metrics.record_mcp_gate("hitl_denied" if denied else "hitl_timeout")
+            _audit_event(
+                verdict=Verdict.BLOCK,
+                decision=gate,
+                rule_id="MCP-HITL-DENIED" if denied else "MCP-HITL-TIMEOUT",
+                details={
+                    "outcome": "escalation_denied" if denied else "escalation_timeout",
+                    "source": source,
+                    "escalation_id": record.escalation_id,
+                    "decided_by": decided.decided_by if decided is not None else None,
+                    "decision_reason": decided.decision_reason if decided is not None else None,
+                    "request_digest": record.digest,
+                    **extra,
+                },
+            )
+            code = "mcp_escalation_denied" if denied else "mcp_escalation_timeout"
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": code,
+                    "rule_id": "MCP-HITL-DENIED" if denied else "MCP-HITL-TIMEOUT",
+                    "reason": reason if not decided else (decided.decision_reason or reason),
+                    "escalation_id": record.escalation_id,
+                    "request_id": request_id,
+                },
+                headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+            )
+
+        metrics.record_mcp_gate("hitl_approved")
+        _audit_event(
+            verdict=Verdict.ALLOW,
+            decision=gate,
+            rule_id="MCP-HITL-APPROVED",
+            details={
+                "outcome": "escalation_approved",
+                "source": source,
+                "escalation_id": record.escalation_id,
+                "decided_by": record.decided_by,
+                "request_digest": record.digest,
+                **extra,
+            },
+        )
+        # Approval is not authority: every remaining gate below still runs.
+        return None
+
+    if gate.action == ToolAction.ESCALATE:
+        refusal = await _await_human(
+            rule_id=gate.rule_id,
+            reason=gate.reason,
+            source="intent_gate",
+            extra={},
+            disabled_response=_gate_response(gate, 403, request_id, _elapsed()),
+        )
+        if refusal is not None:
+            return refusal
 
     # ── NG-10: argument / resource constraints (parsed body, before forward) ──
     # The Intent Gate decided *whether* this tool may run; these decide *how*
@@ -273,35 +414,55 @@ async def mcp_gateway(request: Request) -> JSONResponse:
     # upstream. Argument VALUES never enter the audit trail — only the path
     # and the rule that fired.
     if method == "tools/call":
-        params = payload.get("params")
-        call_arguments: Any = params.get("arguments") if isinstance(params, dict) else None
         arg_decision = evaluate_arguments(policy, body_tool or "", call_arguments, agent=agent)
         if arg_decision.action is not ToolAction.ALLOW:
             escalated = arg_decision.action is ToolAction.ESCALATE
             metrics.record_mcp_gate("argument_escalate" if escalated else "argument_deny")
-            _audit_event(
-                verdict=Verdict.ESCALATE if escalated else Verdict.BLOCK,
-                decision=None,
-                rule_id=arg_decision.rule_id,
-                details={
-                    "outcome": "argument_escalate" if escalated else "argument_deny",
-                    "argument": arg_decision.argument,
-                    "constraint_kind": arg_decision.kind,
-                    "reason": arg_decision.reason,
-                },
-            )
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "error": "mcp_argument_escalated" if escalated else "mcp_argument_denied",
-                    "rule_id": arg_decision.rule_id,
-                    "reason": arg_decision.reason,
-                    "argument": arg_decision.argument,
-                    "tool": body_tool,
-                    "request_id": request_id,
-                },
-                headers={_VERDICT_HEADER: (Verdict.ESCALATE if escalated else Verdict.BLOCK).value},
-            )
+            arg_extra: dict[str, Any] = {
+                "argument": arg_decision.argument,
+                "constraint_kind": arg_decision.kind,
+                "reason": arg_decision.reason,
+            }
+            if escalated:
+                refusal = await _await_human(
+                    rule_id=arg_decision.rule_id,
+                    reason=arg_decision.reason,
+                    source="argument_gate",
+                    extra=arg_extra,
+                    disabled_response=JSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "mcp_argument_escalated",
+                            "rule_id": arg_decision.rule_id,
+                            "reason": arg_decision.reason,
+                            "argument": arg_decision.argument,
+                            "tool": body_tool,
+                            "request_id": request_id,
+                        },
+                        headers={_VERDICT_HEADER: Verdict.ESCALATE.value},
+                    ),
+                )
+                if refusal is not None:
+                    return refusal
+            else:
+                _audit_event(
+                    verdict=Verdict.BLOCK,
+                    decision=None,
+                    rule_id=arg_decision.rule_id,
+                    details={"outcome": "argument_deny", **arg_extra},
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "mcp_argument_denied",
+                        "rule_id": arg_decision.rule_id,
+                        "reason": arg_decision.reason,
+                        "argument": arg_decision.argument,
+                        "tool": body_tool,
+                        "request_id": request_id,
+                    },
+                    headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+                )
 
     catalog_sig = lower_headers.get(_CATALOG_SIG_HEADER.lower())
     # NG-9: session attribution (MCP spec header). None = session-less client;
@@ -505,3 +666,175 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         resp.headers[_PROVENANCE_HEADER] = "tainted-warn"
     resp.headers[_VERDICT_HEADER] = Verdict.ALLOW.value
     return resp
+
+
+# ── NG-15: the human side of the loop ─────────────────────────────────────
+#
+# These endpoints are the *operator* surface, not the caller surface. Two rules
+# keep the loop from being gamed by the thing it gates:
+#
+# 1. a decision requires a TENANT-LEVEL credential (no authenticated agent) —
+#    an agent raising an escalation for itself and approving it is the abuse
+#    case this feature would otherwise create;
+# 2. the deciding tenant must be named in ``hitl_approver_tenants`` (default:
+#    the admin tenant). No approver configured = no approval path.
+
+
+def _approver_refusal(request: Request) -> JSONResponse | None:
+    """403 unless this request may decide escalations; None when it may."""
+    config = request.app.state.config
+    request_id = getattr(request.state, "request_id", None) or "mcp-hitl"
+    tenant = getattr(request.state, "auth_tenant", None) or "default"
+    agent = getattr(request.state, "auth_agent", None)
+
+    if agent is not None:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "mcp_escalation_agent_forbidden",
+                "reason": "escalations are decided by a tenant-level credential; "
+                "an agent identity cannot approve a tool call (self-approval)",
+                "request_id": request_id,
+            },
+            headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+        )
+
+    configured = [t for t in config.mcp.hitl_approver_tenants if t]
+    allowed = {t.lower() for t in configured} or {config.auth.admin_tenant.lower()}
+    if tenant.lower() not in allowed:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "mcp_escalation_not_approver",
+                "reason": "this tenant is not configured as an escalation approver",
+                "request_id": request_id,
+            },
+            headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+        )
+    return None
+
+
+def _hitl_unavailable(request: Request, request_id: str) -> JSONResponse | None:
+    """503 when HITL is disabled or the broker is missing (fail-closed surface)."""
+    broker: HitlBroker | None = getattr(request.app.state, "mcp_hitl", None)
+    if broker is None or not request.app.state.config.mcp.hitl_enabled:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "mcp_hitl_disabled",
+                "reason": "human-in-the-loop approval is not enabled on this gateway",
+                "request_id": request_id,
+            },
+        )
+    return None
+
+
+@router.get("/escalations")
+async def list_escalations(request: Request) -> JSONResponse:
+    """Pending escalations (approver view: ids, digest, bounded argument preview)."""
+    request_id = getattr(request.state, "request_id", None) or "mcp-hitl"
+    refusal = _approver_refusal(request)
+    if refusal is not None:
+        return refusal
+    unavailable = _hitl_unavailable(request, request_id)
+    if unavailable is not None:
+        return unavailable
+    broker: HitlBroker = request.app.state.mcp_hitl
+    # Oldest first: a queue that hides its age is how escalations get abandoned.
+    return JSONResponse(
+        {
+            "escalations": [record.to_view() for record in broker.pending_for_approval()],
+            "pending": broker.pending_count,
+            "timeout_seconds": request.app.state.config.mcp.hitl_timeout_seconds,
+        }
+    )
+
+
+@router.post("/escalations/{escalation_id}")
+async def decide_escalation(escalation_id: str, request: Request) -> JSONResponse:
+    """Approve or deny one pending escalation. Single-shot, audited, attributed."""
+    request_id = getattr(request.state, "request_id", None) or "mcp-hitl"
+    refusal = _approver_refusal(request)
+    if refusal is not None:
+        return refusal
+    unavailable = _hitl_unavailable(request, request_id)
+    if unavailable is not None:
+        return unavailable
+
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(
+            status_code=400, content={"error": "invalid_json", "request_id": request_id}
+        )
+    if not isinstance(body, dict) or not isinstance(body.get("approve"), bool):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_decision",
+                "reason": 'body must be {"approve": true|false, "reason": optional string}',
+                "request_id": request_id,
+            },
+        )
+    approved = body["approve"]
+    raw_reason = body.get("reason")
+    if raw_reason is not None and not isinstance(raw_reason, str):
+        return JSONResponse(
+            status_code=400, content={"error": "invalid_decision", "request_id": request_id}
+        )
+    reason = (raw_reason or "").strip()[:500] or None
+
+    broker: HitlBroker = request.app.state.mcp_hitl
+    record = broker.get(escalation_id)
+    if record is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "mcp_escalation_unknown", "request_id": request_id},
+        )
+    if record.status != STATUS_PENDING:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "mcp_escalation_not_pending",
+                "status": record.status,
+                "request_id": request_id,
+            },
+        )
+
+    approver = (getattr(request.state, "auth_tenant", None) or "default").lower()
+    try:
+        decided = await broker.decide(
+            escalation_id, approved=approved, decided_by=approver, reason=reason
+        )
+    except HitlError as exc:  # expired between the check above and the decision
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "mcp_escalation_not_pending",
+                "reason": str(exc),
+                "request_id": request_id,
+            },
+        )
+
+    # The decision is audited against the ESCALATION's tenant (that is whose
+    # call it was), with the approver recorded separately — never a secret.
+    audit = _audit(request)
+    audit.log_mcp_event(
+        request_id=request_id,
+        tenant_id=record.tenant,
+        verdict=Verdict.ALLOW if approved else Verdict.BLOCK,
+        rule_id="MCP-HITL-DECISION",
+        method=record.method,
+        tool=record.tool,
+        details={
+            "outcome": "escalation_approved" if approved else "escalation_denied",
+            "escalation_id": record.escalation_id,
+            "agent_id": record.agent,
+            "decided_by": approver,
+            "decision_reason": reason,
+            "request_digest": record.digest,
+            "escalation_source": record.source,
+        },
+        total_latency_ms=0.0,
+    )
+    return JSONResponse(decided.to_view())
