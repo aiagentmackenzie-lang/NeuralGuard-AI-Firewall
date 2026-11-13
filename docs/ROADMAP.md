@@ -52,8 +52,6 @@ done until it is merged, CI-gated, and documented.
 | **SSE hold-back streaming** | Streaming requests are currently refused fail-closed (`422`) by design. Hold-back scanning would let streams start after the prefix is scanned | Real deployments increasingly stream; the refusal is honest but blocks adoption | Planned (demand-driven) |
 | **JWT residuals** | RS256/OIDC discovery (JWKS), refresh tokens, Vault/SOPS secret-manager integration | Enterprise auth completeness | Planned (demand-driven) |
 | **i18n native-speaker sign-off** | The rule packs had a machine self-audit (all 5 defects it found were fixed and re-verified); one language needs a human native-speaker pass (~10 min worksheet in [`i18n_native_review_request.md`](i18n_native_review_request.md)); the other languages stay deferred with an honest README residual | Machine self-audit is not human review — say so | Open (human-gated) |
-| **Per-(agent, tool) upstream credentials** | Credentials were keyed by tool, so two agents permitted the same tool shared its upstream principal. Mapping keys are now `tool` or `agent|tool` (exact NG-11 identity), most-specific-wins; once a tool has any agent-scoped entry a caller without one is refused rather than handed the default | An upstream that logs a tool call can now say which agent made it | Shipped (`#25`, `904ed4d`) |
-| **HITL callback for MCP ESCALATE** | The gateway refused + audited on ESCALATE with no approval path. NG-15 adds a bounded, digest-bound request/decision loop: tenant-level approvers only, single-use approvals, and every remaining gate still enforced after a "yes" | The intent-gate story is only complete if a human decision is actually actionable — and only if an agent cannot approve itself | Shipped (`#26`, `532b382`) |
 
 ---
 

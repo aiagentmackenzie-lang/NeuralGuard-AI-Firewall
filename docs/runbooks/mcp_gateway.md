@@ -309,6 +309,9 @@ NEURALGUARD_MCP_HITL_TIMEOUT_SECONDS=10        # 1-60s the request may be held
 NEURALGUARD_MCP_HITL_TTL_SECONDS=300           # pending lifetime (>= timeout)
 NEURALGUARD_MCP_HITL_MAX_PENDING=256           # per worker; at the cap, refuse
 NEURALGUARD_MCP_HITL_APPROVER_TENANTS=admin    # empty = the admin tenant only
+#   A named approver tenant decides only ITS OWN escalations; the admin tenant
+#   (the gateway operator) decides any. That keeps the approver list from
+#   becoming a cross-tenant read of another tenant's tool arguments.
 ```
 
 Flow for a `tools/call` the tenant policy escalates:
@@ -333,9 +336,15 @@ curl -H "Authorization: Bearer $APPROVER_KEY" https://gateway/v1/mcp/escalations
 curl -X POST -H "Authorization: Bearer $APPROVER_KEY"   -d '{"approve": true, "reason": "change window CHG-1041"}'   https://gateway/v1/mcp/escalations/<escalation_id>
 ```
 
-Responses: `200` decision recorded · `400` invalid decision body · `403` not an
-approver / agent-bound credential · `404` unknown or already consumed · `409`
-already decided · `503` HITL disabled.
+Responses: `200` decision recorded · `400` `invalid_decision` · `403`
+`mcp_escalation_not_approver` / `mcp_escalation_agent_forbidden` /
+`mcp_escalation_other_tenant` · `404` `mcp_escalation_unknown` (unknown or
+already consumed) · `409` `mcp_escalation_not_pending` · `503`
+`mcp_hitl_disabled`.
+
+The waiting caller sees one of `mcp_escalation_denied` /
+`mcp_escalation_timeout` / `mcp_escalation_capacity` — all three are a `403`
+(or `503` for capacity), never a pass.
 
 Audit events: `MCP-HITL-RAISED`, `MCP-HITL-APPROVED`, `MCP-HITL-DENIED`,
 `MCP-HITL-TIMEOUT`, `MCP-HITL-CAPACITY`, and `MCP-HITL-DECISION` on the
@@ -351,10 +360,12 @@ because reviewing the call is the point of the review.
   (NG-11) is refused with `mcp_escalation_agent_forbidden`: an agent raising an
   escalation for itself and approving it is the abuse case this feature would
   otherwise create.
-- **Only named approvers decide.** The deciding tenant must be in
-  `HITL_APPROVER_TENANTS` (default: the admin tenant). No approver configured
-  means no approval path — `hitl_enabled` is off by default and the old
-  refusal is unchanged.
+- **Only named approvers decide, and only inside their own tenant.** The
+  deciding tenant must be in `HITL_APPROVER_TENANTS` (default: the admin
+  tenant), and a non-admin approver tenant may only see and decide its **own**
+  escalations (`403 mcp_escalation_other_tenant`). The admin tenant is global
+  because it is the gateway operator. No approver configured means no approval
+  path — `hitl_enabled` is off by default and the old refusal is unchanged.
 - **Approval is single-use and digest-bound.** An approval authorizes exactly
   the request that raised it; the id is consumed on use and a replay finds
   nothing. It cannot be applied to different arguments.
@@ -378,6 +389,22 @@ because reviewing the call is the point of the review.
   raised escalation lands in the audit chain, which your existing SIEM routing
   (Splunk HEC / webhook / SecurityScarletAI) already forwards. Approvers poll
   or consume that alert; the decision API is the callback surface.
+- **Capacity is global, not per tenant.** One noisy tenant can fill
+  `HITL_MAX_PENDING` and cause other tenants' escalations to be refused
+  (`503 mcp_escalation_capacity`). That is a deliberate fail-closed refusal —
+  nothing is auto-approved — but it is an availability coupling, so size the
+  cap for the noisiest tenant you expect.
+
+### What "human" means here (stated, not implied)
+
+The gateway authenticates a **credential**, not a person: `decided_by` records
+the approver *tenant*, and a script holding that tenant's key is
+indistinguishable from a human at a keyboard. What the control does guarantee
+is the property that matters for containment — the decision cannot come from
+the workload agent's own credential, cannot be replayed, cannot be applied to a
+different payload, and cannot be granted by timeout. If you need
+person-level approval, put the approver key behind your IdP/SSO proxy and let
+that layer be the identity boundary.
 
 ## Honest limits (documented, not hidden)
 
