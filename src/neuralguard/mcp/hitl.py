@@ -216,13 +216,16 @@ class HitlBroker:
             return record
 
     def pending_for_approval(self) -> list[PendingEscalation]:
-        """All unexpired pending records, oldest first (approver list view)."""
-        now = time.monotonic()
-        pending = [
-            r
-            for r in self._records.values()
-            if r.status == STATUS_PENDING and not r.is_expired(now)
-        ]
+        """All unexpired pending records, oldest first (approver list view).
+
+        Purges expired records first, so the list an approver sees is the whole
+        truth: an expired escalation must not be listable, and an
+        approved-but-unconsumed record (a client that disconnected after the
+        decision) must not linger past its TTL. Safe without the lock — no
+        await here, so nothing can interleave on the event loop.
+        """
+        self._purge_expired(time.monotonic())
+        pending = [r for r in self._records.values() if r.status == STATUS_PENDING]
         return sorted(pending, key=lambda r: r.created_at)
 
     async def decide(

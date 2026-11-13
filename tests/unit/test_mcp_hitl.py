@@ -446,6 +446,84 @@ class TestRouteApprovalLoop:
             assert (await task).status_code == 403
 
     @pytest.mark.asyncio
+    async def test_tenant_approver_is_scoped_to_its_own_escalations(self) -> None:
+        # `beta` is an approver, but only `acme`'s call is pending. Naming a
+        # tenant as an approver must not become a cross-tenant read of another
+        # tenant's tool arguments.
+        app, _stub, _ = _app(approvers=["admin", "beta"])
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            await _prime(client)
+            task = asyncio.create_task(
+                client.post(
+                    "/v1/mcp",
+                    json=_rpc("deploy_prod", {"env": "prod"}),
+                    headers=_headers("deploy_prod", _CALLER_KEY),
+                )
+            )
+            record = await _await_escalation(client)  # admin sees it
+            beta_view = await client.get(
+                "/v1/mcp/escalations", headers={"Authorization": "Bearer otherapproverkey"}
+            )
+            assert beta_view.status_code == 200
+            assert beta_view.json()["escalations"] == []
+            assert beta_view.json()["pending"] == 0
+            assert beta_view.json()["scope"] == "beta"
+
+            refused = await _decide(client, record["escalation_id"], True, key="otherapproverkey")
+            assert refused.status_code == 403
+            assert refused.json()["error"] == "mcp_escalation_other_tenant"
+
+            # The admin tenant is the gateway operator: global by design.
+            admin_view = await client.get(
+                "/v1/mcp/escalations", headers={"Authorization": "Bearer approverkey"}
+            )
+            assert admin_view.json()["scope"] == "global"
+            assert [r["escalation_id"] for r in admin_view.json()["escalations"]] == [
+                record["escalation_id"]
+            ]
+            assert (await _decide(client, record["escalation_id"], False)).status_code == 200
+            assert (await task).status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_list_count_matches_the_list(self) -> None:
+        app, _stub, _ = _app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            await _prime(client)
+            task = asyncio.create_task(
+                client.post(
+                    "/v1/mcp",
+                    json=_rpc("deploy_prod"),
+                    headers=_headers("deploy_prod", _CALLER_KEY),
+                )
+            )
+            record = await _await_escalation(client)
+            view = await client.get(
+                "/v1/mcp/escalations", headers={"Authorization": "Bearer approverkey"}
+            )
+            assert view.json()["pending"] == len(view.json()["escalations"]) == 1
+            await _decide(client, record["escalation_id"], False)
+            await task
+
+    @pytest.mark.asyncio
+    async def test_decision_audit_records_real_latency(self) -> None:
+        app, _stub, captured = _app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            await _prime(client)
+            task = asyncio.create_task(
+                client.post(
+                    "/v1/mcp",
+                    json=_rpc("deploy_prod"),
+                    headers=_headers("deploy_prod", _CALLER_KEY),
+                )
+            )
+            record = await _await_escalation(client)
+            await _decide(client, record["escalation_id"], False)
+            await task
+        decision = next(e for e in captured if e["rule_id"] == "MCP-HITL-DECISION")
+        assert decision["total_latency_ms"] > 0, "0.0 is a false record in the audit trail"
+        assert decision["details"]["decided_by"] == "admin"
+
+    @pytest.mark.asyncio
     async def test_decision_is_single_shot(self) -> None:
         app, _stub, _ = _app()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
@@ -500,7 +578,8 @@ class TestRouteApprovalLoop:
         assert response.status_code == 403
         assert response.json()["error"] == "mcp_gate_escalated"
         assert listed.status_code == 503
-        assert any(e["details"].get("outcome") == "intent_gate_escalate" for e in captured)
+        # Pre-NG-15 vocabulary preserved verbatim: SIEM rules key on it.
+        assert any(e["details"].get("outcome") == "gate_escalate" for e in captured)
         assert [c["method"] for c in stub.calls] == ["tools/list"]
 
     @pytest.mark.asyncio
@@ -589,6 +668,38 @@ class TestRouteApprovalLoop:
         raised = next(e for e in captured if e["details"].get("outcome") == "escalation_raised")
         assert raised["details"]["source"] == "argument_gate"
         assert raised["details"]["argument"] == "path"
+
+
+class TestHitlDisabledVocabulary:
+    @pytest.mark.asyncio
+    async def test_argument_escalation_keeps_its_shipped_outcome_string(self) -> None:
+        policy = McpToolPolicy(
+            tool_constraints={
+                "read_file": [
+                    ArgumentConstraint(
+                        argument="path",
+                        kind=ConstraintKind.PATH_PREFIX,
+                        values=["/srv/data"],
+                        action=ConstraintAction.ESCALATE,
+                        reason="outside the reviewed prefix",
+                    )
+                ]
+            }
+        )
+        app, stub, captured = _app(policy=policy, tools=["read_file"], hitl=False)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            await _prime(client)
+            response = await client.post(
+                "/v1/mcp",
+                json=_rpc("read_file", {"path": "/etc/shadow"}),
+                headers=_headers("read_file", _CALLER_KEY),
+            )
+        assert response.status_code == 403
+        assert response.json()["error"] == "mcp_argument_escalated"
+        outcomes = [e["details"].get("outcome") for e in captured]
+        assert "argument_escalate" in outcomes
+        assert "argument_gate_escalate" not in outcomes
+        assert [c["method"] for c in stub.calls] == ["tools/list"]
 
 
 # ── Settings ───────────────────────────────────────────────────────────────

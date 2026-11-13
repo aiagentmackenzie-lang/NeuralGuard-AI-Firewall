@@ -282,14 +282,18 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         reason: str,
         source: str,
         extra: dict[str, Any],
+        disabled_outcome: str,
         disabled_response: JSONResponse,
     ) -> JSONResponse | None:
         if not (config.mcp.hitl_enabled and broker is not None):
+            # The pre-NG-15 audit vocabulary is preserved verbatim
+            # (``gate_escalate`` / ``argument_escalate``): renaming an outcome
+            # silently breaks every SIEM rule and dashboard built on it.
             _audit_event(
                 verdict=Verdict.ESCALATE,
                 decision=gate,
                 rule_id=rule_id,
-                details={"outcome": f"{source}_escalate", **extra},
+                details={"outcome": disabled_outcome, **extra},
             )
             return disabled_response
 
@@ -403,6 +407,7 @@ async def mcp_gateway(request: Request) -> JSONResponse:
             reason=gate.reason,
             source="intent_gate",
             extra={},
+            disabled_outcome="gate_escalate",
             disabled_response=_gate_response(gate, 403, request_id, _elapsed()),
         )
         if refusal is not None:
@@ -429,6 +434,7 @@ async def mcp_gateway(request: Request) -> JSONResponse:
                     reason=arg_decision.reason,
                     source="argument_gate",
                     extra=arg_extra,
+                    disabled_outcome="argument_escalate",
                     disabled_response=JSONResponse(
                         status_code=403,
                         content={
@@ -670,21 +676,29 @@ async def mcp_gateway(request: Request) -> JSONResponse:
 
 # ── NG-15: the human side of the loop ─────────────────────────────────────
 #
-# These endpoints are the *operator* surface, not the caller surface. Two rules
-# keep the loop from being gamed by the thing it gates:
+# These endpoints are the *operator* surface, not the caller surface. Three
+# rules keep the loop from being gamed by the thing it gates:
 #
 # 1. a decision requires a TENANT-LEVEL credential (no authenticated agent) —
 #    an agent raising an escalation for itself and approving it is the abuse
 #    case this feature would otherwise create;
 # 2. the deciding tenant must be named in ``hitl_approver_tenants`` (default:
-#    the admin tenant). No approver configured = no approval path.
+#    the admin tenant) — no approver configured means no approval path;
+# 3. a non-admin approver tenant is scoped to its OWN escalations. Without
+#    that, naming a tenant as an approver would hand it a cross-tenant read of
+#    other tenants' tool arguments (the preview) and the ability to approve
+#    them. The admin tenant stays global: it is the gateway operator.
 
 
-def _approver_refusal(request: Request) -> JSONResponse | None:
-    """403 unless this request may decide escalations; None when it may."""
+def _approver_scope(request: Request) -> tuple[str, bool] | JSONResponse:
+    """Return ``(tenant, is_global)``, or a 403 response for non-approvers.
+
+    ``is_global`` is True only for the admin tenant — the operator of the
+    gateway, who may decide any tenant's escalation.
+    """
     config = request.app.state.config
     request_id = getattr(request.state, "request_id", None) or "mcp-hitl"
-    tenant = getattr(request.state, "auth_tenant", None) or "default"
+    tenant = (getattr(request.state, "auth_tenant", None) or "default").lower()
     agent = getattr(request.state, "auth_agent", None)
 
     if agent is not None:
@@ -699,9 +713,10 @@ def _approver_refusal(request: Request) -> JSONResponse | None:
             headers={_VERDICT_HEADER: Verdict.BLOCK.value},
         )
 
+    admin_tenant = config.auth.admin_tenant.lower()
     configured = [t for t in config.mcp.hitl_approver_tenants if t]
-    allowed = {t.lower() for t in configured} or {config.auth.admin_tenant.lower()}
-    if tenant.lower() not in allowed:
+    allowed = {t.lower() for t in configured} or {admin_tenant}
+    if tenant not in allowed:
         return JSONResponse(
             status_code=403,
             content={
@@ -711,7 +726,7 @@ def _approver_refusal(request: Request) -> JSONResponse | None:
             },
             headers={_VERDICT_HEADER: Verdict.BLOCK.value},
         )
-    return None
+    return tenant, tenant == admin_tenant
 
 
 def _hitl_unavailable(request: Request, request_id: str) -> JSONResponse | None:
@@ -733,18 +748,26 @@ def _hitl_unavailable(request: Request, request_id: str) -> JSONResponse | None:
 async def list_escalations(request: Request) -> JSONResponse:
     """Pending escalations (approver view: ids, digest, bounded argument preview)."""
     request_id = getattr(request.state, "request_id", None) or "mcp-hitl"
-    refusal = _approver_refusal(request)
-    if refusal is not None:
-        return refusal
+    scope = _approver_scope(request)
+    if isinstance(scope, JSONResponse):
+        return scope
+    approver, is_global = scope
     unavailable = _hitl_unavailable(request, request_id)
     if unavailable is not None:
         return unavailable
     broker: HitlBroker = request.app.state.mcp_hitl
     # Oldest first: a queue that hides its age is how escalations get abandoned.
+    records = broker.pending_for_approval()
+    if not is_global:
+        # Least privilege: a tenant approver sees only its own callers' calls.
+        records = [record for record in records if record.tenant == approver]
     return JSONResponse(
         {
-            "escalations": [record.to_view() for record in broker.pending_for_approval()],
-            "pending": broker.pending_count,
+            "escalations": [record.to_view() for record in records],
+            # Same number as the list — a count that disagrees with what the
+            # approver can see is how a queue gets abandoned.
+            "pending": len(records),
+            "scope": "global" if is_global else approver,
             "timeout_seconds": request.app.state.config.mcp.hitl_timeout_seconds,
         }
     )
@@ -754,9 +777,11 @@ async def list_escalations(request: Request) -> JSONResponse:
 async def decide_escalation(escalation_id: str, request: Request) -> JSONResponse:
     """Approve or deny one pending escalation. Single-shot, audited, attributed."""
     request_id = getattr(request.state, "request_id", None) or "mcp-hitl"
-    refusal = _approver_refusal(request)
-    if refusal is not None:
-        return refusal
+    started = time.perf_counter()
+    scope = _approver_scope(request)
+    if isinstance(scope, JSONResponse):
+        return scope
+    approver, is_global = scope
     unavailable = _hitl_unavailable(request, request_id)
     if unavailable is not None:
         return unavailable
@@ -791,6 +816,19 @@ async def decide_escalation(escalation_id: str, request: Request) -> JSONRespons
             status_code=404,
             content={"error": "mcp_escalation_unknown", "request_id": request_id},
         )
+    if not is_global and record.tenant != approver:
+        # Not 404: the approver is allowed to know the id exists (it is in the
+        # audit trail) but must not decide outside its own tenant.
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "mcp_escalation_other_tenant",
+                "reason": "this escalation belongs to another tenant; only that "
+                "tenant or the admin tenant may decide it",
+                "request_id": request_id,
+            },
+            headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+        )
     if record.status != STATUS_PENDING:
         return JSONResponse(
             status_code=409,
@@ -801,7 +839,6 @@ async def decide_escalation(escalation_id: str, request: Request) -> JSONRespons
             },
         )
 
-    approver = (getattr(request.state, "auth_tenant", None) or "default").lower()
     try:
         decided = await broker.decide(
             escalation_id, approved=approved, decided_by=approver, reason=reason
@@ -835,6 +872,8 @@ async def decide_escalation(escalation_id: str, request: Request) -> JSONRespons
             "request_digest": record.digest,
             "escalation_source": record.source,
         },
-        total_latency_ms=0.0,
+        # The real decision-request latency, not a placeholder: this field is
+        # in the tamper-evident trail and 0.0 would be a false record.
+        total_latency_ms=round((time.perf_counter() - started) * 1000, 2),
     )
     return JSONResponse(decided.to_view())
