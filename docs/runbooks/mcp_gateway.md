@@ -449,3 +449,51 @@ NEURALGUARD_MCP_ENABLED=true NEURALGUARD_MCP_UPSTREAM_URL=http://localhost:9999 
 # 3. Audit: every gate decision lands in the SAME hash-chained trail
 #    (audit-verify covers MCP events — no separate tooling).
 ```
+
+### Drill — the HITL loop (NG-15)
+
+Runs against a gateway whose tenant policy escalates one tool (the automated
+suite covers the same loop through the real ASGI app in
+`tests/unit/test_mcp_hitl.py`; this is the operator's version).
+
+```bash
+# 1. A tenant whose policy escalates the tool. Written to /tmp on purpose —
+#    a drill file inside the repo would show up in `git status`.
+mkdir -p /tmp/ng-tenants
+cat > /tmp/ng-tenants/acme.yaml <<'YAML'
+tenant_id: acme
+mcp:
+  tool_rules:
+    deploy_prod: escalate
+YAML
+
+# 2. Enable tenants + HITL, with a caller bound to an agent and an admin
+#    approver key, and a 10 s wait.
+export CALLER_KEY=callerkey APPROVER_KEY=approverkey
+export NEURALGUARD_TENANT_ENABLED=true NEURALGUARD_TENANT_CONFIG_PATH=/tmp/ng-tenants
+export NEURALGUARD_AUTH_ENABLED=true
+export NEURALGUARD_AUTH_API_KEYS="callerkey|acme|deploy-bot,approverkey|admin"
+NEURALGUARD_MCP_ENABLED=true NEURALGUARD_MCP_UPSTREAM_URL=http://localhost:9999 \
+NEURALGUARD_MCP_HITL_ENABLED=true NEURALGUARD_MCP_HITL_TIMEOUT_SECONDS=10 \
+NEURALGUARD_MCP_HITL_APPROVER_TENANTS=admin \
+  uv run neuralguard serve --port 8000
+
+# 3. Call the escalated tool. It BLOCKS for up to 10 s; in another shell:
+curl -s -H "Authorization: Bearer $CALLER_KEY" -H "Mcp-Method: tools/call" \
+  -H "Mcp-Name: deploy_prod" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+  "params":{"name":"deploy_prod","arguments":{"env":"prod"}}}' \
+  http://localhost:8000/v1/mcp &
+
+# 4. Approve it (or deny, or do nothing and watch it time out).
+curl -s -H "Authorization: Bearer $APPROVER_KEY" \
+  http://localhost:8000/v1/mcp/escalations
+curl -s -H "Authorization: Bearer $APPROVER_KEY" \
+  -d '{"approve":true,"reason":"CHG-1041"}' \
+  http://localhost:8000/v1/mcp/escalations/<id>
+
+# 5. Expect: 200 forwarded + MCP-HITL-RAISED then MCP-HITL-APPROVED in the trail
+#    on approval; 403 mcp_escalation_denied / _timeout with nothing forwarded
+#    otherwise; 403 mcp_escalation_agent_forbidden if the approver key is
+#    agent-bound; 403 mcp_escalation_other_tenant for another tenant's call.
+uv run neuralguard audit-verify ./audit_logs
+```
