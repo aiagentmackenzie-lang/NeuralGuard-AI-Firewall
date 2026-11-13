@@ -377,10 +377,13 @@ async def mcp_gateway(request: Request) -> JSONResponse:
         elif prov_state.outcome == "clean":
             metrics.record_mcp_gate("provenance_clean")
 
-    # ── NG-12: select the upstream credential for THIS tool ──
-    # Resolved server-side from the operator's mapping. A mapped-but-unresolvable
+    # ── NG-12/NG-14: select the upstream credential for THIS agent + tool ──
+    # Resolved server-side from the operator's mapping; the more specific
+    # (agent, tool) entry wins over the tool-wide one. A mapped-but-unresolvable
     # reference is refused (503) rather than falling back to the default token:
-    # falling back would hand a scoped call the broad credential.
+    # falling back would hand a scoped call the broad credential. The same holds
+    # when a tool is agent-scoped and this caller has no entry — it is denied,
+    # never handed the default.
     credential_source = "default" if config.mcp.upstream_auth_token else "none"
     # None = "let the transport use the configured default" (catalog methods
     # and any non-tool call). Only a resolved per-tool credential pins a value.
@@ -388,7 +391,7 @@ async def mcp_gateway(request: Request) -> JSONResponse:
     if method == "tools/call":
         resolver = _credentials(request)
         try:
-            resolved = resolver.for_tool(body_tool or "")
+            resolved = resolver.for_tool(body_tool or "", agent=agent)
         except CredentialError as exc:
             metrics.record_mcp_gate("credential_unavailable")
             _audit_event(
@@ -397,15 +400,16 @@ async def mcp_gateway(request: Request) -> JSONResponse:
                 rule_id="MCP-CRED-001",
                 details={
                     "outcome": "credential_unavailable",
-                    "credential_source": resolver.source_for(body_tool or ""),
-                    # Message carries the reference/path, never a secret.
+                    "credential_source": resolver.source_for(body_tool or "", agent=agent),
+                    # Message carries the reference/path and agent id, never a secret.
                     "reason": str(exc),
                 },
             )
             logger.error(
                 "mcp_credential_unavailable",
                 tool=body_tool,
-                source=resolver.source_for(body_tool or ""),
+                agent=agent,
+                source=resolver.source_for(body_tool or "", agent=agent),
             )
             return JSONResponse(
                 status_code=503,

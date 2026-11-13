@@ -959,13 +959,16 @@ class McpGatewaySettings(BaseSettings):
     tool_credentials: dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "NG-12: per-tool upstream credential REFERENCES, e.g. "
-            '{"read_file": "env:READONLY_TOKEN", "admin_sql": "file:/run/secrets/admin"} '
-            "(JSON in the env var). A mapped tool carries ITS credential instead "
-            "of upstream_auth_token. Values are references, never secrets: they "
-            "never appear in audit events or responses. If a mapped reference "
-            "cannot be resolved the call is REFUSED — it never falls back to "
-            "the default token."
+            "NG-12/NG-14: per-(agent, tool) upstream credential REFERENCES, e.g. "
+            '{"read_file": "env:READONLY_TOKEN", "billing-bot|refund": '
+            '"file:/run/secrets/refund-billing"} (JSON in the env var). Keys are '
+            "'tool' (tool-wide, any caller) or 'agent|tool' (only that NG-11 "
+            "workload agent). A mapped call carries ITS credential instead of "
+            "upstream_auth_token; the more specific (agent, tool) entry wins. "
+            "Values are references, never secrets: they never appear in audit "
+            "events or responses. Resolution fails closed — an unresolvable "
+            "reference is REFUSED, and once a tool has any agent-scoped entry a "
+            "caller without one is REFUSED rather than handed the default token."
         ),
     )
     require_tool_credential: bool = Field(
@@ -981,10 +984,18 @@ class McpGatewaySettings(BaseSettings):
     @field_validator("tool_credentials")
     @classmethod
     def _validate_credential_refs(cls, v: dict[str, str]) -> dict[str, str]:
-        """Fail at configuration load on a malformed reference, not at call time."""
-        from neuralguard.mcp.credentials import validate_reference
+        """Fail at configuration load on a malformed key or reference, not at call time."""
+        from neuralguard.mcp.credentials import validate_mapping_key, validate_reference
 
-        return {tool: validate_reference(ref) for tool, ref in v.items()}
+        normalized: dict[str, str] = {}
+        for key, ref in v.items():
+            map_key = validate_mapping_key(key)
+            if map_key in normalized:
+                raise ValueError(
+                    f"duplicate tool_credentials entry after normalization: {map_key!r}"
+                )
+            normalized[map_key] = validate_reference(ref)
+        return normalized
 
     # NG-9: provenance-lite egress binding (opt-in; off by default).
     provenance_mode: Literal["off", "warn", "block"] = Field(

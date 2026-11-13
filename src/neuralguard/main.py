@@ -663,21 +663,23 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
         from neuralguard.mcp.provenance import ProvenanceGate
         from neuralguard.mcp.transport import McpTransport
 
-        # NG-12: per-tool upstream credentials (references only; secrets are
-        # read per call so an orchestrator can inject them after boot).
-        app.state.mcp_credentials = ToolCredentialResolver(
+        # NG-12/NG-14: per-(agent, tool) upstream credentials (references only;
+        # secrets are read per call so an orchestrator can inject them after boot).
+        resolver = ToolCredentialResolver(
             tool_credentials=config.mcp.tool_credentials,
             default_token=config.mcp.upstream_auth_token,
             require_tool_credential=config.mcp.require_tool_credential,
         )
+        app.state.mcp_credentials = resolver
         # Loud but non-fatal: an unresolved reference fails the call it gates
         # (503) and shows up here by NAME at boot, so a mis-mounted secret is
         # visible before the first tool call rather than only after it.
-        unresolved = app.state.mcp_credentials.unresolved()
+        unresolved = resolver.unresolved()
         if unresolved:
             structlog.get_logger("neuralguard").warning(
                 "mcp_credential_unresolved",
                 references=unresolved,
+                agent_scoped_tools=resolver.agent_scoped_tools(),
                 msg="MCP tool credentials are configured but currently unresolvable; "
                 "calls for those tools will be refused until the secrets are present.",
             )
@@ -705,6 +707,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             require_signature_on_change=config.mcp.require_signature_on_change,
             provenance_mode=config.mcp.provenance_mode,
             tool_credentials=len(config.mcp.tool_credentials),
+            agent_scoped_tools=resolver.agent_scoped_tools(),
             require_tool_credential=config.mcp.require_tool_credential,
             msg="MCP gateway ENABLED (NG-7/NG-8). Intent Gate on headers "
             "pre-body-parse; tool-catalog rug-pull detection "

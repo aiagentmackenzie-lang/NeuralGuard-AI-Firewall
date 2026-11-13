@@ -7,7 +7,7 @@
 > the public repo.
 >
 > **Plan, not a promise:** scope and ordering adjust with evidence from
-> each phase. **Last updated:** 2026-11-12.
+> each phase. **Last updated:** 2026-11-13.
 
 ---
 
@@ -22,7 +22,7 @@ All of the following are merged, CI-gated, and documented in the
 | Agent Guardian — multi-turn detection (delayed injection, role drift, gradual extraction/memory poisoning) | Shipped |
 | Canary token mint/verify (HMAC-SHA256, no server-side token store) | Shipped |
 | Prompt-template analyzer (static injection-sink analysis, CI-able) | Shipped |
-| MCP gateway — per-tool intent gate, argument/resource constraints (NG-10), workload identity + per-agent narrowing (NG-11), per-tool upstream credentials (NG-12), Ed25519-signed tool-catalog baselines (rug-pull refusal) | Shipped |
+| MCP gateway — per-tool intent gate, argument/resource constraints (NG-10), workload identity + per-agent narrowing (NG-11), per-tool upstream credentials (NG-12), per-(agent, tool) upstream credentials (NG-14), Ed25519-signed tool-catalog baselines (rug-pull refusal) | Shipped |
 | Appliance proxy in front of any OpenAI-compatible upstream | Shipped |
 | Per-tenant configuration (fail-safe overlay, hot-reload, mandatory core layers) | Shipped |
 | JWT bearer auth + runtime key rotation | Shipped |
@@ -52,7 +52,7 @@ done until it is merged, CI-gated, and documented.
 | **SSE hold-back streaming** | Streaming requests are currently refused fail-closed (`422`) by design. Hold-back scanning would let streams start after the prefix is scanned | Real deployments increasingly stream; the refusal is honest but blocks adoption | Planned (demand-driven) |
 | **JWT residuals** | RS256/OIDC discovery (JWKS), refresh tokens, Vault/SOPS secret-manager integration | Enterprise auth completeness | Planned (demand-driven) |
 | **i18n native-speaker sign-off** | The rule packs had a machine self-audit (all 5 defects it found were fixed and re-verified); one language needs a human native-speaker pass (~10 min worksheet in [`i18n_native_review_request.md`](i18n_native_review_request.md)); the other languages stay deferred with an honest README residual | Machine self-audit is not human review — say so | Open (human-gated) |
-| **Per-(agent, tool) upstream credentials** | Credentials are keyed by tool, so two agents permitted the same tool share its upstream principal. Selecting the credential by identity *and* tool would let the upstream enforce per-agent authority too | An upstream that logs a tool call cannot say which agent it was | Under consideration |
+| **Per-(agent, tool) upstream credentials** | Credentials were keyed by tool, so two agents permitted the same tool shared its upstream principal. Mapping keys are now `tool` or `agent|tool` (exact NG-11 identity), most-specific-wins; once a tool has any agent-scoped entry a caller without one is refused rather than handed the default | An upstream that logs a tool call can now say which agent made it | Implemented on `feat/ng14-agent-tool-credentials`; not claimed shipped until merged |
 | **HITL callback for MCP ESCALATE** | The MCP gateway currently refuses + audits on ESCALATE; a human-in-the-loop callback would complete the loop | Completeness of the intent-gate story | Under consideration |
 
 ---
