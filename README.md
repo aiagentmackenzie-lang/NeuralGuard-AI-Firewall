@@ -651,7 +651,7 @@ Plus nightly jobs: the [perf gate](.github/workflows/perf.yml) and the
 the 16-operator mutation gate). All Actions are SHA-pinned; dependabot
 covers actions + pip.
 
-**Current state:** 1,288 tests, 91% measured coverage (90% CI floor),
+**Current state:** 1,471 tests, 91% measured coverage (90% CI floor),
 mypy strict clean. A nightly bench run and the live-fire receipts document
 real numbers, not aspirations.
 
