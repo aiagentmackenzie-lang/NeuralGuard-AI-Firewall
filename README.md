@@ -529,7 +529,7 @@ a key cannot act on behalf of another tenant.
 | **Auth options** | Static API keys **and** short-lived JWTs (HS256 with alg allowlist) with runtime key rotation (admin-only, durable, atomic 0600 writes) |
 | **Resource limits** | Container memory/CPU limits; 1 MiB request-body cap enforced before JSON parse; 8 MiB decompression bomb hard cap |
 | **Observability** | Prometheus metrics, JSON logs in production, `correlation_id` on every error |
-| **Kubernetes** | Manifests + HPA, schema-validated offline (cluster drill pending) |
+| **Kubernetes** | Manifests + HPA, schema-validated offline **and cluster-drilled on kind** (2026-11-12: apply, 2/2 Ready, dependency-aware probes, HPA 2→4→2, signed Postgres audit rows; seven drill-found defects fixed) |
 | **Supply chain** | Hash-pinned deps, blocking `pip-audit`, CycloneDX SBOM signed + attested keyless with cosign in CI |
 
 Readiness semantics: `/v1/ready` reports per-component status, returns **503

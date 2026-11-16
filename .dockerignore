@@ -1,0 +1,53 @@
+# Build-context hygiene.
+#
+# The image is now published, so the context is a security boundary: the real
+# .env, tenant policy files and audit logs must never be uploaded to a builder
+# (local or CI) as part of a context tarball, even though no COPY statement
+# references them. Only pyproject.toml, uv.lock, README.md, LICENSE, src/,
+# corpus/benign_hard_negatives.jsonl and benchmarks/ng_vs_ns/benign_corpus.jsonl
+# are needed to build.
+
+# Version control + tooling
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Secrets and per-tenant state — never in a context
+.env
+.env.*
+!.env.example
+tenants/
+audit_logs/
+dist-sign/
+cosign/
+
+# Local environments and caches
+.venv
+venv
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+perf/
+
+# Model builds are large and gitignored; the image ships without them by design
+# (profiles mount models/ at /app/models).
+models/
+
+# Tests and benchmark run artifacts are not needed to build the image
+tests/
+benchmarks/ng_vs_ns/results/
+sbom.json
+sbom.xml
+
+# Deployment + docs are not copied into the image, but keeping them out of the
+# context also keeps the build cache honest.
+deploy/
+docs/

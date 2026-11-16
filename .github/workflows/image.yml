@@ -1,0 +1,289 @@
+name: Image
+
+# Publishes the NeuralGuard container image to GHCR, signed keyless with
+# cosign, with buildx provenance + SBOM attestations attached in the registry.
+#
+# Why this workflow exists: every manifest, runbook and README claim about
+# deploying NeuralGuard was true of a *locally built* image and false of a
+# published one — `deploy/kubernetes/deployment.yaml` pinned
+# `ghcr.io/aiagentmackenzie-lang/neuralguard:0.2.1`, a package that never
+# existed, and no workflow built one. A drill that loads a local image with
+# `kind load docker-image` validates the manifests, not the deployment path.
+#
+# Triggers:
+#   - push of a `v*` tag  → the release path; asserts the tag equals the
+#     pyproject version, publishes `<version>`, `sha-<short>` and `latest`.
+#   - workflow_dispatch   → publish (or build-only) the current commit under
+#     `<version>` and `sha-<short>`. No `latest`: latest means "a released tag".
+#
+# Cut the tag only from a green `main`. The image is the artifact a consumer
+# actually runs, so the gate must already be green on the commit it came from.
+#
+# The digest this workflow prints is the identity to pin in
+# `deploy/kubernetes/deployment.yaml` — a tag is mutable, a digest is not.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push to GHCR (false = build + sign nothing, no publish)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Two publishes racing on one tag would leave a stale signature next to a
+# replaced digest. Serialise per ref; do not cancel a publish mid-flight.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ── Airgapped boot smoke ───────────────────────────────────────────────
+  # Regression guard for the defect the first publish attempt found: the image
+  # ran `uv run`, which re-resolved dependencies AT CONTAINER START and needed
+  # DNS. A security gateway must boot with no egress and no write access, so the
+  # image is built for one platform, loaded locally, started with `--network
+  # none`, and health-checked from inside. A signed image that cannot start in
+  # an airgapped cluster is not worth signing.
+  smoke:
+    name: Boot smoke (airgapped container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Build (amd64, loaded locally)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: neuralguard:smoke
+          cache-from: type=gha,scope=ng-image
+
+      - name: Start with no network and wait for health
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name ng-smoke --network none neuralguard:smoke
+          for i in $(seq 1 40); do
+            if docker exec ng-smoke curl -fsS http://127.0.0.1:8000/v1/health > /tmp/health.json 2>/dev/null; then
+              echo "healthy after ${i}s"; cat /tmp/health.json; break
+            fi
+            sleep 1
+          done
+          docker exec ng-smoke curl -fsS http://127.0.0.1:8000/v1/health
+
+      - name: Assert no runtime package resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logs ng-smoke > /tmp/ng.log 2>&1 || true
+          if grep -qE "^Installed [0-9]+ packages|error resolving DNS" /tmp/ng.log; then
+            echo "::error::the container resolved dependencies at runtime — the entrypoint must not use 'uv run'"
+            grep -nE "^Installed [0-9]+ packages|error resolving DNS" /tmp/ng.log
+            exit 1
+          fi
+          grep -q "Application startup complete" /tmp/ng.log
+          echo "airgapped boot OK: no resolver, no egress"
+
+      - name: Tear down
+        if: always()
+        shell: bash
+        run: docker rm -f ng-smoke || true
+
+  # ── Build + push ───────────────────────────────────────────────────────
+  build:
+    name: Build + push image (amd64, arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [smoke]
+    permissions:
+      contents: read
+      packages: write  # push to GHCR with GITHUB_TOKEN
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Resolve version + tags
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/$OWNER/neuralguard"
+          VERSION=$(python3 -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          SHORT=${GITHUB_SHA::7}
+
+          # A release tag that disagrees with pyproject would publish an image
+          # whose `version` label lies. Refuse instead of publishing it.
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match pyproject version v$VERSION"
+              exit 1
+            fi
+          fi
+
+          TAGS="$IMAGE:$VERSION,$IMAGE:sha-$SHORT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAGS="$TAGS,$IMAGE:latest"
+          fi
+
+          {
+            echo "image=$IMAGE"
+            echo "version=$VERSION"
+            echo "tags=$TAGS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $TAGS"
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'push' || inputs.push }}
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          # Provenance (mode=max keeps build args + source) and an SPDX SBOM are
+          # attached in the registry as OCI attestations — the signature alone
+          # says "this digest came from this workflow", not "this is what is in it".
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=ng-image
+          cache-to: type=gha,mode=max,scope=ng-image
+          labels: |
+            org.opencontainers.image.title=NeuralGuard
+            org.opencontainers.image.description=LLM guard / AI application firewall: layered fail-closed prompt-injection defense, Agent Guardian, MCP gateway, appliance proxy.
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Publish digest to the run summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.meta.outputs.image }}"
+          DIGEST="${{ steps.push.outputs.digest }}"
+          {
+            echo "### Image digest"
+            echo
+            echo '```'
+            echo "$IMAGE@$DIGEST"
+            echo '```'
+            echo
+            echo "Pin it in \`deploy/kubernetes/deployment.yaml\`:"
+            echo
+            echo '```yaml'
+            echo "image: $IMAGE@$DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Sign + verify (keyless, GitHub OIDC) ───────────────────────────────
+  sign:
+    name: Sign + verify image (keyless cosign)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [smoke, build]
+    if: ${{ github.event_name == 'push' || inputs.push }}
+    permissions:
+      contents: read
+      packages: write   # cosign writes the signature + attestations to GHCR
+      id-token: write   # keyless signing via GitHub OIDC (Fulcio)
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532  # v4.1.3
+        with:
+          cosign-release: 'v3.0.6'
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign the digest (not the tag)
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          cosign sign --yes "ghcr.io/$OWNER/neuralguard@${{ needs.build.outputs.digest }}"
+
+      - name: Verify signature (identity-scoped to this workflow)
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/$OWNER/neuralguard@${{ needs.build.outputs.digest }}"
+          IDENTITY='^https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/\.github/workflows/image\.yml@'
+          cosign verify \
+            --certificate-identity-regexp "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE"
+
+      - name: Verify attestations (identity-scoped, schema-tolerant)
+        shell: bash
+        run: |
+          # The attestations are the claim about *contents*; if they are absent the
+          # docs must not say the image carries them. The predicate schema is
+          # buildx's choice (SLSA v1 today, v0.2 historically), so try both rather
+          # than pin a flag that could silently stop mattering.
+          set -uo pipefail
+          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/$OWNER/neuralguard@${{ needs.build.outputs.digest }}"
+          IDENTITY='^https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/\.github/workflows/image\.yml@'
+          verify() {
+            cosign verify-attestation --type "$1" \
+              --certificate-identity-regexp "$IDENTITY" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$IMAGE" > /dev/null 2>&1
+          }
+          for t in slsaprovenance1 slsaprovenance; do
+            if verify "$t"; then echo "provenance verified (--type $t)"; PROV=1; break; fi
+          done
+          for t in spdxjson spdx; do
+            if verify "$t"; then echo "SBOM verified (--type $t)"; SBOM=1; break; fi
+          done
+          [ "${PROV:-0}" = 1 ] || { echo "::error::no verifying SLSA provenance attestation on the digest"; exit 1; }
+          [ "${SBOM:-0}" = 1 ] || { echo "::error::no verifying SPDX SBOM attestation on the digest"; exit 1; }
+          echo "--- predicate types attached:"
+          cosign download attestation "$IMAGE" \
+            | jq -r '.payload' \
+            | while read -r p; do printf '%s' "$p" | base64 -d | jq -r '.predicateType'; done \
+            | sort -u
+
