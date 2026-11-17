@@ -99,11 +99,19 @@ demand) and does five things:
 3. **Pushes** `ghcr.io/<owner>/neuralguard:<version>` and `:sha-<short>`, plus
    `:latest` on a tag push only. `<owner>` is derived from the repository owner,
    so a fork publishes under its own namespace instead of colliding.
-4. **Signs the digest** (never the tag) keyless, then verifies its own signature
-   and both attestations with an identity regexp pinned to
-   `.../.github/workflows/image.yml@`. A signature from any other workflow or
-   repository fails the job.
-5. **Prints the digest pin line** in the run summary.
+4. **Signs the digest** (never the tag) keyless, **attests the dependency SBOM**
+   (CycloneDX, generated from the same extras the image installs) as a DSSE
+   attestation in the registry, then verifies its own signature and that
+   attestation with an identity regexp pinned to `.../.github/workflows/image.yml@`.
+   A signature from any other workflow or repository fails the job.
+5. **Checks the buildx attestations structurally.** `provenance: mode=max` and
+   `sbom: true` attach SLSA provenance and an SPDX SBOM as *attestation
+   manifests inside the image index* — and the OCI referrers API does not list
+   those, so `cosign verify-attestation` cannot see them. The job asserts they
+   are present by reading the index from the registry, instead of claiming a
+   check that fails on a correct image (that is exactly how the first publish
+   attempt went red).
+6. **Prints the digest pin line** in the run summary.
 
 A `smoke` job runs *before* anything is pushed: it builds the image for one
 platform, loads it locally, starts it with `--network none` and health-checks it
@@ -135,21 +143,39 @@ image: ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:<digest>
 
 ### Consumer verification (outside CI)
 
+There are three separate things to check, and they are not checked the same way:
+
+| What | How | Notes |
+|:--|:--|:--|
+| Signature | `cosign verify` | covers the digest, identity = this workflow |
+| Dependency SBOM | `cosign verify-attestation --type cyclonedx` | DSSE attestation created by the workflow |
+| Buildx provenance + SPDX SBOM | read the image **index** from the registry | index-embedded; **not** in the referrers API, so cosign cannot verify them |
+
 ```bash
 IMAGE=ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:<digest>
 IDENTITY='^https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/\.github/workflows/image\.yml@'
+ISS=https://token.actions.githubusercontent.com
 
-cosign verify --certificate-identity-regexp "$IDENTITY" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE"
+cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISS" "$IMAGE"
 
-cosign verify-attestation --type slsaprovenance --certificate-identity-regexp "$IDENTITY" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE"
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISS" "$IMAGE"
 
-cosign verify-attestation --type spdxjson --certificate-identity-regexp "$IDENTITY" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE"
-
-cosign tree "$IMAGE"   # lists everything attached to the digest
+# provenance + SPDX SBOM live in the index, not the referrers API
+TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:aiagentmackenzie-lang/neuralguard:pull&service=ghcr.io" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  "https://ghcr.io/v2/aiagentmackenzie-lang/neuralguard/manifests/${IMAGE##*@}" \
+| python3 -c 'import json,sys;print([m["annotations"]["vnd.docker.reference.type"] for m in json.load(sys.stdin)["manifests"] if (m.get("annotations") or {}).get("vnd.docker.reference.type")])'
 ```
+
+`cosign tree "$IMAGE"` lists the signature and the SBOM attestation — and will
+*not* list the buildx ones, for the reason above.
+
+To repair a release whose signature or attestation is missing, dispatch the
+workflow with the `digest` input: it signs and attests an already-published
+image instead of rebuilding, so the release's tag does not move.
 
 Admission control (verify before pull) is a cluster-side policy (Kyverno
 `verifyImages` / Sigstore policy-controller). It is **not wired**: none of the

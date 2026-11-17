@@ -43,10 +43,10 @@ spec:
       containers:
         - name: neuralguard
           # Published by .github/workflows/image.yml (GHCR, keyless cosign,
-          # provenance + SBOM attestations). Pin the DIGEST from that run's
-          # summary, not the tag — a tag is mutable and the signature covers the
-          # digest. Runbook: docs/runbooks/artifact_signing.md §4.
-          image: ghcr.io/aiagentmackenzie-lang/neuralguard:0.3.0
+          # CycloneDX SBOM attestation, buildx provenance + SPDX SBOM in the
+          # index). Pinned by DIGEST, not tag: a tag is mutable and the signature
+          # covers the digest. Runbook: docs/runbooks/artifact_signing.md §4.
+          image: ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:8984cfdf65b09dd0ed086e36d4496d4923fb17f1f46694bf8186b73091ae0384
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
