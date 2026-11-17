@@ -311,6 +311,10 @@ NEURALGUARD_MCP_HITL_MAX_PENDING=256           # per worker; at the cap, refuse
 NEURALGUARD_MCP_HITL_APPROVER_TENANTS=admin    # empty = the admin tenant only
 NEURALGUARD_MCP_HITL_STORE=memory              # memory (1 replica) | redis (shared)
 NEURALGUARD_MCP_HITL_REDIS_URL=redis://:PASS@redis:6379/1   # required for redis
+# In Kubernetes: source the URL from a Secret (secretKeyRef), not from
+# `$(REDIS_PASSWORD)` in an overlay patch — a strategic-merge patch inserts its
+# env list BEFORE the base container's, so the interpolation would be literal
+# (drill-found 2026-11-17: `$(REDIS_PASSWORD)` became the Redis username).
 #   A named approver tenant decides only ITS OWN escalations; the admin tenant
 #   (the gateway operator) decides any. That keeps the approver list from
 #   becoming a cross-tenant read of another tenant's tool arguments.
@@ -404,6 +408,78 @@ asserted:
   negative control shows the exact 403-timeout failure mode a two-replica
   deployment would have silently shipped.
 
+### Evidence — two-POD drill, 2026-11-17
+
+The two-process drill above proves the store is shared between *processes*. This
+one proves it between **pods behind a Service** — the deployment shape the
+manifests describe. kind cluster, 2 `neuralguard` pods, `redis` (db 2), a stub
+MCP upstream and tenant `acme` escalating `deploy_prod`; 20 s wait, TTL 300 s.
+
+| Stage | Result |
+|---|---|
+| Raise on **pod A**, list from **pod B** | the same `escalation_id` is visible from B |
+| Redis db 2 while pending | `ng:hitl:rec:<id>` + `ng:hitl:index` only |
+| Approve on **pod B** | `200` |
+| Held request on **pod A** | **`200` in 3.277 s**, upstream received the real `tools/call` |
+| Redis after use | empty — consumed |
+| Re-approve | **`404`** |
+| Audit chains | `MCP-HITL-RAISED` on worker `e1c53f5c…`, `MCP-HITL-DECISION` on `dd212a71…` — the decision reached a different worker from the one holding the request |
+
+Through the Service (an in-cluster client, so kube-proxy chose the endpoint),
+3 rounds of raise → approve → held request all returned `200`; the audit trail
+showed the raise and the decision on **different workers in 1 of the 3** rounds.
+A single Service round splits across pods only half the time, which is why the
+deterministic leg pins each request to a pod.
+
+**Negative control, same cluster, `hitl_store=memory`:** both pods **accepted**
+the per-worker store in `environment=production` (each has `SERVER_WORKERS=1`,
+so the startup rule cannot see the replicas), pod B listed **0** escalations,
+pod A listed the one it had raised, the held request died
+**`403 mcp_escalation_timeout` after 20.010 s**, and the upstream received
+nothing.
+
+### The posture, readable per pod (NG-15)
+
+`GET /v1/info` → `mcp_gateway.hitl` answers, from each pod:
+
+```json
+{"store": "redis", "shared_across_workers": true, "store_id": "7f64949407d7",
+ "timeout_seconds": 20.0, "ttl_seconds": 300.0, "max_pending": 256}
+```
+
+- `shared_across_workers` is derived from the store, not from the config that
+  asked for it: only the shared store makes one worker's decision visible to
+  another.
+- `store_id` is a 12-hex fingerprint of **host:port/database** with credentials
+  and scheme excluded — so two pods can be proven to point at the same Redis
+  without either disclosing a password, and a password rotation does not look
+  like a different store. A per-worker store reports `null`.
+- **The check that matters:** two pods with the same `store_id` share a store.
+  `shared_across_workers: false` on a pod behind a Service is the defect,
+  whatever the manifest says.
+
+Measured in-cluster: `redis` → both pods `7f64949407d7`; `memory` on 2 pods →
+both `shared_across_workers: false, store_id: null`; a Redis URL pointing at a
+dead endpoint → `d07bfbf55926` (different from the live id).
+
+### Store outage: 503 `MCP-HITL-STORE`, audited
+
+A store that cannot be reached (or cannot be authenticated) refuses the call —
+and says so:
+
+| Surface | Response | Audit |
+|---|---|---|
+| Gated call (`/v1/mcp`) | `503 mcp_escalation_store_unavailable`, `rule_id: MCP-HITL-STORE` | verdict `block`, outcome `escalation_store_unavailable` |
+| Approver list (`GET /v1/mcp/escalations`) | same `503` shape | **none** — this endpoint is polled; auditing every poll would flood the chain |
+| Decide (`POST /v1/mcp/escalations/{id}`) | same `503` shape (never `409 not_pending`) | verdict `block`, outcome `escalation_store_unavailable` |
+
+Measured in-cluster at 9 ms with a dead endpoint, upstream untouched. Before
+this change the same condition was `500 internal_error` with no rule id and no
+audit event, and a failed *decision* was reported as `409` "expired" — a wrong
+diagnosis. **Known limit:** a store that fails *during* a wait is still reported
+as `403 mcp_escalation_timeout`; the refusal is the same and fail-closed, the
+diagnosis is coarser.
+
 ### Operability limits
 
 - **`hitl_store=memory` is per worker.** A decision must reach the worker
@@ -419,7 +495,12 @@ asserted:
 - **A multi-POD deployment is invisible to the app.** The startup rule above
   sees `SERVER_WORKERS`, not replicas behind a Service, so setting
   `hitl_store=redis` in a multi-replica manifest is an operator obligation that
-  the application cannot enforce — it is stated here rather than assumed.
+  the application cannot enforce — it is stated here rather than assumed, and it
+  is drilled in [the two-pod evidence](#evidence--two-pod-drill-2026-11-17).
+  What the application *can* do is make the choice observable: `/v1/info` →
+  `mcp_gateway.hitl` reports `shared_across_workers` and a credential-free
+  `store_id` per pod, so "both pods point at the same store" is a check rather
+  than a promise. The decision is still the operator's.
 - **Store failure is a refusal.** If Redis is unreachable, `raise` errors (the
   call is refused) and `wait` returns no decision; there is no path that turns a
   store error into an approval.

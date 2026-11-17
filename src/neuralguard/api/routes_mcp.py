@@ -60,6 +60,7 @@ from neuralguard.mcp.hitl import (
     STATUS_PENDING,
     HitlCapacityError,
     HitlError,
+    HitlStoreError,
 )
 from neuralguard.mcp.intent_gate import (
     GateDecision,
@@ -309,6 +310,29 @@ async def mcp_gateway(request: Request) -> JSONResponse:
                 payload=payload,
                 arguments=call_arguments,
             )
+        except HitlStoreError as exc:
+            # A store that cannot hold the escalation cannot hold an approval
+            # either, so the call is refused. It used to escape as an
+            # unlabelled 500 with no audit event: fail-closed, but invisible to
+            # the SIEM and indistinguishable from a broken gateway. Name it.
+            logger.warning(
+                "mcp_hitl_store_unavailable",
+                source=source,
+                rule_id=rule_id,
+                error=str(exc),
+            )
+            metrics.record_mcp_gate("hitl_store_unavailable")
+            _audit_event(
+                verdict=Verdict.BLOCK,
+                decision=gate,
+                rule_id="MCP-HITL-STORE",
+                details={
+                    "outcome": "escalation_store_unavailable",
+                    "source": source,
+                    **extra,
+                },
+            )
+            return _hitl_store_unavailable(request_id)
         except HitlCapacityError:
             # Capacity is a refusal, never a queue and never an implicit pass.
             metrics.record_mcp_gate("hitl_capacity")
@@ -729,6 +753,71 @@ def _approver_scope(request: Request) -> tuple[str, bool] | JSONResponse:
     return tenant, tenant == admin_tenant
 
 
+def _hitl_store_unavailable(request_id: str) -> JSONResponse:
+    """The shared store is unreachable: a named refusal, never an internal error.
+
+    Fail-closed is not enough for operability: a 500 with no rule id and no
+    audit event reads as "the gateway is broken", and the wrong diagnosis is how
+    a control gets disabled. This is the same 503 shape as the capacity refusal
+    and it carries its own rule id, so a SIEM rule and an operator runbook can
+    both name it.
+    """
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "mcp_escalation_store_unavailable",
+            "rule_id": "MCP-HITL-STORE",
+            "reason": (
+                "the escalation store is unreachable, so no decision can be "
+                "recorded or verified; the call is refused rather than assumed "
+                "approved"
+            ),
+            "request_id": request_id,
+        },
+        headers={_VERDICT_HEADER: Verdict.BLOCK.value},
+    )
+
+
+def _decision_store_outage(
+    request: Request,
+    request_id: str,
+    error: str,
+    *,
+    escalation_id: str | None,
+    approver: str,
+    started: float,
+) -> JSONResponse:
+    """A decision the store could not record — audited, then refused by name.
+
+    Attributed to the *approver*: they made the attempt, and the escalation's
+    own tenant is unknown when the read itself failed.
+    """
+    logger.warning(
+        "mcp_hitl_store_unavailable",
+        surface="decide",
+        escalation_id=escalation_id,
+        error=error,
+    )
+    request.app.state.metrics.record_mcp_gate("hitl_store_unavailable")
+    _audit(request).log_mcp_event(
+        request_id=request_id,
+        tenant_id=approver,
+        verdict=Verdict.BLOCK,
+        rule_id="MCP-HITL-STORE",
+        method=None,
+        tool=None,
+        details={
+            "outcome": "escalation_store_unavailable",
+            "escalation_id": escalation_id,
+            "decided_by": approver,
+            "store_error": error,
+        },
+        # Real elapsed time: 0.0 in the tamper-evident trail is a false record.
+        total_latency_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+    return _hitl_store_unavailable(request_id)
+
+
 def _hitl_unavailable(request: Request, request_id: str) -> JSONResponse | None:
     """503 when HITL is disabled or the broker is missing (fail-closed surface)."""
     broker: HitlBroker | None = getattr(request.app.state, "mcp_hitl", None)
@@ -757,7 +846,15 @@ async def list_escalations(request: Request) -> JSONResponse:
         return unavailable
     broker: HitlBroker = request.app.state.mcp_hitl
     # Oldest first: a queue that hides its age is how escalations get abandoned.
-    records = await broker.pending_for_approval()
+    try:
+        records = await broker.pending_for_approval()
+    except HitlStoreError as exc:
+        # Read path: the outage is reported, not audited. An approver client
+        # polls this endpoint, and one audit event per poll would turn a store
+        # outage into a flood in the tamper-evident trail.
+        logger.warning("mcp_hitl_store_unavailable", surface="list", error=str(exc))
+        metrics.record_mcp_gate("hitl_store_unavailable")
+        return _hitl_store_unavailable(request_id)
     if not is_global:
         # Least privilege: a tenant approver sees only its own callers' calls.
         records = [record for record in records if record.tenant == approver]
@@ -810,7 +907,17 @@ async def decide_escalation(escalation_id: str, request: Request) -> JSONRespons
     reason = (raw_reason or "").strip()[:500] or None
 
     broker: HitlBroker = request.app.state.mcp_hitl
-    record = await broker.get(escalation_id)
+    try:
+        record = await broker.get(escalation_id)
+    except HitlStoreError as exc:
+        return _decision_store_outage(
+            request,
+            request_id,
+            str(exc),
+            escalation_id=None,
+            approver=approver,
+            started=started,
+        )
     if record is None:
         return JSONResponse(
             status_code=404,
@@ -842,6 +949,18 @@ async def decide_escalation(escalation_id: str, request: Request) -> JSONRespons
     try:
         decided = await broker.decide(
             escalation_id, approved=approved, decided_by=approver, reason=reason
+        )
+    except HitlStoreError as exc:
+        # HitlStoreError subclasses HitlError, so this must come FIRST: an
+        # outage reported as 409 "not pending" tells the approver the
+        # escalation expired, which is a different and wrong story.
+        return _decision_store_outage(
+            request,
+            request_id,
+            str(exc),
+            escalation_id=escalation_id,
+            approver=approver,
+            started=started,
         )
     except HitlError as exc:  # expired between the check above and the decision
         return JSONResponse(

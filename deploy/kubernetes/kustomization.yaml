@@ -11,6 +11,9 @@
 #     defects were fixed (privilege-drop crash loops, non-numeric USER,
 #     Service env collision, non-setting NEURALGUARD_* helpers, auth-gated
 #     readiness probe, probe rate-limiting). See README.md in this directory.
+#   - TWO-POD HITL DRILLED 2026-11-17 (kind, 2 replicas behind a Service,
+#     hitl_store=redis + a memory-store negative control); see README.md. The
+#     per-pod posture is readable from /v1/info → mcp_gateway.hitl.
 #   - NOT drilled: prometheus-adapter custom-metric scaling (template in
 #     hpa.yaml stays commented), ingress/TLS, multi-replica runtime rotation.
 #

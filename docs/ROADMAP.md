@@ -51,6 +51,7 @@ done until it is merged, CI-gated, and documented.
 |---|---|---|---|
 | **SSE hold-back streaming** | Streaming requests are currently refused fail-closed (`422`) by design. Hold-back scanning would let streams start after the prefix is scanned | Real deployments increasingly stream; the refusal is honest but blocks adoption | Planned (demand-driven) |
 | **JWT residuals** | RS256/OIDC discovery (JWKS), refresh tokens, Vault/SOPS secret-manager integration | Enterprise auth completeness | Planned (demand-driven) |
+| **Multi-replica HITL store** | `hitl_store=redis` is what makes an escalation raised on one pod decidable on another; the startup rule cannot see replicas, so the choice is an operator obligation. Drilled across two pods behind a Service (2026-11-17) and now **readable per pod** (`/v1/info` → `mcp_gateway.hitl`) | A misconfigured two-pod deployment degrades to a timeout — measured, not hypothetical | Drilled + observable (not enforceable from inside the app) |
 | **i18n native-speaker sign-off** | The rule packs had a machine self-audit (all 5 defects it found were fixed and re-verified); one language needs a human native-speaker pass (~10 min worksheet in [`i18n_native_review_request.md`](i18n_native_review_request.md)); the other languages stay deferred with an honest README residual | Machine self-audit is not human review — say so | Open (human-gated) |
 
 ---
