@@ -73,6 +73,19 @@ data:
   # envFrom does not expand $(VAR), so a URL written here would be literal.
   #   - name: NEURALGUARD_MCP_HITL_REDIS_URL
   #     value: "redis://:$(REDIS_PASSWORD)@redis:6379/1"
+  # IF YOU ADD IT FROM AN OVERLAY instead: a strategic-merge patch inserts its
+  # env list BEFORE this container's env, so $(REDIS_PASSWORD) would be defined
+  # *after* its consumer and stay literal (drill-found 2026-11-17: it became the
+  # Redis username). Put the whole URL in the Secret and use secretKeyRef:
+  #   - name: NEURALGUARD_MCP_HITL_REDIS_URL
+  #     valueFrom:
+  #       secretKeyRef: { name: neuralguard-secrets, key: hitl-redis-url }
+  # Verify the choice from the running pods, not the manifest:
+  #   kubectl exec deploy/neuralguard -- \
+  #     curl -s -H "Authorization: Bearer $KEY" localhost:8000/v1/info
+  #   → mcp_gateway.hitl: {store, shared_across_workers, store_id}
+  # Two pods with the same store_id share a store; `shared_across_workers:false`
+  # is a per-worker store, which is wrong behind a Service however it booted."
   # ── SIEM routing (P2-7) — off by default; see SiemSettings for all knobs ──
   # NEURALGUARD_SIEM_ENABLED: "true"
   # NEURALGUARD_SIEM_SCARLETAI_URL: "http://scarletai-api.other-namespace.svc:8000"

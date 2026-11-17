@@ -710,6 +710,16 @@ and the fleet purple loop.
 Known open items (tracked in the
 [public roadmap](docs/ROADMAP.md)):
 
+- **Multi-pod HITL is an operator obligation, not an enforced one.**
+  `hitl_store=redis` is what makes an escalation raised on one pod decidable on
+  another, and the startup refusal cannot see replicas (it reads
+  `SERVER_WORKERS`). A two-pod deployment with the per-worker store is
+  *accepted at boot* and silently degrades to a timeout. Drilled 2026-11-17
+  across two pods behind a Service — including a memory-store negative control
+  that produced exactly that 403 — and the posture is now readable per pod:
+  `GET /v1/info` → `mcp_gateway.hitl.shared_across_workers` + `store_id`.
+  What remains unenforced is the choice itself; what no longer remains is the
+  silence.
 - **Streaming** — SSE streaming is refused fail-closed (422) by design; hold-back streaming is future work
 - **JWT residuals** — RS256/OIDC discovery, refresh tokens, Vault/SOPS integration
 - **i18n native-speaker review** — the rule packs had machine self-audit; human native-speaker sign-off is the one human-gated item

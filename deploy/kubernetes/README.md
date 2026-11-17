@@ -26,6 +26,15 @@ Raw manifests (+ kustomize). **Validation status, honestly:**
   to need a `rollout restart` converges on its own (attempts 1–2 failed, attempt
   5 created the schema, `RESTARTS 0`). Evidence in
   [that drill](#cluster-drill--2026-11-17-re-run-against-v031-the-fix-in-the-artifact).
+- ✅ **Two-pod HITL drill 2026-11-17** — the shared escalation store proven
+  across **two pods behind a Service** (not just two processes): raise on A,
+  approve on B, the held request resumes on A, the record is consumed,
+  re-approval is `404`; plus the operator path through the Service (3 rounds)
+  and a **memory-store negative control** that produced the exact
+  `403 mcp_escalation_timeout` a misconfigured two-replica deployment ships.
+  Evidence in [that drill](#two-pod-hitl-drill--2026-11-17). It also produced
+  the per-pod posture (`/v1/info` → `mcp_gateway.hitl`) and turned an
+  unlabelled 500 on a store outage into a named, audited `503`.
 - ⚠️ **Not drilled:** prometheus-adapter custom-metric scaling (template in
   `hpa.yaml` stays commented), ingress/TLS (out of scope on purpose), and
   multi-replica runtime key rotation (production refuses it; env/redeploy is
@@ -183,6 +192,115 @@ digest does not contain the fix yet. That substitution is the exact mistake the
 **Not healed by design:** a table dropped *out of band* on a running pod needs a
 restart — the app does not re-run schema creation mid-flight. Readiness now
 says so, which is the difference that matters.
+
+## Two-pod HITL drill — 2026-11-17
+
+**Why this drill exists.** The shared HITL store (NG-15, `hitl_store=redis`) had
+been proven across two **OS processes on one host** and never across two **pods
+behind a Service** — which is how it will actually be deployed. The startup rule
+cannot close the gap for you: it refuses the memory store when
+`SERVER_WORKERS > 1`, and pods each run one worker. A two-replica deployment
+with the per-worker store boots happily and every escalation times out.
+
+**Environment:** kind v0.33.0 (k8s v1.37.0) on colima (2 CPU / 4 GiB), a fresh
+cluster. Two `neuralguard` pods, `redis`, `postgres`, a stub MCP upstream, and a
+tenant (`acme`) whose policy escalates `deploy_prod`. `hitl_store=redis` on
+Redis **db 2** (db 0 = rate limit, db 1 = Agent Guardian), 20 s wait, TTL 300 s.
+Requests pinned to a pod with `kubectl port-forward pod/…` for the deterministic
+legs; the operator-path leg goes through the Service.
+
+### Behavioural legs — against the **published 0.3.1 digest**
+
+| Stage | Result |
+|---|---|
+| Raise on **pod A**, read pending from **pod B** | the same `escalation_id` is visible from B |
+| Redis db 2 while pending | exactly `ng:hitl:rec:<id>` + `ng:hitl:index` |
+| Approve from **pod B** | `200` |
+| The request held on **pod A** | **`200` in 3.277 s**, body = the upstream's answer |
+| Redis after use | `[]` — the record was consumed |
+| Re-approve the same id | **`404`** — one approval, one call |
+| Stub upstream log | `UPSTREAM_TOOLS_CALL {"name": "deploy_prod", "arguments": {"env": "prod"}}` |
+| Audit chains | `MCP-HITL-RAISED` written by worker `e1c53f5c…` (pod A), `MCP-HITL-DECISION` by `dd212a71…` (pod B) — **different chains, one decision** |
+
+### Operator path — through the Service (3 rounds)
+
+Every request went to `http://neuralguard:8000` from an in-cluster client, so
+kube-proxy chose the endpoint and nothing in the drill knew which pod answered.
+
+| Round | Raise | Approve | Held request | Workers (from the audit trail) |
+|---|---|---|---|---|
+| 1 | `200` | `200` | `200` | raise `e1c53f5c…`, decision `dd212a71…` — **split across pods** |
+| 2 | `200` | `200` | `200` | both on `e1c53f5c…` |
+| 3 | `200` | `200` | `200` | both on `dd212a71…` |
+
+Published as measured: a single Service round splits across pods **1 time in 3**
+(kube-proxy is per-connection random), which is exactly why the deterministic
+leg above pins each request to a pod instead of trusting luck.
+
+### Negative control — the same drill with the mechanism removed
+
+`hitl_store=memory`, still **2 pods**, still `environment=production`:
+
+| Check | Result |
+|---|---|
+| Boot | **accepted** — 0 `Production startup refused` lines on either pod (each pod has `SERVER_WORKERS=1`, so the app cannot see the replicas) |
+| Pending list from **pod B** | `{"escalations":[],"pending":0}` — pod B cannot see pod A's escalation |
+| Pending list from **pod A** | the escalation is there (it was really raised) |
+| The held request | **`403 mcp_escalation_timeout` after 20.010 s** |
+| Stub upstream | nothing — the call never left |
+
+That is the failure a two-replica deployment ships if it sets the wrong value,
+and the reason the drill is a test rather than a demo.
+
+### Posture leg — a per-pod answer instead of a manifest promise
+
+`GET /v1/info` → `mcp_gateway.hitl` (new in this tree; the 0.3.1 digest has no
+such field, so this leg ran on `neuralguard:ng15-tree`, built locally at commit
+`44cd1b4` and `kind load`ed — a substitution, named rather than implied).
+
+| Configuration | pod A | pod B |
+|---|---|---|
+| `hitl_store=redis` (live) | `store=redis, shared_across_workers=true, store_id=7f64949407d7` | identical `store_id` |
+| `hitl_store=memory` (2 pods) | `shared_across_workers=false, store_id=null` | identical |
+| `hitl_store=redis`, **unreachable** store | `store_id=d07bfbf55926` | — (different from the live id, which is the point of the fingerprint) |
+
+Two pods with the same `store_id` provably share a store; a per-worker store
+now says so out loud. The choice is still an operator's — but it is no longer
+an invisible one.
+
+### Store outage — the refusal named, and audited
+
+Same tree image, `hitl_store=redis` pointed at a dead endpoint
+(`127.0.0.1:6399`):
+
+| Probe | Result |
+|---|---|
+| Gated call | `503` in **9 ms** — `{"error":"mcp_escalation_store_unavailable","rule_id":"MCP-HITL-STORE"}` |
+| Approver polling | `503` same shape, and **no audit event** (polling must not be an amplifier) |
+| Stub upstream | nothing forwarded |
+| Audit trail | `MCP-HITL-STORE \| escalation_store_unavailable \| block` |
+
+Before this change the same misconfiguration produced `500 internal_error` with
+no rule id **and no audit event** — which is how the gap was found: see the
+trap below.
+
+### Two traps this drill found
+
+1. **A strategic-merge patch inserts its `env` before the base container's.**
+   Adding `NEURALGUARD_MCP_HITL_REDIS_URL: "redis://:$(REDIS_PASSWORD)@…"` in an
+   overlay patch put it *ahead* of the `REDIS_PASSWORD` it interpolates, so the
+   value stayed literal and `$(REDIS_PASSWORD)` became the Redis **username**
+   (`invalid username-password pair`). The base manifest's rule — "the password
+   ref must be defined EARLIER in this list" — holds for the base and is broken
+   by a patch. Fix used here, and recommended for any overlay: put the whole
+   URL in the Secret (`hitl-redis-url`) and reference it with `secretKeyRef`.
+2. **A store outage used to be an unlabelled failure.** The trap above was
+   invisible in the API response (a 500 with a correlation id) and absent from
+   the audit trail, so the drill could only diagnose it from the pod's
+   traceback. It is now a named 503 with its own rule id — see the CHANGELOG.
+
+**Teardown:** cluster, stub, port-forwards and the drill overlay were removed;
+no containers left running.
 
 ## Cluster drill — 2026-11-12 (PASS, evidence below)
 

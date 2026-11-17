@@ -9,6 +9,64 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
+## [Unreleased]
+
+### Added — the HITL store posture is readable per pod (NG-15)
+
+`hitl_store=redis` is the one setting a multi-replica deployment must get
+right, and the startup refusal cannot enforce it: it reads `SERVER_WORKERS`,
+not replicas behind a Service. Until now the only check was reading the
+manifest and trusting it.
+
+`GET /v1/info` → `mcp_gateway.hitl` now reports, per pod:
+
+- `store` (`memory` | `redis`) and `shared_across_workers` — the structural
+  property, derived from the store rather than from the config that asked for
+  it;
+- `store_id` — a 12-hex fingerprint of the store endpoint (host, port,
+  database) with **credentials and scheme excluded**, so two pods can be proven
+to point at the same Redis without either disclosing a password, and rotating a
+  password cannot look like moving to a different store;
+- `timeout_seconds`, `ttl_seconds`, `max_pending` — the bounds a held request
+  depends on.
+
+A per-worker store now reads as `shared_across_workers: false`,
+`store_id: null` instead of a footnote in a runbook. 13 contracts.
+
+### Fixed — a store outage is a named, audited refusal (NG-15)
+
+Found by the two-pod drill, by accident and then on purpose: with a HITL Redis
+URL that could not authenticate, the escalation route raised `HitlStoreError`
+out of the handler. The security property held — nothing was approved, nothing
+reached the upstream — but the operator saw `500 {"error":"internal_error"}`
+with **no rule id and no audit event**, so a SIEM watching the audit chain
+could not see that the control was refusing every approval-gated call. The
+decide route was worse: it caught `HitlError`, which `HitlStoreError`
+subclasses, and answered `409 mcp_escalation_not_pending` — telling the
+approver the escalation had expired, which is a different and wrong story.
+
+Now every store-outage surface is `503 mcp_escalation_store_unavailable` with
+rule id `MCP-HITL-STORE`: audited (verdict `block`, outcome
+`escalation_store_unavailable`) on raise and on decide, reported but **not**
+audited on the approver list path — that endpoint is polled, and one audit
+event per poll would turn an outage into a flood in the tamper-evident trail.
+`HitlStoreError` moved to `neuralguard.mcp.hitl` so the route layer can catch
+it without the optional `redis` extra (re-exported from `hitl_redis`).
+5 contracts, written and run red first.
+
+**Drilled in-cluster, not asserted** — two pods behind a Service, dated
+2026-11-17, evidence and the negative control in
+[`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) §"Two-pod HITL
+drill" and [`docs/runbooks/mcp_gateway.md`](docs/runbooks/mcp_gateway.md).
+
+### Known limit, unchanged
+
+A store that fails **during** a wait is still reported as
+`403 mcp_escalation_timeout`, not as `MCP-HITL-STORE`: the refusal is the same
+and fail-closed, but the diagnosis is coarser. Deliberately not changed here —
+`RedisHitlStore.wait` returns a refusal on store error by contract, and the
+route cannot tell the two apart without changing that contract.
+
 ## [0.3.1] — 2026-11-17
 
 ### Added — multi-replica HITL (NG-15 shared store)
