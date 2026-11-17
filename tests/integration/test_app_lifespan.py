@@ -88,6 +88,9 @@ class TestLifespan:
             audit={
                 "backend": "postgres",
                 "postgres_url": "postgresql+asyncpg://user:pass@localhost:5432/testdb",
+                # One attempt: this asserts the wiring, not the retry backoff
+                # (tests/unit/test_audit_db_init.py owns the retry budget).
+                "init_attempts": 1,
             }
         )
         app = create_app(config)
@@ -105,6 +108,8 @@ class TestLifespan:
             audit={
                 "backend": "postgres",
                 "postgres_url": "postgresql+asyncpg://invalid:invalid@nonexistent:5432/nodb",
+                # Fail fast: the fallback is the assertion, not the backoff.
+                "init_attempts": 1,
             }
         )
         app = create_app(config)

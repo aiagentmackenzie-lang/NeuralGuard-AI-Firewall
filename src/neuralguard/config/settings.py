@@ -470,6 +470,18 @@ class AuditSettings(BaseSettings):
         description="Max concurrent in-flight async Postgres writes per worker. "
         "Beyond this, audit events fall back to JSONL to bound memory.",
     )
+    init_attempts: int = Field(
+        default=6,
+        ge=1,
+        le=30,
+        description=(
+            "Attempts to create the Postgres audit schema at startup. A container "
+            "orchestrator frequently starts the app before the database accepts "
+            "connections, so init retries with exponential backoff (1,2,4,8,8s) "
+            "instead of disabling the durable audit path for the pod's lifetime. "
+            "Raise it for a slow PVC/StatefulSet; set 1 to fail fast."
+        ),
+    )
     signing_key: str | None = Field(
         default=None,
         description=(

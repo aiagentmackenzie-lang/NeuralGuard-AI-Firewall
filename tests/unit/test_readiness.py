@@ -106,16 +106,21 @@ class TestReadinessAggregation:
         assert r.ready is False
         assert r.components["redis"] == "fail"
 
-    async def test_audit_db_degraded_when_postgres_engine_not_ready(self):
+    async def test_audit_db_fail_when_postgres_engine_not_ready(self):
         cfg = NeuralGuardConfig(
             audit=AuditSettings(backend="postgres", postgres_url="postgresql+asyncpg://x"),
         )
         req = _request(cfg, _pipeline_with_core())
         r = await check_readiness(req)
-        # engine not created in lifespan -> degraded (JSONL fallback), still ready
+        # A configured postgres backend with no engine persists nothing, so the
+        # component is reported "fail" rather than a gentle "degraded" (changed
+        # 2026-11-17: the cluster drill found this exact state reporting
+        # audit_db="ok" while every INSERT raised "relation does not exist").
+        # The worker still serves — JSONL keeps the hash chain — so ready stays
+        # True and the aggregate drops to "degraded".
         assert r.ready is True
         assert r.status == "degraded"
-        assert r.components["audit_db"] == "degraded"
+        assert r.components["audit_db"] == "fail"
 
 
 class TestReadinessEndpoint:
