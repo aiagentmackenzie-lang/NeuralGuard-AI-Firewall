@@ -378,6 +378,32 @@ because reviewing the call is the point of the review.
 - **Timeouts and capacity are refusals.** There is no path from an unanswered
   escalation to an approved call.
 
+### Evidence — two-process drill, 2026-11-17
+
+The store is not taken on trust. Two **separate OS processes** of this build
+(own memory, own state, shared Redis on `redis://127.0.0.1:6399/1`) plus a stub
+MCP upstream, `hitl_store=redis`, tenant policy `deploy_prod: escalate`:
+
+| Stage | Result |
+|---|---|
+| Raise on process :8001 | request held; Redis record `status=pending` |
+| List from :8002 (the other process) | **the same escalation id is visible** |
+| Approve on :8002 | `HTTP 200` |
+| Held request on :8001 wakes | **`HTTP 200`**, and the upstream received the real `tools/call` payload |
+| Redis after use | record **gone** (consumed) |
+| Re-approve the same id | `404` — an approval authorizes exactly one call |
+| Same drill, `hitl_store=memory` (negative control) | :8005 saw **0** escalations; the held request timed out **`403 mcp_escalation_timeout`** |
+
+Two further findings from the drill, both by design and now measured rather than
+asserted:
+
+- **Approval is not authority.** With no baselined tool catalog, the approved
+  call was **still refused** by NG-7 (`403 MCP-RUGPULL-002`) even though the human
+  said yes and the approval had been consumed.
+- **The memory store is the defect, not a smaller version of the fix** — the
+  negative control shows the exact 403-timeout failure mode a two-replica
+  deployment would have silently shipped.
+
 ### Operability limits
 
 - **`hitl_store=memory` is per worker.** A decision must reach the worker
