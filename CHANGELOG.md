@@ -59,6 +59,15 @@ the job's `continue-on-error: true` never applied.
 - Local runs are unchanged: no budget by default, so the benchmark is not
   truncated by design.
 
+**Measured, on `main` after the fix** (`workflow_dispatch` run `44166136037`,
+head `0b180f9`): the A2 step ran **8 m 33 s** (was 39 m 16 s), job success, and
+the artifact reports `generation: {planned: 10, produced: 10, elapsed_seconds:
+501.051, budget_seconds: 540, timed_out_calls: 0, complete: true}` with
+`source_commit` and the corpus digest stamped — so the provenance added the day
+before is now exercised by CI rather than only locally. The budget did not
+truncate; on a runner more than ~8 % slower it will, and then the artifact says
+so and the job exits 2 instead of cancelling the run.
+
 ### Changed — evidence hygiene
 
 - **Benchmark provenance is now stamped by the harness.** `a2_results.json`
