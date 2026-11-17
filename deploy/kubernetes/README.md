@@ -67,6 +67,35 @@ kubeconform -strict -summary -kubernetes-version 1.31.0 \
 # → 10 resources valid, exit 0 (kustomization.yaml is not a resource — excluded)
 ```
 
+## Cluster drill — 2026-11-17 (re-run against v0.3.1, the fix in the artifact)
+
+The first re-drill proved the *0.3.0* artifact and found two deployment-path
+defects, which were then fixed and proven against a locally built image. This run
+closes the loop: the manifests pin the **v0.3.1** digest and a fresh
+`kind` cluster pulls it.
+
+**Environment:** kind v0.33.0 / k8s v1.37.0 on colima, `darwin/arm64` host.
+
+```
+Pulled image "ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:6d1c0022f146…"
+```
+
+| Check | Result |
+|---|---|
+| Apply + rollout | 2/2 Running, `RESTARTS 0` both pods |
+| `/v1/health` from inside | `"version":"0.3.1"`, `environment: production` |
+| Probes | `/v1/ready` → 200 `healthy`, `audit_db:"ok"`, `redis:"ok"` |
+| Auth posture | `/v1/info` unauthenticated → **401** |
+| Verdicts | benign **200 `allow`** · injection **403** (`PI-D-001`) |
+| Postgres audit | 2 rows, 2/2 signed, `global_seq` 1–2 |
+| Audit chain | `audit-verify --pg-url` → per-worker **VALID** and **(global-order) VALID**, exit 0 |
+| Redis outage | `/v1/ready` → **503** `redis:"fail"`; `/v1/health` stays **200**; restore → healthy |
+| **Late Postgres (the fix)** | app scaled to 0, `postgres` Service deleted, app scaled to 2 → attempts 1–2 logged `db_init_attempt_failed`; Service restored at 22:23:31Z → **attempt 5 → `db_tables_created`**, **`RESTARTS 0`**, audit rows written afterwards |
+
+The last row is the one that matters: on 0.3.0 this exact sequence left the
+durable audit path dead until a `rollout restart`. On the published 0.3.1
+digest it converges on its own, inside the retry budget, with nothing restarted.
+
 ## Cluster drill — 2026-11-17 (re-run against the published digest)
 
 **Why this run exists.** The 11-12 drill proved the *manifests* while loading a
