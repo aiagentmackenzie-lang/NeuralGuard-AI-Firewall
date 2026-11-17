@@ -125,8 +125,15 @@ real boot/readiness failure on a live cluster:
   HPA is scaled out, the surge pod can be `Pending` (`Insufficient cpu`) —
   it schedules once the HPA returns toward `minReplicas`. A production node
   pool sized for `maxReplicas` does not hit this.
-- The image used here is **built locally**, not published. A real deployment
-  must build/push to your registry and sign it (`docs/runbooks/artifact_signing.md` §4).
+- The image used **in the drill** was built locally from that commit's
+  Dockerfile and loaded with `kind load docker-image`. Since 2026-11-17 the
+  manifest pins a **published digest**
+  (`ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:8984cfdf…`, signed keyless
+  by `.github/workflows/image.yml`), so a fresh cluster can pull it — but the
+  drill itself has **not** been re-run against that published digest, and the
+  image content changed after the drill (the entrypoint no longer shells out to
+  `uv run`; it must boot airgapped). Re-run the drill before claiming the two
+  are equivalent.
 
 **Not drilled (and still not claimed):** prometheus-adapter custom-metric
 scaling (template remains commented in `hpa.yaml` — no in-cluster Prometheus

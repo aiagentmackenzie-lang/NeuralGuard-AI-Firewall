@@ -18,10 +18,16 @@ predates the research-frontier controls, the MCP gateway and the fleet campaign
   `ghcr.io/aiagentmackenzie-lang/neuralguard:0.2.1`, a package that never
   existed, and no workflow built one; the kind drill had validated the manifests
   by loading a locally built image, which is not the deployment path.
-- New `Image` workflow: `linux/amd64` + `linux/arm64`, `provenance: mode=max`,
-  SPDX SBOM attestation, keyless cosign signature on the **digest**, and
-  identity-scoped verification of its own signature and both attestations
-  before the job reports success.
+- New `Image` workflow: `linux/amd64` + `linux/arm64`, keyless cosign signature
+  on the **digest**, a cosign-verifiable CycloneDX SBOM attestation, and buildx
+  `provenance: mode=max` + SPDX SBOM attached to the image index. The job
+  verifies its own signature and SBOM attestation identity-scoped, and checks
+  the index-embedded attestations structurally — the referrers API does not
+  list them, so `cosign verify-attestation` cannot see them, and the first
+  publish attempt went red for claiming otherwise.
+- The v0.3.0 digest is pinned in the Kubernetes manifest:
+  `ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:8984cfdf…`. The 2026-11-12
+  cluster drill was run against a locally built image, not this digest.
 - A pre-publish `smoke` job boots the built image with `--network none`, health
   checks it from inside, and fails if the log shows runtime package resolution.
 

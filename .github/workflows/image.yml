@@ -1,23 +1,29 @@
 name: Image
 
-# Publishes the NeuralGuard container image to GHCR, signed keyless with
-# cosign, with buildx provenance + SBOM attestations attached in the registry.
-#
-# Why this workflow exists: every manifest, runbook and README claim about
-# deploying NeuralGuard was true of a *locally built* image and false of a
-# published one — `deploy/kubernetes/deployment.yaml` pinned
-# `ghcr.io/aiagentmackenzie-lang/neuralguard:0.2.1`, a package that never
-# existed, and no workflow built one. A drill that loads a local image with
-# `kind load docker-image` validates the manifests, not the deployment path.
+# Publishes the NeuralGuard container image to GHCR, signs it keyless with
+# cosign, attests its dependency SBOM, and proves what it produced.
 #
 # Triggers:
-#   - push of a `v*` tag  → the release path; asserts the tag equals the
-#     pyproject version, publishes `<version>`, `sha-<short>` and `latest`.
-#   - workflow_dispatch   → publish (or build-only) the current commit under
-#     `<version>` and `sha-<short>`. No `latest`: latest means "a released tag".
+#   - push of a `v*` tag  → the release path. Asserts the tag equals the
+#     pyproject version, then publishes `<version>`, `sha-<short>` and `latest`.
+#   - workflow_dispatch   → publish the current commit under `<version>` and
+#     `sha-<short>`; no `latest`, because latest means "a released tag".
+#     Pass `digest` to sign/attest an ALREADY-PUBLISHED image instead of
+#     building: that is how a release gets a missing signature or attestation
+#     repaired without moving its tag.
 #
-# Cut the tag only from a green `main`. The image is the artifact a consumer
+# Cut the tag only from a green `main` — the image is the artifact a consumer
 # actually runs, so the gate must already be green on the commit it came from.
+#
+# What is verifiable, and by whom (this is why the job checks three things):
+#   - the signature            → `cosign verify` (identity-scoped)
+#   - the CycloneDX SBOM       → `cosign verify-attestation --type cyclonedx`
+#   - buildx provenance + SPDX SBOM
+#         These are attached to the image *index* as attestation-manifests
+#         (`vnd.docker.reference.type=attestation-manifest`), which the
+#         **referrers API does not list** — so cosign cannot verify them, and a
+#         job that pretends otherwise fails on a correct image. They are checked
+#         structurally against the registry instead.
 #
 # The digest this workflow prints is the identity to pin in
 # `deploy/kubernetes/deployment.yaml` — a tag is mutable, a digest is not.
@@ -28,9 +34,14 @@ on:
   workflow_dispatch:
     inputs:
       push:
-        description: "Push to GHCR (false = build + sign nothing, no publish)"
+        description: "Push to GHCR (false = build only, no publish)"
         type: boolean
         default: true
+      digest:
+        description: "Existing digest to sign + attest instead of building (sha256:...)"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -48,14 +59,14 @@ jobs:
   # ── Airgapped boot smoke ───────────────────────────────────────────────
   # Regression guard for the defect the first publish attempt found: the image
   # ran `uv run`, which re-resolved dependencies AT CONTAINER START and needed
-  # DNS. A security gateway must boot with no egress and no write access, so the
-  # image is built for one platform, loaded locally, started with `--network
-  # none`, and health-checked from inside. A signed image that cannot start in
-  # an airgapped cluster is not worth signing.
+  # DNS. A security gateway must boot with no egress, so the image is built for
+  # one platform, loaded locally, started with `--network none`, and health
+  # checked from inside.
   smoke:
     name: Boot smoke (airgapped container)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: ${{ github.event_name == 'push' || inputs.digest == '' }}
     permissions:
       contents: read
     steps:
@@ -112,12 +123,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [smoke]
+    if: ${{ github.event_name == 'push' || inputs.digest == '' }}
     permissions:
       contents: read
       packages: write  # push to GHCR with GITHUB_TOKEN
     outputs:
       digest: ${{ steps.push.outputs.digest }}
-      tags: ${{ steps.meta.outputs.tags }}
       version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -176,9 +187,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
-          # Provenance (mode=max keeps build args + source) and an SPDX SBOM are
-          # attached in the registry as OCI attestations — the signature alone
-          # says "this digest came from this workflow", not "this is what is in it".
+          # Index-embedded attestations (see the header for how they are checked).
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=ng-image
@@ -211,13 +220,13 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ── Sign + verify (keyless, GitHub OIDC) ───────────────────────────────
+  # ── Sign + attest + verify (keyless, GitHub OIDC) ─────────────────────
   sign:
-    name: Sign + verify image (keyless cosign)
+    name: Sign + attest + verify image (keyless cosign)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     needs: [smoke, build]
-    if: ${{ github.event_name == 'push' || inputs.push }}
+    if: ${{ (github.event_name == 'push' || inputs.push) && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     permissions:
       contents: read
       packages: write   # cosign writes the signature + attestations to GHCR
@@ -225,10 +234,30 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
+      - name: Resolve owner + digest
+        id: img
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          DIGEST="${{ inputs.digest || needs.build.outputs.digest }}"
+          if ! printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::not a digest: '$DIGEST'"
+            exit 1
+          fi
+          {
+            echo "image=ghcr.io/$OWNER/neuralguard"
+            echo "digest=$DIGEST"
+          } >> "$GITHUB_OUTPUT"
+          echo "signing ${DIGEST}"
+
       - name: Install cosign
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532  # v4.1.3
         with:
           cosign-release: 'v3.0.6'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
 
       - name: Log in to GHCR
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
@@ -237,53 +266,76 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate the SBOM (same extras the image installs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv python install 3.11
+          uv sync --no-dev --extra db --extra redis --extra tenants --extra metrics --extra semantic
+          uv run pip install cyclonedx-bom
+          uv run cyclonedx-py environment --output-format json --output-file sbom-image.json
+          python3 -c "import json;d=json.load(open('sbom-image.json'));print('components:',len(d.get('components',[])))"
+
       - name: Sign the digest (not the tag)
         shell: bash
         run: |
           set -euo pipefail
-          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          cosign sign --yes "ghcr.io/$OWNER/neuralguard@${{ needs.build.outputs.digest }}"
+          cosign sign --yes "${{ steps.img.outputs.image }}@${{ steps.img.outputs.digest }}"
+
+      - name: Attest the SBOM into the registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A DSSE attestation, not just a buildx index manifest: this is the one
+          # a consumer can verify with plain cosign.
+          cosign attest --yes \
+            --predicate sbom-image.json --type cyclonedx \
+            "${{ steps.img.outputs.image }}@${{ steps.img.outputs.digest }}"
 
       - name: Verify signature (identity-scoped to this workflow)
         shell: bash
         run: |
           set -euo pipefail
-          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          IMAGE="ghcr.io/$OWNER/neuralguard@${{ needs.build.outputs.digest }}"
+          IMAGE="${{ steps.img.outputs.image }}@${{ steps.img.outputs.digest }}"
           IDENTITY='^https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/\.github/workflows/image\.yml@'
           cosign verify \
             --certificate-identity-regexp "$IDENTITY" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$IMAGE"
 
-      - name: Verify attestations (identity-scoped, schema-tolerant)
+      - name: Verify the SBOM attestation (identity-scoped)
         shell: bash
         run: |
-          # The attestations are the claim about *contents*; if they are absent the
-          # docs must not say the image carries them. The predicate schema is
-          # buildx's choice (SLSA v1 today, v0.2 historically), so try both rather
-          # than pin a flag that could silently stop mattering.
-          set -uo pipefail
-          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          IMAGE="ghcr.io/$OWNER/neuralguard@${{ needs.build.outputs.digest }}"
+          set -euo pipefail
+          IMAGE="${{ steps.img.outputs.image }}@${{ steps.img.outputs.digest }}"
           IDENTITY='^https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/\.github/workflows/image\.yml@'
-          verify() {
-            cosign verify-attestation --type "$1" \
-              --certificate-identity-regexp "$IDENTITY" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "$IMAGE" > /dev/null 2>&1
-          }
-          for t in slsaprovenance1 slsaprovenance; do
-            if verify "$t"; then echo "provenance verified (--type $t)"; PROV=1; break; fi
-          done
-          for t in spdxjson spdx; do
-            if verify "$t"; then echo "SBOM verified (--type $t)"; SBOM=1; break; fi
-          done
-          [ "${PROV:-0}" = 1 ] || { echo "::error::no verifying SLSA provenance attestation on the digest"; exit 1; }
-          [ "${SBOM:-0}" = 1 ] || { echo "::error::no verifying SPDX SBOM attestation on the digest"; exit 1; }
-          echo "--- predicate types attached:"
-          cosign download attestation "$IMAGE" \
-            | jq -r '.payload' \
-            | while read -r p; do printf '%s' "$p" | base64 -d | jq -r '.predicateType'; done \
-            | sort -u
+          cosign verify-attestation --type cyclonedx \
+            --certificate-identity-regexp "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE" > /dev/null
+          echo "SBOM attestation verified (--type cyclonedx)"
 
+      - name: Verify buildx provenance + SPDX SBOM are attached
+        shell: bash
+        run: |
+          # These live in the image index as attestation-manifests, which the OCI
+          # referrers API does not list — cosign verify-attestation cannot see
+          # them, so check the registry directly rather than claiming a check
+          # that would fail on a correct image.
+          set -euo pipefail
+          OWNER=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          DIGEST="${{ steps.img.outputs.digest }}"
+          TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:$OWNER/neuralguard:pull&service=ghcr.io" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+          curl -fsS -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+            "https://ghcr.io/v2/$OWNER/neuralguard/manifests/$DIGEST" \
+          | python3 -c '
+          import json, sys
+          doc = json.load(sys.stdin)
+          att = [m for m in doc.get("manifests", [])
+                 if (m.get("annotations") or {}).get("vnd.docker.reference.type") == "attestation-manifest"]
+          print(f"{len(att)} buildx attestation manifest(s) attached to the index")
+          if not att:
+              sys.exit("::error::no buildx attestation manifests on the digest — provenance/SBOM are missing")
+          '

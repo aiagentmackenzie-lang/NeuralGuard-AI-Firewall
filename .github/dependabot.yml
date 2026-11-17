@@ -27,6 +27,8 @@ updates:
   # silently rebuild on a different base. Dependabot keeps the digests current;
   # note that it parses FROM lines, so the uv image in `COPY --from=` may need
   # bumping by hand (the workflow header documents how to re-resolve it).
+  # Majors are ignored on purpose: this project tests Python 3.11 and 3.12, so a
+  # bot proposing `3.15-slim` (which it did, immediately) is noise, not a bump.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -37,3 +39,11 @@ updates:
       - "docker"
     commit-message:
       prefix: "build(deps)"
+    ignore:
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "ghcr.io/astral-sh/uv"
+        update-types:
+          - "version-update:semver-major"
