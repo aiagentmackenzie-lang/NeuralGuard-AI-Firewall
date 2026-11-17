@@ -148,10 +148,11 @@ the artifact, not only of the tree.
 
 ### Known limits — unchanged by this release
 
-- The Kubernetes cluster drill has **not yet been re-run against the 0.3.1
-  digest**; the 2026-11-17 drill ran against the 0.3.0 digest and the fix was
-  proven in-cluster against a locally built image. Re-running it against this
-  digest is the next evidence step, and the manifest now pins it.
+- The Kubernetes cluster drill **has been re-run against the 0.3.1 digest**
+  (see `deploy/kubernetes/README.md`): the node pulled the published digest, the
+  full check table passed, and the late-Postgres sequence that used to require a
+  `rollout restart` on 0.3.0 converged on its own (attempts 1–2 failed, Service
+  restored at 22:23:31Z, attempt 5 created the schema, `RESTARTS 0`).
 - Multi-replica runtime key rotation, prometheus-adapter metrics and ingress/TLS
   remain undrilled; SSE streaming is still refused `422`.
 - The shared HITL store closes the *broker* half of the multi-replica gap, and
