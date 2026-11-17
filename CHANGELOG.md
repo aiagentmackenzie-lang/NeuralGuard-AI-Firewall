@@ -40,6 +40,17 @@ times out, and the call is refused — a control that only works on one worker.
   tests exercise real Lua — including the race: two workers consuming one
   approval produce exactly one success.
 
+**Measured, two real processes + real Redis (2026-11-17):** raised on process
+:8001, the escalation was visible from :8002, approved there (`200`), and the
+held request on :8001 then completed **`200`** with the upstream receiving the
+actual `tools/call`. The record was gone afterwards (consumed) and re-approving
+the same id returned `404`. Negative control with `hitl_store=memory`: the other
+process saw **0** escalations and the held request timed out
+(`403 mcp_escalation_timeout`) — the exact failure a two-replica deployment would
+have shipped. Bonus, by design: with no baselined catalog the approved call was
+still refused by NG-7 (`MCP-RUGPULL-002`), which is "approval is not authority"
+demonstrated live.
+
 ### Fixed — two deployment-path defects found by re-drilling the published image
 
 Neither was visible in any file in the repo; both needed a clean cluster and the
