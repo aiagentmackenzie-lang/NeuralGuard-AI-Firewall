@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+from neuralguard import __version__
+
 
 class TestCliVersion:
     def test_version_prints_and_exits(self, capsys, monkeypatch):
@@ -16,7 +18,7 @@ class TestCliVersion:
             main()
         assert exc.value.code == 0
         captured = capsys.readouterr()
-        assert "NeuralGuard v0.2.1" in captured.out
+        assert f"NeuralGuard v{__version__}" in captured.out
 
 
 class TestCliCanaryMint:

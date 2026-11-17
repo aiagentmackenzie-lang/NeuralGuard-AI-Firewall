@@ -2,6 +2,7 @@
 
 import pytest
 
+from neuralguard import __version__
 from neuralguard.config.settings import (
     ActionSettings,
     AuditSettings,
@@ -78,7 +79,7 @@ class TestNeuralGuardConfig:
     def test_defaults(self):
         c = NeuralGuardConfig()
         assert c.app_name == "NeuralGuard"
-        assert c.version == "0.2.1"
+        assert c.version == __version__
         assert c.environment == "development"
         assert isinstance(c.server, ServerSettings)
         assert isinstance(c.scanner, ScannerSettings)

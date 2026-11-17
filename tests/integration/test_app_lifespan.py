@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from neuralguard import __version__
 from neuralguard.config.settings import (
     AuthSettings,
     CanarySettings,
@@ -27,12 +28,12 @@ class TestCreateApp:
     def test_create_app_custom_config(self):
         config = NeuralGuardConfig(
             app_name="TestGuard",
-            version="0.2.1",
+            version=__version__,
             environment="development",
         )
         app = create_app(config)
         assert app.title == "TestGuard"
-        assert app.state.config.version == "0.2.1"
+        assert app.state.config.version == __version__
 
     def test_create_app_production_hides_docs(self):
         config = NeuralGuardConfig(environment="production")
