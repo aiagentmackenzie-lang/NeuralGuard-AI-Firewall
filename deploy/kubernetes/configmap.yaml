@@ -59,6 +59,20 @@ data:
   # ── Audit ── (postgres backend; password from Secret)
   NEURALGUARD_AUDIT_BACKEND: "postgres"
   NEURALGUARD_AUDIT_JSONL_PATH: "/data/audit"
+  # ── MCP human-in-the-loop (NG-15) — off by default ──
+  # These manifests run replicas >= 2, so the HITL store MUST be shared: the
+  # in-memory broker is per worker, and an escalation raised on one pod would
+  # never reach an approver whose request lands on another. Production refuses
+  # the memory store only when SERVER_WORKERS > 1, which cannot see replicas —
+  # so this is an operator obligation, not something the app can enforce.
+  # NEURALGUARD_MCP_HITL_ENABLED: "true"
+  # NEURALGUARD_MCP_HITL_STORE: "redis"
+  # NEURALGUARD_MCP_HITL_APPROVER_TENANTS: "admin"
+  # The URL embeds the redis credential, so it belongs in the Deployment env
+  # (built from the Secret like NEURALGUARD_AUDIT_POSTGRES_URL), NOT here —
+  # envFrom does not expand $(VAR), so a URL written here would be literal.
+  #   - name: NEURALGUARD_MCP_HITL_REDIS_URL
+  #     value: "redis://:$(REDIS_PASSWORD)@redis:6379/1"
   # ── SIEM routing (P2-7) — off by default; see SiemSettings for all knobs ──
   # NEURALGUARD_SIEM_ENABLED: "true"
   # NEURALGUARD_SIEM_SCARLETAI_URL: "http://scarletai-api.other-namespace.svc:8000"

@@ -155,7 +155,7 @@ class HitlBroker:
     def pending_count(self) -> int:
         return sum(1 for r in self._records.values() if r.status == STATUS_PENDING)
 
-    def get(self, escalation_id: str) -> PendingEscalation | None:
+    async def get(self, escalation_id: str) -> PendingEscalation | None:
         return self._records.get(escalation_id)
 
     # ── lifecycle ──
@@ -215,14 +215,18 @@ class HitlBroker:
             self._records[record.escalation_id] = record
             return record
 
-    def pending_for_approval(self) -> list[PendingEscalation]:
+    async def pending_for_approval(self) -> list[PendingEscalation]:
         """All unexpired pending records, oldest first (approver list view).
 
         Purges expired records first, so the list an approver sees is the whole
         truth: an expired escalation must not be listable, and an
         approved-but-unconsumed record (a client that disconnected after the
-        decision) must not linger past its TTL. Safe without the lock — no
-        await here, so nothing can interleave on the event loop.
+        decision) must not linger past its TTL.
+
+        ``async`` for interface parity with the shared store, not because this
+        implementation awaits: the approver routes must not care which store the
+        deployment runs, and a sync/async split at the call site is how the two
+        backends drift apart.
         """
         self._purge_expired(time.monotonic())
         pending = [r for r in self._records.values() if r.status == STATUS_PENDING]

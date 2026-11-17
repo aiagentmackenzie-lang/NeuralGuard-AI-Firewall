@@ -11,6 +11,35 @@ predates the research-frontier controls, the MCP gateway and the fleet campaign
 
 ## [Unreleased] — since v0.3.0 (2026-11-17)
 
+### Added — multi-replica HITL (NG-15 shared store)
+
+The approval broker was per worker and in memory, which is honest for one
+replica and wrong for two: an escalation raised on worker A is invisible to an
+approver whose request lands on worker B, so the human cannot decide, the wait
+times out, and the call is refused — a control that only works on one worker.
+
+- New `neuralguard.mcp.hitl_redis.RedisHitlStore`, selected with
+  `NEURALGUARD_MCP_HITL_STORE=redis` (+ `NEURALGUARD_MCP_HITL_REDIS_URL`). The
+  store keeps every NG-15 property, and three of them had to be implemented
+  rather than inherited from a dict and a lock: **single use** is a Lua
+  compare-and-set that deletes the record (read-then-write would let two workers
+  both consume one approval); **decisions are single-shot** (a denial can never be
+  overwritten into an approval); **expiry is Redis TTL**, so an expired escalation
+  cannot be listed, approved late or consumed. Capacity is trimmed inside the
+  same script, so two workers cannot both squeeze past the cap.
+- **Fail closed on store failure:** every Redis error surfaces as
+  `HitlStoreError`; `wait` returns `None` (refusal) on timeout, expiry or store
+  failure. No path returns an approval from an error.
+- **A per-process store is refused in multi-worker production**, same rule and
+  same place as the rate-limiter refusal: `production` + `workers > 1` +
+  `hitl_store=memory` refuses to start, because the control would silently
+  degrade to a timeout. Single-worker production keeps the in-memory store.
+- `pending_for_approval()` and `get()` are now `async` on both stores, so the
+  approver API does not care which one a deployment runs. 19 contracts
+  (`tests/unit/test_hitl_redis.py`) run on `fakeredis[lua]`, so the atomicity
+  tests exercise real Lua — including the race: two workers consuming one
+  approval produce exactly one success.
+
 ### Fixed — two deployment-path defects found by re-drilling the published image
 
 Neither was visible in any file in the repo; both needed a clean cluster and the
@@ -92,8 +121,14 @@ so and the job exits 2 instead of cancelling the run.
   tree and are proven in-cluster against a locally built image. A v0.3.1 publish
   is an owner decision.
 - Multi-replica runtime key rotation, prometheus-adapter metrics and ingress/TLS
-  remain undrilled; SSE streaming is still refused `422`; the HITL approval broker
-  is still per-worker and in memory.
+  remain undrilled; SSE streaming is still refused `422`.
+- The shared HITL store closes the *broker* half of the multi-replica gap. A
+  two-replica live drill (escalation raised on pod A, approved via the Service
+  landing on pod B) is the evidence that would close it, and it has not been run
+  yet at the time of writing.
+- `NEURALGUARD_SERVER_WORKERS > 1` is the only multi-worker signal the app can
+  see: **a multi-pod deployment is invisible to it**, so the manifests/runbook
+  carry the instruction to set `hitl_store=redis` and the app cannot enforce it.
 
 ## [0.3.0] — 2026-11-16
 

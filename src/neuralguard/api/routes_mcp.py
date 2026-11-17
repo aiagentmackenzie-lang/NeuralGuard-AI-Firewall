@@ -757,7 +757,7 @@ async def list_escalations(request: Request) -> JSONResponse:
         return unavailable
     broker: HitlBroker = request.app.state.mcp_hitl
     # Oldest first: a queue that hides its age is how escalations get abandoned.
-    records = broker.pending_for_approval()
+    records = await broker.pending_for_approval()
     if not is_global:
         # Least privilege: a tenant approver sees only its own callers' calls.
         records = [record for record in records if record.tenant == approver]
@@ -810,7 +810,7 @@ async def decide_escalation(escalation_id: str, request: Request) -> JSONRespons
     reason = (raw_reason or "").strip()[:500] or None
 
     broker: HitlBroker = request.app.state.mcp_hitl
-    record = broker.get(escalation_id)
+    record = await broker.get(escalation_id)
     if record is None:
         return JSONResponse(
             status_code=404,
