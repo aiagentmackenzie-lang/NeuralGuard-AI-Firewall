@@ -126,7 +126,7 @@ real boot/readiness failure on a live cluster:
   it schedules once the HPA returns toward `minReplicas`. A production node
   pool sized for `maxReplicas` does not hit this.
 - The image used **in the drill** was built locally from that commit's
-  Dockerfile and loaded with `kind load docker-image`. Since 2026-11-17 the
+  Dockerfile and loaded with `kind load docker-image`. Since 2026-11-16 the
   manifest pins a **published digest**
   (`ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:8984cfdf…`, signed keyless
   by `.github/workflows/image.yml`), so a fresh cluster can pull it — but the

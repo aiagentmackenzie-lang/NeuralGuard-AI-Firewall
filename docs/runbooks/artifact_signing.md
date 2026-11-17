@@ -12,7 +12,7 @@
 | SBOM blob signing (keyless) | CI job `sbom-sign` | ephemeral Fulcio cert (GitHub OIDC) | ✅ CI-verified — green on every push since 2026-09-05 |
 | SBOM attestation (cyclonedx predicate) | CI job `sbom-sign` | same | ✅ same |
 | Local artifact signing (key-based) | operator machine (this runbook) | `~/.cosign/<prefix>.key` | ✅ locally verified (sign → verify EXIT 0, cosign v3.1.3) |
-| Container image signing | CI job `image` (`.github/workflows/image.yml`) | ephemeral Fulcio cert (GitHub OIDC) | ✅ VERIFIED 2026-11-17 — v0.3.0 digest `sha256:8984cfdf…` signed, SBOM-attested and re-verified independently of CI (`cosign verify` + `cosign verify-attestation --type cyclonedx`, exit 0) |
+| Container image signing | CI job `image` (`.github/workflows/image.yml`) | ephemeral Fulcio cert (GitHub OIDC) | ✅ VERIFIED 2026-11-16 — v0.3.0 digest `sha256:8984cfdf…` signed, SBOM-attested and re-verified independently of CI (`cosign verify` + `cosign verify-attestation --type cyclonedx`, exit 0) |
 
 The public half of the local key pair is committed at `cosign/neuralguard-local.pub`
 so anyone can verify locally-signed artifacts. **The private key is never
