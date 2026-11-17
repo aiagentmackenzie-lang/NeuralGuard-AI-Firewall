@@ -17,8 +17,11 @@ Raw manifests (+ kustomize). **Validation status, honestly:**
   It found **two real deployment-path defects** that the 11-12 drill had
   missed: a boot-order race that disabled the Postgres audit path for the
   pod's lifetime, and a readiness probe that called that state `ok`. Both are
-  fixed in this tree and were proven fixed in-cluster; **the published v0.3.0
-  image still carries them** until a v0.3.1 is published.
+  fixed in this tree and were proven fixed in-cluster, and **v0.3.1 carries
+  them**: the manifest now pins
+  `ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:6d1c0022f146…`, verified by
+  booting the published digest (schema created, readiness honest, retry visible
+  in the boot log).
 - ⚠️ **Not drilled:** prometheus-adapter custom-metric scaling (template in
   `hpa.yaml` stays commented), ingress/TLS (out of scope on purpose), and
   multi-replica runtime key rotation (production refuses it; env/redeploy is

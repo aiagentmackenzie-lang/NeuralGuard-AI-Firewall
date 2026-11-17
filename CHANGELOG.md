@@ -126,13 +126,32 @@ so and the job exits 2 instead of cancelling the run.
 - 1,499 tests / 12 skipped locally, coverage 91.18 % (floor 90), ruff + format +
   mypy strict clean.
 
+### Release verification — 0.3.1, checkable by anyone
+
+Published by `.github/workflows/image.yml` on tag `v0.3.1` (run `44185951141`,
+3/3 jobs: airgapped boot smoke, amd64+arm64 build+push, keyless sign + CycloneDX
+attest + verify). Verified **outside CI** against the registry the consumer
+actually pulls from:
+
+| Check | Result |
+|---|---|
+| `0.3.1` and `latest` → digest | both resolve to `sha256:6d1c0022f146…` |
+| Anonymous index pull (no credentials) | `HTTP 200` |
+| `cosign verify` (identity-scoped, GitHub OIDC issuer) | passes; Rekor entry verified offline; payload carries the image signature **and** the `https://cyclonedx.org/bom` attestation |
+| Boot from the published digest, `/v1/health` | `"version":"0.3.1"`, `environment: production` |
+| Schema created by the artifact itself | `audit_events` present after first boot against an empty Postgres |
+| Table dropped under the running artifact | `/v1/ready` → `audit_db:"fail"`, aggregate **`degraded`** (v0.3.0 answered `ok`/`healthy` here) |
+| Boot against an unreachable Postgres, `INIT_ATTEMPTS=2` | **two** `db_init_attempt_failed` then `db_init_failed` (v0.3.0 logged once and never retried) |
+
+So both deployment-path fixes and the honest readiness report are properties of
+the artifact, not only of the tree.
+
 ### Known limits — unchanged by this release
 
-- The deployment-path fixes above were proven in-cluster against a **locally
-  built** image before this tag; the release image is built from the same
-  commit, and its airgapped boot + signature + SBOM are verified by
-  `.github/workflows/image.yml` on the tag. The cluster drill itself has not been
-  re-run against the 0.3.1 digest at the time of writing.
+- The Kubernetes cluster drill has **not yet been re-run against the 0.3.1
+  digest**; the 2026-11-17 drill ran against the 0.3.0 digest and the fix was
+  proven in-cluster against a locally built image. Re-running it against this
+  digest is the next evidence step, and the manifest now pins it.
 - Multi-replica runtime key rotation, prometheus-adapter metrics and ingress/TLS
   remain undrilled; SSE streaming is still refused `422`.
 - The shared HITL store closes the *broker* half of the multi-replica gap, and
