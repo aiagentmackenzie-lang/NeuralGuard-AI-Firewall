@@ -545,6 +545,24 @@ async def info(
     # NG-7/NG-8: MCP gateway posture (None when disabled).
     mcp_info: dict[str, Any] | None = None
     if config.mcp.enabled:
+        # NG-15: the store a human decision has to travel through. Reported
+        # because the startup refusal sees SERVER_WORKERS, not replicas behind a
+        # Service — a multi-pod deployment is an operator obligation, and an
+        # operator can only carry it if each pod will say which store it uses
+        # and whether the other pod is using the same one (store_id).
+        hitl_info: dict[str, Any] | None = None
+        if config.mcp.hitl_enabled:
+            hitl_info = {
+                "store": config.mcp.hitl_store,
+                # Structural, derived from the store, not from the config that
+                # asked for it: only the shared store makes one worker's
+                # decision visible to another.
+                "shared_across_workers": config.mcp.hitl_store == "redis",
+                "store_id": config.mcp.hitl_store_fingerprint,
+                "timeout_seconds": config.mcp.hitl_timeout_seconds,
+                "ttl_seconds": config.mcp.hitl_ttl_seconds,
+                "max_pending": config.mcp.hitl_max_pending,
+            }
         mcp_info = {
             "enabled": True,
             "mode": config.mcp.mode,
@@ -558,6 +576,8 @@ async def info(
             # NG-9 posture (opt-in control; the classification is per-tenant).
             "provenance_mode": config.mcp.provenance_mode,
             "provenance_require_session": config.mcp.provenance_require_session,
+            # NG-15 posture (None when HITL is disabled).
+            "hitl": hitl_info,
         }
 
     # F9/F10.3 posture: where does data go? Surfaced so nobody is surprised.

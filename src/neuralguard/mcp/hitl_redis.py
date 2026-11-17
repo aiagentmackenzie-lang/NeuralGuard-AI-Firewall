@@ -43,6 +43,7 @@ from neuralguard.mcp.hitl import (
     STATUS_PENDING,
     HitlCapacityError,
     HitlError,
+    HitlStoreError,
     PendingEscalation,
     _preview,
     payload_digest,
@@ -113,8 +114,9 @@ return 1
 """
 
 
-class HitlStoreError(HitlError):
-    """The shared store is unreachable or returned an unusable answer (fail-closed)."""
+# HitlStoreError is defined beside the other broker errors in `hitl` (so the
+# route layer can catch it without the optional `redis` extra) and imported
+# above for re-export from this module, where the store that raises it lives.
 
 
 @dataclass(slots=True)

@@ -72,6 +72,16 @@ class HitlCapacityError(HitlError):
     """Too many pending escalations; the call is refused rather than queued."""
 
 
+class HitlStoreError(HitlError):
+    """The shared store is unreachable or returned an unusable answer (fail-closed).
+
+    Lives here, beside the other broker errors, rather than in the Redis module:
+    the route layer must be able to catch it without importing the optional
+    ``redis`` extra, and a store outage is a property of the *contract* (a
+    decision that cannot be read or written is a refusal), not of one backend.
+    """
+
+
 def payload_digest(payload: Any) -> str:
     """SHA-256 of the canonical JSON body — what an approval is bound to.
 

@@ -9,10 +9,12 @@ Uses pydantic-settings for layered configuration:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1117,6 +1119,42 @@ class McpGatewaySettings(BaseSettings):
         if isinstance(v, (list, tuple)):
             return [str(t).strip().lower() for t in v if str(t).strip()]
         return v  # type: ignore[no-any-return]
+
+    @property
+    def hitl_store_fingerprint(self) -> str | None:
+        """Stable, credential-free identifier for the shared HITL store.
+
+        Exists so a multi-pod deployment can be *checked* rather than trusted:
+        two pods that agree on `store_id` provably point at the same Redis
+        endpoint and database, which is the property the startup rule cannot
+        see (it reads `SERVER_WORKERS`, not replicas behind a Service).
+
+        The fingerprint covers host, port and database index only. Credentials
+        are excluded on purpose — a hash of a password-bearing URL is still a
+        password oracle, and rotating a password must not look like moving to a
+        different store. The scheme is excluded too, so the TLS and non-TLS
+        spellings of one endpoint compare equal.
+
+        Returns `None` when the configured URL has no host: an unparseable
+        endpoint has no identity, and inventing one would make two broken pods
+        look like the same store.
+        """
+        if self.hitl_store != "redis":
+            return None
+        raw = (self.hitl_redis_url or "").strip()
+        if not raw:
+            return None
+        parts = urlsplit(raw)
+        host = (parts.hostname or "").strip().lower()
+        if not host:
+            return None
+        try:
+            port = parts.port or 6379
+        except ValueError:  # malformed port in the URL
+            return None
+        database = parts.path.strip("/") or "0"
+        canonical = f"{host}:{port}/{database}"
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
     @model_validator(mode="after")
     def _hitl_store_is_usable(self) -> McpGatewaySettings:
