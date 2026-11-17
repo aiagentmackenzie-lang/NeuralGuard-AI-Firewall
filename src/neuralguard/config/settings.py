@@ -1060,6 +1060,25 @@ class McpGatewaySettings(BaseSettings):
             "ceiling is deliberate (a blocked request is a resource)."
         ),
     )
+    hitl_store: Literal["memory", "redis"] = Field(
+        default="memory",
+        description=(
+            "NG-15: where escalations live. `memory` is per worker — an "
+            "escalation raised on one worker cannot be decided from another, so "
+            "it is correct only for a single replica. `redis` is the shared "
+            "store: it makes a decision visible to every worker and keeps the "
+            "single-use approval atomic across processes. Set "
+            "NEURALGUARD_MCP_HITL_STORE=redis for any multi-replica deployment."
+        ),
+    )
+    hitl_redis_url: str | None = Field(
+        default=None,
+        description=(
+            "NG-15: Redis URL for the shared escalation store "
+            "(required when hitl_store=redis). Credentials belong in a Secret; "
+            "prefer a URL assembled from a Secret at deploy time."
+        ),
+    )
     hitl_ttl_seconds: float = Field(
         default=300.0,
         ge=5.0,
@@ -1098,6 +1117,16 @@ class McpGatewaySettings(BaseSettings):
         if isinstance(v, (list, tuple)):
             return [str(t).strip().lower() for t in v if str(t).strip()]
         return v  # type: ignore[no-any-return]
+
+    @model_validator(mode="after")
+    def _hitl_store_is_usable(self) -> McpGatewaySettings:
+        """A shared store needs a URL; a per-worker store must admit it is one."""
+        if self.hitl_store == "redis" and not (self.hitl_redis_url or "").strip():
+            raise ValueError(
+                "hitl_store=redis requires hitl_redis_url (set "
+                "NEURALGUARD_MCP_HITL_REDIS_URL); without it there is no shared state"
+            )
+        return self
 
     @model_validator(mode="after")
     def _hitl_ttl_covers_timeout(self) -> McpGatewaySettings:

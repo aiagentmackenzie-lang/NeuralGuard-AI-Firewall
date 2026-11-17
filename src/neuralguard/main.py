@@ -231,6 +231,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "rate limit by a factor of the worker count. Set "
                 "NEURALGUARD_RATELIMIT_BACKEND=redis and NEURALGUARD_RATELIMIT_REDIS_URL."
             )
+        # NG-15 multi-worker: the in-memory HITL registry is per process, so with
+        # workers > 1 an escalation raised by one worker cannot be seen (or
+        # approved) by another — the control silently degrades to a timeout.
+        # Same rule as the rate limiter above: a per-process state holder is
+        # refused in production once there is more than one of them.
+        if (
+            config.mcp.hitl_enabled
+            and config.server.workers > 1
+            and config.mcp.hitl_store != "redis"
+        ):
+            raise RuntimeError(
+                f"Production startup refused: mcp.hitl_store={config.mcp.hitl_store} with "
+                f"server.workers={config.server.workers} makes an escalation invisible to "
+                "every other worker, so a human could never approve it. Set "
+                "NEURALGUARD_MCP_HITL_STORE=redis and NEURALGUARD_MCP_HITL_REDIS_URL."
+            )
         if (
             config.rate_limit.enabled
             and config.rate_limit.backend == "redis"
@@ -612,6 +628,7 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
     app.state.mcp_baseliner = None
     app.state.mcp_credentials = None
     app.state.mcp_hitl = None
+    app.state.mcp_hitl_redis = None
     if config.mcp.enabled:
         if not config.mcp.upstream_url.strip():
             raise RuntimeError(
@@ -658,14 +675,35 @@ def create_app(config: NeuralGuardConfig | None = None) -> FastAPI:
             max_sessions=config.mcp.provenance_max_sessions,
             require_session=config.mcp.provenance_require_session,
         )
-        # NG-15: human-in-the-loop for ESCALATE. Per-worker and in memory (the
-        # documented limit); constructed only when enabled, so a disabled
-        # gateway keeps the old refuse-and-audit posture exactly.
+        # NG-15: human-in-the-loop for ESCALATE; constructed only when enabled,
+        # so a disabled gateway keeps the old refuse-and-audit posture exactly.
+        #
+        # Two stores, chosen explicitly: `memory` is per worker (single replica
+        # only — the lifespan refuses it in production with workers > 1), and
+        # `redis` is shared, which is what makes a decision visible to every
+        # worker and keeps single-use atomic across processes. A store that
+        # cannot be created is fatal rather than silently downgraded: falling
+        # back to per-worker memory would reinstate the very defect.
         if config.mcp.hitl_enabled:
-            app.state.mcp_hitl = HitlBroker(
-                ttl_seconds=config.mcp.hitl_ttl_seconds,
-                max_pending=config.mcp.hitl_max_pending,
-            )
+            if config.mcp.hitl_store == "redis":
+                from redis.asyncio import Redis as AsyncRedis
+
+                from neuralguard.mcp.hitl_redis import RedisHitlStore
+
+                hitl_redis = AsyncRedis.from_url(
+                    config.mcp.hitl_redis_url or "", decode_responses=True
+                )
+                app.state.mcp_hitl_redis = hitl_redis
+                app.state.mcp_hitl = RedisHitlStore(
+                    redis=hitl_redis,
+                    ttl_seconds=config.mcp.hitl_ttl_seconds,
+                    max_pending=config.mcp.hitl_max_pending,
+                )
+            else:
+                app.state.mcp_hitl = HitlBroker(
+                    ttl_seconds=config.mcp.hitl_ttl_seconds,
+                    max_pending=config.mcp.hitl_max_pending,
+                )
         structlog.get_logger("neuralguard").info(
             "mcp_gateway_enabled",
             server_id=config.mcp.server_id,

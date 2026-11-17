@@ -309,6 +309,8 @@ NEURALGUARD_MCP_HITL_TIMEOUT_SECONDS=10        # 1-60s the request may be held
 NEURALGUARD_MCP_HITL_TTL_SECONDS=300           # pending lifetime (>= timeout)
 NEURALGUARD_MCP_HITL_MAX_PENDING=256           # per worker; at the cap, refuse
 NEURALGUARD_MCP_HITL_APPROVER_TENANTS=admin    # empty = the admin tenant only
+NEURALGUARD_MCP_HITL_STORE=memory              # memory (1 replica) | redis (shared)
+NEURALGUARD_MCP_HITL_REDIS_URL=redis://:PASS@redis:6379/1   # required for redis
 #   A named approver tenant decides only ITS OWN escalations; the admin tenant
 #   (the gateway operator) decides any. That keeps the approver list from
 #   becoming a cross-tenant read of another tenant's tool arguments.
@@ -378,10 +380,23 @@ because reviewing the call is the point of the review.
 
 ### Operability limits
 
-- **Per worker, in memory.** A decision must reach the worker holding the
-  pending request. With more than one replica, route
-  `/v1/mcp/escalations` with sticky sessions or run one replica; a shared
-  broker is not in this build (same shape as the per-worker baselines).
+- **`hitl_store=memory` is per worker.** A decision must reach the worker
+  holding the pending request, so that mode is correct for **one replica only**.
+  Production with `NEURALGUARD_SERVER_WORKERS > 1` refuses to start with the
+  memory store rather than degrading silently.
+- **`hitl_store=redis` is the shared store** and is what a multi-replica
+  deployment must use: an escalation raised on one worker is visible to, and
+  decidable by, every other worker. Single-use stays atomic across processes —
+  `consume` is a Lua compare-and-set that deletes the record, so two workers
+  cannot both spend one approval — and expiry is a Redis TTL, so it cannot be
+  approved late.
+- **A multi-POD deployment is invisible to the app.** The startup rule above
+  sees `SERVER_WORKERS`, not replicas behind a Service, so setting
+  `hitl_store=redis` in a multi-replica manifest is an operator obligation that
+  the application cannot enforce — it is stated here rather than assumed.
+- **Store failure is a refusal.** If Redis is unreachable, `raise` errors (the
+  call is refused) and `wait` returns no decision; there is no path that turns a
+  store error into an approval.
 - **A held request is a resource.** The wait is capped at 60 s and pending
   records at `HITL_MAX_PENDING`; at the cap a new `ESCALATE` is refused
   (`503 mcp_escalation_capacity`) rather than queued.
@@ -418,10 +433,11 @@ that layer be the identity boundary.
 - **Tool RESULT content** is taint-fingerprinted (NG-9) but not yet
   scanned through the output-scan pattern semantics — that remains the
   immediate follow-up for the indirect-injection-in-tool-results class.
-- **HITL is per worker and in memory.** An approval only reaches the worker
-  holding the pending call (sticky routing or a single replica); the request is
-  held for at most `HITL_TIMEOUT_SECONDS`, and notification is delegated to the
-  SIEM routing of the raised audit event.
+- **HITL state is per worker unless `hitl_store=redis`.** With the shared store
+  the approval is visible to every worker; with the memory store it only reaches
+  the worker holding the pending call. Either way the request is held for at most
+  `HITL_TIMEOUT_SECONDS`, and notification is delegated to the SIEM routing of the
+  raised audit event.
 - **NG-10 is not confinement.** Argument constraints are string-level boundary
   checks on what the caller *declares*. They do not sandbox the upstream tool,
   do not resolve symlinks, and do not cover arguments a tool derives on its

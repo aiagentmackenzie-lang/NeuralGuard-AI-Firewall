@@ -93,7 +93,7 @@ class TestBrokerLifecycle:
         record = await _raise(broker)
         assert await broker.wait(record.escalation_id, 0.02) is None
         # Still pending: a timeout refused THIS request, it did not decide.
-        assert broker.get(record.escalation_id).status == STATUS_PENDING
+        assert (await broker.get(record.escalation_id)).status == STATUS_PENDING
 
     @pytest.mark.asyncio
     async def test_expired_escalation_can_never_be_approved(self) -> None:
@@ -118,7 +118,7 @@ class TestBrokerLifecycle:
         record = await _raise(broker)
         await broker.decide(record.escalation_id, approved=True, decided_by="admin")
         await broker.consume(record.escalation_id)
-        assert broker.get(record.escalation_id) is None
+        assert await broker.get(record.escalation_id) is None
         # A replay of the id cannot authorize a second call.
         with pytest.raises(HitlError):
             await broker.consume(record.escalation_id)
@@ -148,7 +148,7 @@ class TestBrokerLifecycle:
         first = await _raise(broker, tool="a")
         second = await _raise(broker, tool="b")
         await broker.decide(second.escalation_id, approved=True, decided_by="admin")
-        pending = broker.pending_for_approval()
+        pending = await broker.pending_for_approval()
         assert [r.escalation_id for r in pending] == [first.escalation_id]
 
     @pytest.mark.asyncio
@@ -728,8 +728,8 @@ class TestHitlSettings:
         with pytest.raises(pydantic.ValidationError):
             McpGatewaySettings(hitl_timeout_seconds=600.0)
 
-    def test_settings_do_not_leak_into_the_escalation_view(self) -> None:
+    async def test_settings_do_not_leak_into_the_escalation_view(self) -> None:
         # The approver view is built from the record only; nothing from settings
         # (secrets, tokens) can appear in it.
         broker = HitlBroker()
-        assert json.dumps(broker.pending_for_approval()) == "[]"
+        assert json.dumps(await broker.pending_for_approval()) == "[]"
