@@ -17,11 +17,15 @@ Raw manifests (+ kustomize). **Validation status, honestly:**
   It found **two real deployment-path defects** that the 11-12 drill had
   missed: a boot-order race that disabled the Postgres audit path for the
   pod's lifetime, and a readiness probe that called that state `ok`. Both are
-  fixed in this tree and were proven fixed in-cluster, and **v0.3.1 carries
-  them**: the manifest now pins
-  `ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:6d1c0022f146…`, verified by
-  booting the published digest (schema created, readiness honest, retry visible
-  in the boot log).
+  fixed in this tree, proven in-cluster against a locally built image, and
+  **shipped in v0.3.1**.
+- ✅ **Re-drilled again 2026-11-17 against the v0.3.1 digest** — the artifact the
+  manifest now pins (`ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:6d1c0022f146…`,
+  pulled from GHCR by a fresh kind cluster). Full check table passed **and** the
+  defect that motivated the release is gone: the late-Postgres sequence that used
+  to need a `rollout restart` converges on its own (attempts 1–2 failed, attempt
+  5 created the schema, `RESTARTS 0`). Evidence in
+  [that drill](#cluster-drill--2026-11-17-re-run-against-v031-the-fix-in-the-artifact).
 - ⚠️ **Not drilled:** prometheus-adapter custom-metric scaling (template in
   `hpa.yaml` stays commented), ingress/TLS (out of scope on purpose), and
   multi-replica runtime key rotation (production refuses it; env/redeploy is
