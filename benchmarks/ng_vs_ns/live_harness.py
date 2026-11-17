@@ -50,16 +50,24 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import subprocess
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from httpx import ASGITransport, AsyncClient
 
 # Reuse the A1 benign corpus for FPR so the two phases share ground truth.
-from benchmarks.ng_vs_ns.harness import BENIGN_CORPUS, _load_corpus, _verdict_from_response
+from benchmarks.ng_vs_ns.harness import (
+    ATTACK_CORPUS,
+    BENIGN_CORPUS,
+    _load_corpus,
+    _verdict_from_response,
+)
 from neuralguard.config.settings import (
     AuditSettings,
     AuthSettings,
@@ -325,6 +333,97 @@ async def eval_config(
     )
 
 
+# ── Provenance ─────────────────────────────────────────────────────────────
+#
+# A results JSON that cannot date itself and cannot name its corpus is an
+# anecdote. ``corpus_provenance()`` derives the digests from the corpus bytes
+# (never from a remembered constant), so the stamp is re-derivable by any
+# reader, and ``tests/unit/test_benchmark_provenance.py`` re-derives it again.
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _nonblank_lines(path: Path) -> int:
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def _corpus_entry(path: Path) -> dict[str, Any]:
+    return {
+        "file": path.relative_to(BENCH_DIR.parent.parent).as_posix(),
+        "sha256": _sha256_file(path),
+        "records": _nonblank_lines(path),
+    }
+
+
+def corpus_provenance() -> dict[str, Any]:
+    """Digest and record count of the corpora this run actually loads.
+
+    Both values are computed from the corpus files on disk at run time, so a
+    stamped artifact can be checked against the checkout it ships beside.
+    """
+    return {
+        "attack": _corpus_entry(ATTACK_CORPUS),
+        "benign": _corpus_entry(BENIGN_CORPUS),
+    }
+
+
+def _utc_now() -> str:
+    """Timestamp for the artifact: always UTC, always timezone-aware.
+
+    The project runs on an operator machine in GMT-3 while registries and CI
+    speak UTC; a naive local stamp in a tracking artifact is ambiguous for
+    every other reader, so provenance is the one place that must not be local.
+    """
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _git_commit() -> str | None:
+    """Best-effort source commit; never fails a run from a tarball or a venv."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=BENCH_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _payload(
+    *,
+    attacker_model: str,
+    judge_model: str,
+    judge_resolves_escalate: bool,
+    jb_iterations: int,
+    selected_configs: list[str],
+    attacks: list[Any],
+    benign: list[Any],
+    results: list[Any],
+) -> dict[str, Any]:
+    """Assemble the results dict, including what produced it (not just what it found)."""
+    return {
+        "generated_at": _utc_now(),
+        "source_commit": _git_commit(),
+        "corpus": corpus_provenance(),
+        "attacker_model": attacker_model,
+        "judge_model": judge_model,
+        "judge_resolves_escalate": judge_resolves_escalate,
+        "jb_iterations": jb_iterations,
+        "configs_run": selected_configs,
+        "n_attacks": len(attacks),
+        "n_benign": len(benign),
+        "configs": [asdict(r) for r in results],
+    }
+
+
 # ── Orchestration ──────────────────────────────────────────────────────────
 
 
@@ -380,16 +479,16 @@ async def run(
         )
         results.append(res)
 
-    return {
-        "attacker_model": attacker_model,
-        "judge_model": judge_model,
-        "judge_resolves_escalate": judge_resolves_escalate,
-        "jb_iterations": jb_iterations,
-        "configs_run": selected_configs,
-        "n_attacks": len(attacks),
-        "n_benign": len(benign),
-        "configs": [asdict(r) for r in results],
-    }
+    return _payload(
+        attacker_model=attacker_model,
+        judge_model=judge_model,
+        judge_resolves_escalate=judge_resolves_escalate,
+        jb_iterations=jb_iterations,
+        selected_configs=selected_configs,
+        attacks=attacks,
+        benign=benign,
+        results=results,
+    )
 
 
 def _monotonic_drop(results: list[ConfigResult]) -> bool:
@@ -403,6 +502,16 @@ def _monotonic_drop(results: list[ConfigResult]) -> bool:
 def _format_results(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("=== NeuralGuard ↔ NeuralStrike live benchmark (A2) ===")
+    lines.append(
+        f"Generated: {payload.get('generated_at')} | commit: {payload.get('source_commit')}"
+    )
+    corpus = payload.get("corpus") or {}
+    for kind in ("attack", "benign"):
+        entry = corpus.get(kind) or {}
+        if entry:
+            lines.append(
+                f"corpus[{kind}]: {entry['records']} records sha256={entry['sha256'][:12]}…"
+            )
     lines.append(
         f"Attacker: {payload['attacker_model']!r} (local Ollama) | "
         f"Judge: {payload['judge_model']!r} | "
