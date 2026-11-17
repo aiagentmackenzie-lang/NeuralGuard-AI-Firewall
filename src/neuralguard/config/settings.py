@@ -1158,7 +1158,7 @@ class NeuralGuardConfig(BaseSettings):
     # Kept as a literal to avoid a circular import (settings -> package -> app);
     # `tests/unit/test_config.py::test_defaults` asserts it equals
     # `neuralguard.__version__`, so a release cannot move one and not the other.
-    version: str = Field(default="0.3.0", description="Application version")
+    version: str = Field(default="0.3.1", description="Application version")
     environment: Literal["development", "staging", "production"] = Field(
         default="development", description="Deployment environment"
     )
