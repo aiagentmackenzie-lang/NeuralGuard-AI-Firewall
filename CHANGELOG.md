@@ -34,6 +34,31 @@ artifact a stranger pulls. Full evidence: `deploy/kubernetes/README.md`
   cannot persist; the worker keeps serving (JSONL still records, the documented
   fallback) but the aggregate status drops to `degraded`.
 
+### Fixed — the scheduled Bench gate can no longer be killed by its own runtime
+
+The 2026-11-17 scheduled run went red for the first time in six: the A2 step ran
+**39 m 16 s** and was killed by `timeout-minutes: 40`. The step's cost is
+`5 goals x (jb_iterations - 1)` = 10 local 7B generations with **no per-call
+timeout and no overall budget** (NeuralStrike's `LLMManager.call_local` passes
+none to the Ollama client), so its runtime was a function of the runner's CPU.
+A job *timeout* also cancels the run rather than failing the job, which is why
+the job's `continue-on-error: true` never applied.
+
+- New `benchmarks/ng_vs_ns/budget.py`: a per-call timeout (one hung generation
+  costs one attack, not the benchmark) and an overall generation budget
+  (deterministic truncation), with results carrying their originating item so a
+  dropped call cannot shift later payloads onto the wrong goal.
+- The payload records `generation` (planned, produced, elapsed, budget,
+  timeouts, `complete`), `_format_results` prints an **INCOMPLETE** banner, and
+  the CLI exits **2** on a truncated set — `continue-on-error` keeps the
+  scheduled run green while the job tile still says "look at this".
+- The workflow passes `--generation-budget-seconds 540` with
+  `--per-call-timeout-seconds 180` and `timeout-minutes: 20`; a contract asserts
+  budget + 300 s slack fits inside the job timeout, so this configuration cannot
+  be recreated by accident.
+- Local runs are unchanged: no budget by default, so the benchmark is not
+  truncated by design.
+
 ### Changed — evidence hygiene
 
 - **Benchmark provenance is now stamped by the harness.** `a2_results.json`
@@ -49,7 +74,7 @@ artifact a stranger pulls. Full evidence: `deploy/kubernetes/README.md`
   tracked, including the README-cited `a2_results.json`. The rule is now an
   explicit ignore/enumerate split with `!` negations, and a test fails if any
   tracked record is ignored (`git check-ignore --no-index`).
-- 1,484 tests / 12 skipped locally, coverage 91.18 % (floor 90), ruff + format +
+- 1,499 tests / 12 skipped locally, coverage 91.18 % (floor 90), ruff + format +
   mypy strict clean.
 
 ### Known limits — unchanged by this entry
