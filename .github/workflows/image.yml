@@ -33,10 +33,6 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      push:
-        description: "Push to GHCR (false = build only, no publish)"
-        type: boolean
-        default: true
       digest:
         description: "Existing digest to sign + attest instead of building (sha256:...)"
         type: string
@@ -123,7 +119,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [smoke]
-    if: ${{ github.event_name == 'push' || inputs.digest == '' }}
+    # A job whose `needs` were skipped is skipped too unless it opts back in —
+    # which is why the digest-repair path needs !cancelled() rather than a plain
+    # condition (verified the hard way: the first repair run skipped everything).
+    if: ${{ !cancelled() && needs.smoke.result == 'success' && (github.event_name == 'push' || inputs.digest == '') }}
     permissions:
       contents: read
       packages: write  # push to GHCR with GITHUB_TOKEN
@@ -171,7 +170,6 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
       - name: Log in to GHCR
-        if: ${{ github.event_name == 'push' || inputs.push }}
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -185,7 +183,7 @@ jobs:
           context: .
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' || inputs.push }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           # Index-embedded attestations (see the header for how they are checked).
           provenance: mode=max
@@ -226,7 +224,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [smoke, build]
-    if: ${{ (github.event_name == 'push' || inputs.push) && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    if: ${{ !cancelled() && (needs.build.result == 'success' || inputs.digest != '') }}
     permissions:
       contents: read
       packages: write   # cosign writes the signature + attestations to GHCR
