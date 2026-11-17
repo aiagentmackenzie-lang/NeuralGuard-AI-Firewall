@@ -9,7 +9,7 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
-## [Unreleased] — since v0.3.0 (2026-11-17)
+## [0.3.1] — 2026-11-17
 
 ### Added — multi-replica HITL (NG-15 shared store)
 
@@ -126,17 +126,19 @@ so and the job exits 2 instead of cancelling the run.
 - 1,499 tests / 12 skipped locally, coverage 91.18 % (floor 90), ruff + format +
   mypy strict clean.
 
-### Known limits — unchanged by this entry
+### Known limits — unchanged by this release
 
-- The **published v0.3.0 image does not contain these fixes**; they land in the
-  tree and are proven in-cluster against a locally built image. A v0.3.1 publish
-  is an owner decision.
+- The deployment-path fixes above were proven in-cluster against a **locally
+  built** image before this tag; the release image is built from the same
+  commit, and its airgapped boot + signature + SBOM are verified by
+  `.github/workflows/image.yml` on the tag. The cluster drill itself has not been
+  re-run against the 0.3.1 digest at the time of writing.
 - Multi-replica runtime key rotation, prometheus-adapter metrics and ingress/TLS
   remain undrilled; SSE streaming is still refused `422`.
-- The shared HITL store closes the *broker* half of the multi-replica gap. A
-  two-replica live drill (escalation raised on pod A, approved via the Service
-  landing on pod B) is the evidence that would close it, and it has not been run
-  yet at the time of writing.
+- The shared HITL store closes the *broker* half of the multi-replica gap, and
+  was drilled across **two OS processes** with a memory-store negative control.
+  It has **not** been drilled across two pods behind a Service; that is the
+  remaining evidence.
 - `NEURALGUARD_SERVER_WORKERS > 1` is the only multi-worker signal the app can
   see: **a multi-pod deployment is invisible to it**, so the manifests/runbook
   carry the instruction to set `hitl_store=redis` and the app cannot enforce it.
