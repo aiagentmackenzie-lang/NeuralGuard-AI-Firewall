@@ -95,7 +95,13 @@ jobs:
   bench-a2-live:
     name: A2 live NeuralStrike (pattern_only, informational)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Budgeted, not timed-out. On 2026-11-17 this job ran 39m16s against a 40m
+    # timeout: the step had no bounds of its own, so its runtime was a function
+    # of the runner's CPU — and a job *timeout cancels the run*, so
+    # continue-on-error never applied. The step now passes
+    # --generation-budget-seconds (540) and the worst case is 540s + install
+    # (~55s) + scoring + upload, comfortably inside 20 minutes.
+    timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -142,6 +148,8 @@ jobs:
             --attacker "${ATTACKER}" \
             --judge "${ATTACKER}" \
             --jb-iterations 3 \
+            --generation-budget-seconds 540 \
+            --per-call-timeout-seconds 180 \
             --save /tmp/a2_results.json
           cat /tmp/a2_results.json
 

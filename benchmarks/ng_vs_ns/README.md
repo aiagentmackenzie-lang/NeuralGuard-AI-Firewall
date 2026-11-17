@@ -202,6 +202,23 @@ ollama pull mistral:7b
 uv run python -m benchmarks.ng_vs_ns.live_harness --attacker mistral:7b --judge mistral:7b
 ```
 
+**Bounds (added 2026-11-17).** Attack generation is model-bound: `5 goals x
+(jb_iterations - 1)` local generations, each with **no timeout of its own**
+(NeuralStrike's `LLMManager` passes none to the Ollama client), so on a slow
+runner its runtime is a function of the CPU. The 2026-11-17 scheduled CI run
+measured **39 m 16 s** and was killed by its own job timeout — which cancels the
+whole run, so `continue-on-error` never applied.
+
+| Flag | Default | Why |
+|:--|:--|:--|
+| `--generation-budget-seconds` | unbounded | Overall wall-clock budget for mutations. CI passes `540`. A truncated set is labelled, never silently averaged. |
+| `--per-call-timeout-seconds` | `180` | One hung generation costs one attack, not the benchmark. |
+
+A truncated run records `generation: {planned, produced, elapsed_seconds,
+budget_seconds, timed_out_calls, complete: false}`, prints an **INCOMPLETE**
+banner, and exits **2** — so the artifact and the job tile both say the numbers
+describe a partial corpus. Local runs pass no budget and stay complete.
+
 ### Reference snapshot (2026-06-27, mistral:7b, 18 attacks / 45 benign)
 
 | config | ASR | FPR | p95 |
