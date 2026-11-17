@@ -12,7 +12,7 @@
 | SBOM blob signing (keyless) | CI job `sbom-sign` | ephemeral Fulcio cert (GitHub OIDC) | ✅ CI-verified — green on every push since 2026-09-05 |
 | SBOM attestation (cyclonedx predicate) | CI job `sbom-sign` | same | ✅ same |
 | Local artifact signing (key-based) | operator machine (this runbook) | `~/.cosign/<prefix>.key` | ✅ locally verified (sign → verify EXIT 0, cosign v3.1.3) |
-| Container image signing | operator + registry | local key or keyless | 🟠 OPS STEP — requires a registry; not possible from CI without a push target (below) |
+| Container image signing | CI job `image` (`.github/workflows/image.yml`) | ephemeral Fulcio cert (GitHub OIDC) | ⏳ WIRED — the workflow exists and verifies its own signature + both attestations; the first successful publish is what proves the claim |
 
 The public half of the local key pair is committed at `cosign/neuralguard-local.pub`
 so anyone can verify locally-signed artifacts. **The private key is never
@@ -84,42 +84,77 @@ cosign verify-blob \
   sbom.json
 ```
 
-## 4. Container image signing (OPS STEP — needs a registry)
+## 4. Container image — build, publish, sign (CI)
 
-Image signing attaches signatures to a registry (or attaches them to the image
-itself in OCI 1.1+). CI cannot do this today because NeuralGuard's CI builds no
-image and pushes to no registry — fabricating a signing claim here would be
-vapor. When an image is published, the operator flow is:
+`.github/workflows/image.yml` owns the image. It runs on a `v*` tag (and on
+demand) and does five things:
+
+1. **Refuses a lying tag.** The tag must equal `pyproject.toml`'s version, or the
+   job fails before anything is built — an image whose
+   `org.opencontainers.image.version` label disagrees with its tag is worse
+   than no image.
+2. **Builds `linux/amd64` + `linux/arm64`** from the digest-pinned Dockerfile
+   with `provenance: mode=max` and `sbom: true`, so the registry carries
+   provenance and an SPDX SBOM attestation alongside the image.
+3. **Pushes** `ghcr.io/<owner>/neuralguard:<version>` and `:sha-<short>`, plus
+   `:latest` on a tag push only. `<owner>` is derived from the repository owner,
+   so a fork publishes under its own namespace instead of colliding.
+4. **Signs the digest** (never the tag) keyless, then verifies its own signature
+   and both attestations with an identity regexp pinned to
+   `.../.github/workflows/image.yml@`. A signature from any other workflow or
+   repository fails the job.
+5. **Prints the digest pin line** in the run summary.
+
+A `smoke` job runs *before* anything is pushed: it builds the image for one
+platform, loads it locally, starts it with `--network none` and health-checks it
+from inside. That is a regression guard for a real defect the first publish
+attempt found — the image ran `uv run`, which re-resolved dependencies at
+container start, so it needed DNS and would have died in an airgapped cluster.
+A signed image that cannot start without egress is not worth signing.
+
+Cut the release tag only from a green `main`: the image is the artifact a
+consumer actually runs, so the CI gate must already be green on the commit it
+was built from.
+
+Reproducing a build locally, if you ever need to:
 
 ```bash
-# Build + push once (example: ghcr)
-docker build -t ghcr.io/aiagentmackenzie-lang/neuralguard:vX.Y.Z .
-docker push ghcr.io/aiagentmackenzie-lang/neuralguard:vX.Y.Z
-DIGEST=$(docker buildx imagetools inspect ghcr.io/aiagentmackenzie-lang/neuralguard:vX.Y.Z \
-  --format '{{json .Manifest.Digest}}' | tr -d '"')
-
-# Key-based signing (recommended for an owned identity):
-COSIGN_PASSWORD="<passphrase>" cosign sign --key "$HOME/.cosign/neuralguard-local.key" \
-  --sign-registry-insecure-freshen 2>/dev/null || \
-COSIGN_PASSWORD="<passphrase>" cosign sign --key "$HOME/.cosign/neuralguard-local.key" \
-  "ghcr.io/aiagentmackenzie-lang/neuralguard@${DIGEST}"
-
-# Attest the SBOM INTO the registry against the image:
-COSIGN_PASSWORD="<passphrase>" cosign attest --key "$HOME/.cosign/neuralguard-local.key" \
-  --predicate sbom.json --type cyclonedx "ghcr.io/aiagentmackenzie-lang/neuralguard@${DIGEST}"
-
-# Verify (consumer side, pinned to our key):
-cosign verify --key cosign/neuralguard-local.pub \
-  "ghcr.io/aiagentmackenzie-lang/neuralguard@${DIGEST}"
-cosign verify-attestation --key cosign/neuralguard-local.pub --type cyclonedx \
-  "ghcr.io/aiagentmackenzie-lang/neuralguard@${DIGEST}"
+docker build -t ghcr.io/<owner>/neuralguard:dev .
+docker buildx imagetools inspect ghcr.io/<owner>/neuralguard:dev --format '{{.Manifest.Digest}}'
 ```
 
-Admission control (cluster-side verify before pull) is a K8s policy plugin
-(Kyverno `verifyImages` / Sigstore policy-controller) — worth wiring when the
-P2-6 manifests get a real cluster drill; note it in the drill checklist.
-Keyless image signing follows the same pattern with `--key` omitted
-(`COSIGN_FULCIO_*` defaults; verification via the identity regexp above).
+### Pin the digest in the manifest
+
+A tag is mutable; the digest is the identity that was signed. After a
+successful run, paste the line from the run summary into
+`deploy/kubernetes/deployment.yaml`:
+
+```yaml
+image: ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:<digest>
+```
+
+### Consumer verification (outside CI)
+
+```bash
+IMAGE=ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:<digest>
+IDENTITY='^https://github.com/aiagentmackenzie-lang/NeuralGuard-AI-Firewall/\.github/workflows/image\.yml@'
+
+cosign verify --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE"
+
+cosign verify-attestation --type slsaprovenance --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE"
+
+cosign verify-attestation --type spdxjson --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE"
+
+cosign tree "$IMAGE"   # lists everything attached to the digest
+```
+
+Admission control (verify before pull) is a cluster-side policy (Kyverno
+`verifyImages` / Sigstore policy-controller). It is **not wired**: none of the
+manifests carry a policy, and no cluster installs one. A cluster drill that
+claims signed-image admission must show the refusal, not just the policy file.
 
 ## 5. Honest limits
 

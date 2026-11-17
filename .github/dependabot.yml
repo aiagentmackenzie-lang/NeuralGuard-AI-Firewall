@@ -23,3 +23,17 @@ updates:
       - "python"
     commit-message:
       prefix: "deps"
+  # Base images are digest-pinned in the Dockerfile so a signed image cannot
+  # silently rebuild on a different base. Dependabot keeps the digests current;
+  # note that it parses FROM lines, so the uv image in `COPY --from=` may need
+  # bumping by hand (the workflow header documents how to re-resolve it).
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "build(deps)"
