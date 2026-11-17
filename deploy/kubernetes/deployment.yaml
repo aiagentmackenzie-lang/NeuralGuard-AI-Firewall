@@ -46,7 +46,7 @@ spec:
           # provenance + SBOM attestations). Pin the DIGEST from that run's
           # summary, not the tag — a tag is mutable and the signature covers the
           # digest. Runbook: docs/runbooks/artifact_signing.md §4.
-          image: ghcr.io/aiagentmackenzie-lang/neuralguard:0.2.1
+          image: ghcr.io/aiagentmackenzie-lang/neuralguard:0.3.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

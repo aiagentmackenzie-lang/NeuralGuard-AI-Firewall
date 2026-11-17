@@ -3,6 +3,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from neuralguard import __version__
 from neuralguard.config.settings import NeuralGuardConfig
 from neuralguard.main import create_app
 
@@ -31,7 +32,7 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["version"] == "0.2.1"
+        assert data["version"] == __version__
         assert "scanners" in data
 
     @pytest.mark.asyncio
@@ -51,7 +52,7 @@ class TestInfoEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "NeuralGuard"
-        assert data["version"] == "0.2.1"
+        assert data["version"] == __version__
         assert "owasp_coverage" in data
         assert "LLM01" in data["owasp_coverage"]["dedicated_rules"][0]
         # ASI04/ASI10 moved to dedicated rules in P2-3 (SC-001..005 /
