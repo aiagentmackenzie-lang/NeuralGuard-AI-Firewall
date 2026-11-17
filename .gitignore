@@ -71,6 +71,22 @@ docs/RESEARCH_FRONTIER_2026.md
 
 # local dev secrets — never commit
 .env
+# Filled manifests generated from the templates in deploy/ (the .example is the
+# tracked one). Nothing prevented `git add -A` from committing a live password.
+deploy/kubernetes/secret.yaml
+deploy/kubernetes/*secret*.yaml
+!deploy/kubernetes/secret.example.yaml
 
-# F18: live benchmark run artifacts are machine-local; durable results live in *_RESULTS.md
-benchmarks/ng_vs_ns/results/
+# F18: live benchmark run artifacts are machine-local; the curated records in this
+# directory ARE tracked — they are the provenance the README cites — so the rule
+# below is an explicit ignore/enumerate split rather than a blanket directory rule.
+# A tracked file with no `!` negation here is a contradiction that only survives
+# because git was told force-add once; tests/unit/test_benchmark_provenance.py
+# fails when that happens (`git check-ignore --no-index`).
+benchmarks/ng_vs_ns/results/*
+!benchmarks/ng_vs_ns/results/A2_RESULTS.md
+!benchmarks/ng_vs_ns/results/B4_RESULTS.md
+!benchmarks/ng_vs_ns/results/a2_results.json
+!benchmarks/ng_vs_ns/results/known_gaps.md
+# b4_results.json stays untracked on purpose: B4_RESULTS.md transcribes its
+# numbers, and the raw run output is a machine-local artifact, not evidence.

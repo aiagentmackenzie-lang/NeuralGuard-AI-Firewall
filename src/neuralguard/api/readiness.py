@@ -69,29 +69,55 @@ class ReadinessResult:
         }
 
 
-async def _probe_db(config: NeuralGuardConfig) -> ComponentStatus:
-    """Check the Postgres audit backend connectivity."""
+async def _probe_db(config: NeuralGuardConfig, engine: Any | None = None) -> ComponentStatus:
+    """Check the Postgres audit backend, including the schema its writes need.
+
+    Connectivity alone is not readiness for an audit store: the 2026-11-17
+    cluster drill found a pod whose ``SELECT 1`` succeeded while every audit
+    INSERT failed with ``relation "audit_events" does not exist``, and this probe
+    still answered ``ok``. The table is therefore part of the check.
+
+    ``fail`` here does not evict the worker (the JSONL chain keeps audit
+    integrity), but it does stop the aggregate status from reading ``healthy``
+    while the configured durable backend persists nothing.
+
+    Args:
+        config: Effective settings.
+        engine: Injectable engine for unit tests; defaults to the lifespan engine.
+    """
     if config.audit.backend != "postgres" or not config.audit.postgres_url:
         return "skip"
     try:
-        from neuralguard.db.engine import get_engine
-
-        engine = get_engine()
-    except ImportError:
-        return "degraded"  # db extra not installed; JSONL fallback active
-    if engine is None:
-        # Engine is created in the lifespan; if it's not ready yet the audit
-        # logger falls back to JSONL, so the worker can still serve.
-        return "degraded"
-    try:
         from sqlalchemy import text
+    except ImportError:
+        return "fail"  # configured for postgres but the db extra cannot load
 
+    if engine is None:
+        try:
+            from neuralguard.db.engine import get_engine
+
+            engine = get_engine()
+        except ImportError:
+            return "fail"  # configured but the extra is missing: no durable audit
+    if engine is None:
+        # Lifespan init failed (or has not run): a postgres backend that cannot
+        # persist is not "fine-grained degradation", it is a broken audit store.
+        return "fail"
+    try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+            present = (await conn.execute(text("SELECT to_regclass('audit_events')"))).scalar()
+        if present is None:
+            logger.warning(
+                "readiness_db_schema_missing",
+                table="audit_events",
+                msg="audit backend is postgres but the table is absent; writes will fail",
+            )
+            return "fail"
         return "ok"
     except Exception as exc:
         logger.warning("readiness_db_fail", error=repr(exc))
-        return "degraded"  # JSONL fallback keeps audit integrity
+        return "fail"  # configured postgres backend unusable; JSONL fallback still records
 
 
 async def _probe_redis(app_state: Any, config: NeuralGuardConfig) -> ComponentStatus:

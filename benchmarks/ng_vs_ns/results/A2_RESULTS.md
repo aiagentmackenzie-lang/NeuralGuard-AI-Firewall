@@ -13,10 +13,18 @@
 > 27.78%, is the README's 7B row). Always read a section's own date and
 > model before quoting a number.
 >
-> **Known traceability gap:** the JSON records models, iterations and
-> configs but **no timestamp and no corpus digest**, so the tracked artifact
-> cannot prove which corpus built it. The harness should stamp both; until
-> it does, this notice is the provenance record.
+> **Provenance (closed 2026-11-17).** The traceability gap this banner used to
+> describe is now explicit in the artifact. `live_harness.py` stamps
+> `generated_at` (always UTC, timezone-aware), `source_commit` and a `corpus`
+> block with each corpus's path, SHA-256 and record count, derived from the
+> corpus bytes at run time — a digest that cannot be re-derived is decoration,
+> not provenance. Because this particular file predates the stamp, its
+> `generated_at` and `source_commit` are **`null` on purpose**, with a
+> `provenance_unrecorded` sentence naming the gap rather than a guessed time;
+> what *is* derivable is recorded: both corpora are unchanged since `676c10b`
+> (2026-06-27), before this run, so the stamped digests describe the corpora it
+> loaded. `tests/unit/test_benchmark_provenance.py` fails if a tracked results
+> JSON has no provenance block, or if a null timestamp is not explained.
 
 **Run date:** 2026-06-28 · **Attacker:** `mistral:7b` (local Ollama, no cloud
 API) · **NeuralGuard judge:** `mistral:7b` · **JailbreakForge iterations:** 3

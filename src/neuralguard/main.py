@@ -172,60 +172,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize PostgreSQL engine if audit backend is postgres
     if config.audit.backend == "postgres" and config.audit.postgres_url:
         try:
-            from neuralguard.db.engine import create_engine as db_create_engine
-            from neuralguard.db.models import Base
+            from neuralguard.db.init import initialise_postgres
 
-            engine = db_create_engine(config.audit.postgres_url)
-            # Create tables if they don't exist (dev/staging convenience)
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-                # P2-10: event_sig was added to the ORM after the first
-                # release — create_all does NOT alter existing tables, so add
-                # the column idempotently (existing postgres-audit deployments
-                # would otherwise fail every INSERT with "column does not
-                # exist" and silently fall back to JSONL).
-                from sqlalchemy import text as _text
-
-                await conn.execute(
-                    _text(
-                        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS event_sig VARCHAR(128)"
-                    )
-                )
-                # P2-10 residual: cross-worker global ordering (2026-11-12).
-                # Same idempotent-migration pattern: create_all does not
-                # alter existing tables, so add the sequence + columns for
-                # deployments that predate them. Nullable by design — legacy
-                # rows stay readable and are reported as outside the chain.
-                await conn.execute(_text("CREATE SEQUENCE IF NOT EXISTS audit_global_seq"))
-                await conn.execute(
-                    _text("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS global_seq BIGINT")
-                )
-                await conn.execute(
-                    _text(
-                        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS "
-                        "global_prev_hash VARCHAR(64)"
-                    )
-                )
-                await conn.execute(
-                    _text(
-                        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS global_hash VARCHAR(64)"
-                    )
-                )
-                await conn.execute(
-                    _text(
-                        "CREATE INDEX IF NOT EXISTS ix_audit_events_global_seq "
-                        "ON audit_events (global_seq)"
-                    )
-                )
-            structlog.get_logger("neuralguard").info("db_tables_created", backend="postgres")
+            # Retries a late dependency instead of bricking the durable path for
+            # the pod's lifetime (drill-found 2026-11-17: a DNS race at boot made
+            # every audit INSERT fail while readiness still reported the DB ok).
+            db_init = await initialise_postgres(
+                config.audit.postgres_url, attempts=config.audit.init_attempts
+            )
+            app.state.audit_db_init = db_init
         except ImportError:
             structlog.get_logger("neuralguard").warning(
                 "db_deps_missing",
                 msg="asyncpg/sqlalchemy not installed; JSONL fallback active",
-            )
-        except Exception as exc:
-            structlog.get_logger("neuralguard").error(
-                "db_init_failed", error=str(exc), msg="PostgreSQL init failed; JSONL fallback"
             )
 
     # ── Per-tenant registry hot-reload (Sprint C, C1) ──

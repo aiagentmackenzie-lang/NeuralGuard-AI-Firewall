@@ -9,6 +9,58 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
+## [Unreleased] — since v0.3.0 (2026-11-17)
+
+### Fixed — two deployment-path defects found by re-drilling the published image
+
+Neither was visible in any file in the repo; both needed a clean cluster and the
+artifact a stranger pulls. Full evidence: `deploy/kubernetes/README.md`
+(2026-11-17 drill).
+
+- **A late database disabled the durable audit path for the pod's lifetime.**
+  The Postgres schema was created once in the lifespan, in a `try/except` that
+  logged and gave up. When the app pods started before the `postgres` Service had
+  endpoints (`[Errno -2] Name or service not known`), the engine was never usable
+  for schema creation, so every later audit INSERT failed with
+  `relation "audit_events" does not exist` while the service kept accepting
+  traffic; only a `rollout restart` recovered it. Initialisation now retries with
+  backoff (`neuralguard.db.init.initialise_postgres`, 1/2/4/8/8 s, budget set by
+  the new `NEURALGUARD_AUDIT_INIT_ATTEMPTS`, default 6) and returns a result
+  instead of swallowing the failure. Contract: `tests/unit/test_audit_db_init.py`.
+- **`/v1/ready` called that broken audit store `ok`.** The probe was `SELECT 1`
+  (connectivity), so it answered `audit_db: "ok"` and aggregate `"healthy"` with
+  no `audit_events` table. It now checks the schema with
+  `to_regclass('audit_events')` and reports `fail` when a configured backend
+  cannot persist; the worker keeps serving (JSONL still records, the documented
+  fallback) but the aggregate status drops to `degraded`.
+
+### Changed — evidence hygiene
+
+- **Benchmark provenance is now stamped by the harness.** `a2_results.json`
+  carried models, iterations and configs but no timestamp and no corpus digest,
+  so the tracked artifact could not prove which corpus built it. `live_harness.py`
+  now writes `generated_at` (UTC), `source_commit` and a `corpus` block (path,
+  SHA-256 and record count, hashed from the corpus bytes at run time). The
+  historical file was back-stamped honestly: `generated_at`/`source_commit` are
+  `null` with a `provenance_unrecorded` sentence, and the corpus digests are
+  recorded because both corpora are unchanged since `676c10b` (2026-06-27).
+- **`.gitignore` no longer contradicts the tracked evidence.**
+  `benchmarks/ng_vs_ns/results/` was ignored wholesale while four files in it were
+  tracked, including the README-cited `a2_results.json`. The rule is now an
+  explicit ignore/enumerate split with `!` negations, and a test fails if any
+  tracked record is ignored (`git check-ignore --no-index`).
+- 1,484 tests / 12 skipped locally, coverage 91.18 % (floor 90), ruff + format +
+  mypy strict clean.
+
+### Known limits — unchanged by this entry
+
+- The **published v0.3.0 image does not contain these fixes**; they land in the
+  tree and are proven in-cluster against a locally built image. A v0.3.1 publish
+  is an owner decision.
+- Multi-replica runtime key rotation, prometheus-adapter metrics and ingress/TLS
+  remain undrilled; SSE streaming is still refused `422`; the HITL approval broker
+  is still per-worker and in memory.
+
 ## [0.3.0] — 2026-11-16
 
 ### Added — the published, signed image

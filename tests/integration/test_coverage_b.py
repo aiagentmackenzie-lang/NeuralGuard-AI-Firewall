@@ -165,6 +165,7 @@ class TestMainLifespanBranches:
             audit=AuditSettings(
                 backend="postgres",
                 postgres_url="postgresql+asyncpg://u:p@localhost:5432/db",
+                init_attempts=1,  # wiring test: no backoff on a database that is not there
             ),
         )
         app = create_app(config)

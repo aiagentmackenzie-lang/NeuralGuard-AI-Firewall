@@ -1,4 +1,19 @@
 {
+  "generated_at": null,
+  "source_commit": null,
+  "corpus": {
+    "attack": {
+      "file": "benchmarks/ng_vs_ns/attack_corpus.jsonl",
+      "sha256": "64c6e6c75b5922c845192ee7ff6d31e677bc58f4cd97f5256cb20db0b6d68b50",
+      "records": 27
+    },
+    "benign": {
+      "file": "benchmarks/ng_vs_ns/benign_corpus.jsonl",
+      "sha256": "9ea5896337a8376de6ab8990cc8ba5f3df731d0b1df981bc2eca399bd94cef3d",
+      "records": 45
+    }
+  },
+  "provenance_unrecorded": "The run that produced this file predates provenance stamping (added 2026-11-17), so the wall-clock time and the source commit were never recorded and are deliberately not inferred. What IS derivable: both corpus files are identical to commit 676c10b (2026-06-27), which is earlier than this run (file written 2026-09-05), so the digests above describe the corpora this run loaded unless the working tree was edited without committing, which cannot be ruled out. The run itself is identified in A2_RESULTS.md as the post-augmentation qwen3.8:27b run.",
   "attacker_model": "qwen3.8:27b",
   "judge_model": "qwen3.8:27b",
   "judge_resolves_escalate": false,
