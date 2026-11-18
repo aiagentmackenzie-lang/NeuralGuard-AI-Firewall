@@ -591,6 +591,23 @@ async def info(
             # NG-1 posture: whether thinking-token output scanning is on.
             "output_reasoning_scan": config.proxy.output_reasoning_scan,
         }
+    # P2-4: the live credential set, per pod. Rotation is per process (a
+    # runtime rotation reaches one worker; env/redeploy reaches all), so the
+    # only honest answer to "has the old key been revoked everywhere?" is to ask
+    # each pod which set it serves. The fingerprint covers digests + bindings,
+    # never key material.
+    auth_state = getattr(request.app.state, "auth_state", None)
+    key_set_id = auth_state.key_set_id if auth_state is not None else None
+    key_count = auth_state.key_count if auth_state is not None else 0
+    auth_info = {
+        "enabled": config.auth.enabled,
+        "key_count": key_count,
+        "key_set_id": key_set_id,
+        # A runtime rotation that evaporates on restart is refused in
+        # production; this says whether THIS pod would survive one.
+        "runtime_rotation_durable": config.auth.keys_file is not None,
+        "jwt_enabled": config.auth.jwt_enabled,
+    }
     judge_egress: str | None = None
     if config.scanner.judge_enabled:
         judge_egress = (
@@ -624,6 +641,7 @@ async def info(
             "corpus_assisted_only": [],
         },
         "api_version": "v1",
+        "auth": auth_info,
         "judge_egress": judge_egress,
         "proxy": proxy_info,
         # NG-6: published guarded-FPR SLO + the boot measurement against it.

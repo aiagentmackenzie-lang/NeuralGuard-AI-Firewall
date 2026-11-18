@@ -13,9 +13,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["auth"])
 
@@ -137,9 +140,30 @@ async def rotate_key(rotate_request: RotateRequest, request: Request) -> Any:
         from neuralguard.auth.jwtauth import RuntimeKeyStore
 
         new_key = RuntimeKeyStore.generate_key()
-    mw.add_key(new_key, rotate_request.tenant)
+    # Durable first, live second (drill-found 2026-11-17): the other order let a
+    # failed file write leave this process accepting a key that was persisted
+    # nowhere, while the caller was told the rotation failed.
     if key_store is not None:
-        key_store.add(new_key, rotate_request.tenant)
+        try:
+            key_store.add(new_key, rotate_request.tenant)
+        except OSError as exc:
+            logger.error(
+                "key_store_write_failed",
+                path=str(getattr(key_store, "path", "")),
+                error=str(exc),
+            )
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "key_store_write_failed",
+                    "message": (
+                        "the rotation was NOT applied: the keys file could not be "
+                        "written, so the new key would exist only in this process "
+                        "and vanish on restart"
+                    ),
+                },
+            )
+    mw.add_key(new_key, rotate_request.tenant)
 
     revoked = False
     caller_header = request.headers.get("Authorization", "")

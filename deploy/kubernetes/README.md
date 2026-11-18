@@ -35,10 +35,13 @@ Raw manifests (+ kustomize). **Validation status, honestly:**
   Evidence in [that drill](#two-pod-hitl-drill--2026-11-17). It also produced
   the per-pod posture (`/v1/info` → `mcp_gateway.hitl`) and turned an
   unlabelled 500 on a store outage into a named, audited `503`.
+- ✅ **Rotation drilled 2026-11-17** — two pods behind a Service: additive,
+  rolling revocation (revoked key valid **21 s**, ~23 % of probes), `Recreate`
+  revocation (**0 s** window, ~7 s outage), the `409 not_persisted` refusal, and
+  a durable shared keys file that reaches **one pod** (reload is at boot).
+  [`docs/runbooks/secret_rotation.md`](../../docs/runbooks/secret_rotation.md).
 - ⚠️ **Not drilled:** prometheus-adapter custom-metric scaling (template in
-  `hpa.yaml` stays commented), ingress/TLS (out of scope on purpose), and
-  multi-replica runtime key rotation (production refuses it; env/redeploy is
-  the documented path).
+  `hpa.yaml` stays commented) and ingress/TLS (out of scope on purpose).
 
 ## Deploy
 

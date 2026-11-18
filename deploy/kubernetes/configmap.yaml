@@ -25,10 +25,13 @@ data:
   # drill-found); the route docstring documents this exact opt-in. /v1/info
   # and /v1/metrics stay auth-gated.
   NEURALGUARD_AUTH_PUBLIC_ENDPOINTS: '["/v1/health","/v1/ready"]'
-  # Runtime key rotation: NOT enabled here on purpose — multi-replica
-  # rotation needs a shared durable keys file (RWX volume). Env/redeploy is
-  # the documented multi-worker rotation path (P2-4); the rotate endpoint
-  # refuses runtime-only rotation in production.
+  # Runtime key rotation: NOT enabled here on purpose. A shared durable keys
+  # file (RWX volume) makes a rotation SURVIVE a restart — it does NOT
+  # propagate it: the file is reloaded at boot, so a rotation on one pod stays
+  # on that pod (drilled 2026-11-17, docs/runbooks/secret_rotation.md).
+  # Env/redeploy is the multi-replica path (P2-4) and the rotate endpoint
+  # refuses runtime-only rotation in production. Verify per pod with
+  # /v1/info → auth.key_set_id; pods that disagree are the revoked-key window.
   # ── Detection layers ──
   # Structural + Pattern are mandatory. Semantic requires the ONNX model:
   # bake models/ into a custom image or mount a PV at /app/models and set
