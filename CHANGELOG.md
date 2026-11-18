@@ -9,7 +9,7 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
-## [Unreleased]
+## [0.3.2] — 2026-11-17
 
 ### Added — the HITL store posture is readable per pod (NG-15)
 
