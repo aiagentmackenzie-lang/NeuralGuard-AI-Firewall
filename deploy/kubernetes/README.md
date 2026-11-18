@@ -40,6 +40,15 @@ Raw manifests (+ kustomize). **Validation status, honestly:**
   revocation (**0 s** window, ~7 s outage), the `409 not_persisted` refusal, and
   a durable shared keys file that reaches **one pod** (reload is at boot).
   [`docs/runbooks/secret_rotation.md`](../../docs/runbooks/secret_rotation.md).
+- ✅ **v0.3.2 digest pulled and drilled 2026-11-17** — the node pulled
+  `ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:bef1681b8f94…` from GHCR
+  (9.088 s, 207 MB, no `kind load`): `/v1/health` reports `0.3.2`, and the new
+  posture fields are **inside the artifact** — `/v1/info` → `auth`
+  (`key_set_id` identical on both pods) and `mcp_gateway.hitl`
+  (`store: memory`, `shared_across_workers: false` on a 2-pod deployment, i.e.
+  the field naming the misconfiguration v0.3.1 could not) — plus the runtime
+  rotation refusal `409 not_persisted` from the published image. The manifest now
+  pins this digest.
 - ⚠️ **Not drilled:** prometheus-adapter custom-metric scaling (template in
   `hpa.yaml` stays commented) and ingress/TLS (out of scope on purpose).
 
