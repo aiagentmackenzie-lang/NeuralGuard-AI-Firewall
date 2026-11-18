@@ -27,6 +27,7 @@ Honest scope (no vapor):
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import secrets
@@ -89,6 +90,34 @@ class AuthRuntimeState:
 
     def revoke_key(self, key: str) -> bool:
         return self._key_map.pop(key, None) is not None
+
+    @property
+    def key_count(self) -> int:
+        """How many credentials this process will accept right now."""
+        return len(self._key_map)
+
+    @property
+    def key_set_id(self) -> str | None:
+        """Order-insensitive 12-hex fingerprint of the **live** key set.
+
+        Exists because rotation is per process: after a Secret change (or a
+        runtime rotation) an operator can ask any pod which key set it is
+        actually serving, and two pods that disagree are the revocation window
+        made visible. ``None`` when no keys are configured.
+
+        Built from ``sha256(key)`` plus each key's tenant and workload-agent
+        binding, sorted — never from key material, so the value cannot be
+        reversed, and confirming a candidate key from it requires already
+        holding that key. The tenant and agent are part of the identity: a key
+        rebound to another tenant is a different posture, not the same set.
+        """
+        if not self._key_map:
+            return None
+        material = sorted(
+            f"{hashlib.sha256(key.encode()).hexdigest()}:{principal.tenant}:{principal.agent or ''}"
+            for key, principal in self._key_map.items()
+        )
+        return hashlib.sha256("\n".join(material).encode()).hexdigest()[:12]
 
 
 class JwtManager:
@@ -186,21 +215,31 @@ class RuntimeKeyStore:
         return dict(self._keys)
 
     def add(self, key: str, tenant: str, rotated_from: str | None = None) -> None:
-        self._keys[key] = tenant.lower()
-        self._persist(rotated_from=rotated_from)
+        """Persist first, then apply — a failed write must not be a live key.
+
+        The drill-found defect this ordering closes: ``add`` used to mutate the
+        live map and *then* write, so an unwritable keys file raised after the
+        key was already accepted by this process. The caller got a 500, the pod
+        accepted a credential that existed in no file anywhere, and a restart
+        would have silently dropped it. Persist-then-apply makes the 500 true.
+        """
+        updated = {**self._keys, key: tenant.lower()}
+        self._persist(updated, rotated_from=rotated_from)
+        self._keys = updated
 
     def remove(self, key: str) -> bool:
         if key not in self._keys:
             return False
-        del self._keys[key]
-        self._persist()
+        updated = {k: t for k, t in self._keys.items() if k != key}
+        self._persist(updated)
+        self._keys = updated
         return True
 
     @staticmethod
     def generate_key() -> str:
         return f"ng_{secrets.token_urlsafe(32)}"
 
-    def _persist(self, rotated_from: str | None = None) -> None:
+    def _persist(self, keys: dict[str, str], rotated_from: str | None = None) -> None:
         payload = {
             "keys": [
                 {
@@ -208,7 +247,7 @@ class RuntimeKeyStore:
                     "tenant": t,
                     "rotated_from": rotated_from,
                 }
-                for k, t in self._keys.items()
+                for k, t in keys.items()
             ]
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -59,6 +59,58 @@ it without the optional `redis` extra (re-exported from `hitl_redis`).
 [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) §"Two-pod HITL
 drill" and [`docs/runbooks/mcp_gateway.md`](docs/runbooks/mcp_gateway.md).
 
+### Added — the live API-key set is readable per pod (P2-4)
+
+Rotating a static key in a multi-replica deployment is documented as
+"env/redeploy", and the reason is that the runtime rotation API is per process.
+Neither was observable from outside: after a Secret change you could watch pods
+roll but could not ask a pod **which key set it is serving**, so "has the old key
+been revoked everywhere?" was answered by waiting and hoping.
+
+`GET /v1/info` → `auth` now reports, per pod:
+
+- `key_count` and `key_set_id` — a 12-hex fingerprint over the **live** set
+  (env keys merged with the durable runtime store), built from `sha256(key)` plus
+  each key's tenant and workload-agent binding, sorted, so it is order-insensitive
+  and never contains key material;
+- `runtime_rotation_durable` — whether a runtime rotation would survive a restart;
+- `jwt_enabled`, `enabled`.
+
+Two pods reporting the same `key_set_id` serve the same credentials; differing
+ids are the list of pods still accepting a credential you believe you revoked.
+12 contracts (order-insensitivity, rebinding, add/remove, leak guards, live-set
+behaviour, and the empty set reported as `null` rather than a fake id).
+
+### Fixed — a failed durable rotation was applied anyway (P2-4)
+
+Found in the rotation drill. With a keys-file volume the container user could not
+write, `POST /v1/auth/keys/rotate` answered `500 internal_error` — and the key was
+**live on that pod only**, persisted nowhere, and lost on restart: a split-brain
+credential reported as a failure.
+
+`RuntimeKeyStore.add`/`remove` now **persist first, then apply**, so an
+unwritable store leaves the live set untouched, and the route answers
+`500 {"error": "key_store_write_failed"}` — a 500 that is true. 5 contracts, red
+first.
+
+### Drilled — rotation windows with two replicas (P2-4)
+
+Measured against two pods behind a Service, sampled ~2×/second from a separate
+pod (client-visible), posture read per pod:
+
+| Operation | Revoked/new key window | Availability cost |
+|---|---|---|
+| Additive (old + new) | new key usable **+12 s**, fully at **+22 s** | none |
+| Removal, rolling | revoked key still valid **21 s** (~23 % of probes succeeded) | none |
+| Removal, `Recreate` | revoked key valid **0 s** | **~7 s outage** |
+| Runtime API, durable **shared** key store | reaches **one pod**; the other refuses it while *able to read the file* | none |
+
+Conclusion, stated plainly: **runtime rotation is per process by construction**,
+a shared keys file buys durability but not propagation (the reload happens at
+boot), and revocation under a rolling update is bounded by the rollout — so a
+compromised key wants `Recreate`, and a scheduled rotation wants two phases.
+Evidence and commands: [`docs/runbooks/secret_rotation.md`](docs/runbooks/secret_rotation.md).
+
 ### Known limit, unchanged
 
 A store that fails **during** a wait is still reported as

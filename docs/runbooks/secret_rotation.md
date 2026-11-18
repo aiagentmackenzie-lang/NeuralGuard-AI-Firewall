@@ -85,6 +85,119 @@ key and restart immediately. In-flight clients using the old key get 401s
 until they rotate — that is the intended fail-closed behavior for a
 compromised credential.
 
+**But a rolling restart is not immediate revocation.** Measured with two
+replicas: the revoked key remained valid for **21 s** (~23 % of sampled requests
+still succeeded) because the Service kept routing to pods that had not rolled
+yet. With `strategy: Recreate` the revoked key was valid for **0 s** at the cost
+of **~7 s** of total unavailability. Choose deliberately — see "Drilled" below.
+
+## Drilled: what the rotation windows actually are (two replicas, 2026-11-17)
+
+The env/redeploy path above was recommended but never measured under two
+replicas. It is now measured — kind v0.33.0, 2 `neuralguard` pods behind a
+Service, a sampler in a separate pod probing the Service ~2×/second (so every
+number below is **client-visible**, not pod-internal), and the per-pod posture
+(`GET /v1/info` → `auth.key_count` / `auth.key_set_id`) read on each pod.
+
+Environment: `environment=production`, `RollingUpdate` (maxSurge 1 /
+maxUnavailable 0) unless stated, image already on the node, rate limit raised
+for the drill only (the 120/min default refuses a probe loop — left at 120 the
+drill measures the rate limiter instead).
+
+### Phase 1 — additive (old + new + admin in the Secret)
+
+| Measure | Result |
+|---|---|
+| New key first accepted | **+12 s** after the Secret change |
+| New key last refused | **+22 s** (= rollout complete) |
+| Client impact for the new credential | ~10 s window, 38 of 189 probes refused |
+| Old key | never refused — additive rotation is safe for the *old* credential only |
+
+Half of an additive rotation is deployed for as long as the rollout takes: a
+client handed the new key immediately gets 401s from the pods that have not
+rolled yet. Tell the client to retry, or hand over the key after the rollout.
+
+### Phase 2 — removal (revocation), rolling
+
+| Measure | Result |
+|---|---|
+| Revoked key first refused | **+12 s** after the Secret change |
+| Revoked key **last accepted** | **+21 s** after the Secret change |
+| Requests with the revoked key that still succeeded | **45 of 195 probes (~23 %)** |
+| Rollout complete | +23 s |
+
+**Revocation is not atomic.** Until the last old pod is gone, the Service keeps
+routing to it and the revoked credential keeps working. On this cluster that was
+21 s; a production rollout with image pulls and slower probes is longer.
+
+### Phase 2b — the same revocation with `strategy: Recreate`
+
+| Measure | Result |
+|---|---|
+| Revoked key last accepted | **+0 s** (the apply second) |
+| Total unavailability | **~7 s** (4 consecutive connection failures) |
+| First 401 from a new pod | +10 s |
+
+So the incident choice is explicit: **rolling = 21 s of valid revoked key and no
+outage; Recreate = 0 s of revoked key and ~7 s of outage.** For a compromised
+credential prefer `Recreate` (or scale the old ReplicaSet to zero) and accept the
+gap; for a scheduled rotation use rolling and two phases.
+
+### Phase 3 — the runtime API's refusal, measured
+
+With the auth routes mounted (`jwt_enabled=true`) and **no** keys file, in
+production: supplied key → `409 not_persisted`; generated key →
+`409 not_persisted`; `/v1/info` reports `runtime_rotation_durable: false`. The
+runbook's claim is honest, and the posture tells an operator which mode a pod is
+in *before* they try.
+
+### Phase 4 — a durable SHARED key store does NOT make rotation fleet-wide
+
+`NEURALGUARD_AUTH_KEYS_FILE` on a shared volume (RWX stand-in on a single-node
+cluster), same two pods:
+
+| Step | Pod A | Pod B |
+|---|---|---|
+| Before | `key_count 2`, `key_set_id 42a406a95c5d` | identical |
+| `POST /v1/auth/keys/rotate` **on A** | `200 persisted:true`, count **3**, id `c3e4a2722f6e`, new key **accepted** | count **2**, id unchanged, new key **refused (401)** — while B can read the same file |
+| After a rolling restart | count 3, id `c3e4a2722f6e`, new key accepted | identical |
+
+The store is durable; the **reload happens at boot** (or on that pod's own
+rotation call). A shared file therefore buys durability, not propagation — and
+`file + restart` is equivalent to `env + restart` in effect. **Runtime rotation
+is per process by construction in this build**, which is exactly why the
+documented multi-replica path is env/redeploy.
+
+### Defect this drill found (fixed): a failed write left the key live
+
+With a keys volume the container user could not write, `POST /v1/auth/keys/rotate`
+answered **`500 internal_error`** — and the new key was **live on that pod only**
+(`key_count` 2 → 3, a new `key_set_id`), persisted nowhere, lost on restart. A
+split-brain credential reported as a failure, which is the one outcome a
+fail-closed control must never produce.
+
+Fixed in this tree: `RuntimeKeyStore.add`/`remove` **persist first, then apply**
+(an unwritable store leaves the live set untouched), and the route answers
+`500 {"error": "key_store_write_failed"}` — a 500 that is *true*, because the
+rotation did not happen. Contracts in `tests/unit/test_rotation_persist_failure.py`
+written and run red first.
+
+### Checking the posture after any rotation
+
+```bash
+for pod in $(kubectl get pods -n neuralguard -l app.kubernetes.io/name=neuralguard \
+             -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}'); do
+  kubectl exec -n neuralguard "$pod" -- \
+    curl -s -H "Authorization: Bearer $ADMIN_KEY" localhost:8000/v1/info \
+    | tr ',' '\n' | grep -E 'key_count|key_set_id' | tr '\n' ' '; echo " <- $pod"
+done
+```
+
+Every pod must report the same `key_set_id`. Differing ids are not a cosmetic
+detail: they are the list of pods still accepting the credential you think you
+revoked. The fingerprint is built from `sha256(key)` plus tenant/agent bindings
+and never contains key material.
+
 ## Runtime rotation API (P2-4)
 
 Static env + restart is not the only path anymore. When the auth routes are
@@ -98,9 +211,11 @@ set):
   write, reloaded by every worker at boot).
 - Runtime-only rotation (no keys file) is REFUSED in production — a rotation
   that evaporates on restart is a footgun, not a feature.
-- Multi-worker note: a rotated key is visible per-process until each worker
-  rotates/reloads; for fleet-wide rotation use the env/redeploy path above
-  (the runbook position: the endpoint is for single-appliance operation).
+- Multi-worker note (measured 2026-11-17, see "Drilled" above): a rotated key
+  is visible **per process** until each worker rotates or reloads, and a durable
+  *shared* keys file does not change that — the reload happens at boot. For
+  fleet-wide rotation use the env/redeploy path above; the endpoint is for
+  single-appliance operation.
 - `POST /v1/auth/token` exchanges a valid credential for a short-lived JWT
   bound to the caller's tenant — the static key can then stay in the
   deployment config only.

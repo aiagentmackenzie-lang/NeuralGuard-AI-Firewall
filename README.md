@@ -720,6 +720,14 @@ Known open items (tracked in the
   `GET /v1/info` → `mcp_gateway.hitl.shared_across_workers` + `store_id`.
   What remains unenforced is the choice itself; what no longer remains is the
   silence.
+- **Key rotation is per pod, and revocation is bounded by the rollout.** The
+  runtime rotation API is single-process by construction (a durable *shared*
+  keys file does not change that — the reload happens at boot, measured), so
+  multi-replica rotation is env/redeploy. Drilled 2026-11-17 on two pods: a
+  revoked key stayed valid for **21 s** under a rolling update (~23 % of sampled
+  requests still succeeded) versus **0 s** under `Recreate` at the cost of ~7 s
+  of outage. `/v1/info` → `auth.key_set_id` makes each pod's live key set
+  checkable, which is what turns the window from invisible into bounded.
 - **Streaming** — SSE streaming is refused fail-closed (422) by design; hold-back streaming is future work
 - **JWT residuals** — RS256/OIDC discovery, refresh tokens, Vault/SOPS integration
 - **i18n native-speaker review** — the rule packs had machine self-audit; human native-speaker sign-off is the one human-gated item
