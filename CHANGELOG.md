@@ -9,6 +9,28 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
+## [Unreleased]
+
+### Added — the README's test count is finally a measurement (docs)
+
+`tests/unit/test_docs_consistency.py` compared the README against
+`docs/FPR_SLO.md` (corpus size) and against the loaded rule packs (rule count).
+It did not compare the headline test count against anything — which is why that
+number sat **47 tests stale** on `main` (1,518 claimed, 1,565 collected) after
+two releases that added contracts. The same class of drift the file exists to
+catch, in the one slot with no guard.
+
+`TestTestCountClaim` now reads the claimed count from the README and compares it
+to what pytest collects, delegated to a `--collect-only` subprocess so the
+number comes from the runner rather than from arithmetic in the test.
+
+### Fixed — the stale README headline
+
+The "Current state" line now reads `1,566 tests collected (1,554 passed / 12
+skipped locally), 91.16 % measured coverage` — measured, not carried forward.
+Deliberately unchanged: no production behaviour, no version bump. A docs-and-
+guard change does not earn a release.
+
 ## [0.3.2] — 2026-11-17
 
 ### Added — the HITL store posture is readable per pod (NG-15)
