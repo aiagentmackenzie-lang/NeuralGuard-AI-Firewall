@@ -13,6 +13,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# Real-corpus tests load a 6,503 x 768 matrix; keep them off the 30 s default.
+pytestmark = pytest.mark.timeout(600)
+
 from neuralguard.config.settings import ScannerSettings
 
 # ── Fixtures ────────────────────────────────────────────────────────────────

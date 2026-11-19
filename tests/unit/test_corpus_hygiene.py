@@ -13,6 +13,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# The corpus gate embeds 45 probes against 6,503 vectors with the 768-dim model; the project-wide 30 s default was set for the smaller model.
+pytestmark = pytest.mark.timeout(600)
+
 from neuralguard.config.settings import ScannerSettings
 from neuralguard.semantic.hygiene import (
     benign_blocking_mask,
