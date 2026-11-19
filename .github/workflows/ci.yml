@@ -77,11 +77,14 @@ jobs:
   coverage:
     name: Coverage gate (90%, full semantic layer)
     runs-on: ubuntu-latest
-    # 30 → 60 on 2026-11-19: the multilingual model (768-dim) takes the corpus
-    # rebuild from ~4 min to ~25 min on a 2-core runner. The model + vectors are
-    # cached below so a normal PR does not pay it; the ceiling only has to hold
-    # for the runs that do (a model or corpus change).
-    timeout-minutes: 60
+    # 30 → 90 on 2026-11-19. The multilingual model (768-dim) takes the corpus
+    # rebuild from ~4 min to ~25 min on a 2-core runner, and the first run on a
+    # NEW cache scope (main's own cache did not exist yet) paid export + rebuild
+    # + suite in one job and was cancelled at 60. Cold-path cost is now measured
+    # rather than guessed: the rebuild no longer re-embeds the survivors (a
+    # bit-identical 40 % saving, verified with np.array_equal), so the ceiling
+    # only has to cover a genuinely cold run.
+    timeout-minutes: 90
     needs: [test]
     services:
       # P2-10 close-out: the pg audit-verify live-fire tests run in CI too —

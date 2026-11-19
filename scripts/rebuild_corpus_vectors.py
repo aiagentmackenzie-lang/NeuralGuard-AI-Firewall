@@ -62,7 +62,7 @@ from typing import Any, Protocol
 
 from neuralguard.config.settings import ScannerSettings
 from neuralguard.semantic.hygiene import (
-    drop_benign_blocking_vectors,
+    benign_blocking_mask,
     drop_conversational_vectors,
     drop_vectors_blocking_probes,
     load_benign_guard_probes,
@@ -203,15 +203,15 @@ def rebuild(
     # 5. Benign guard over the paraphrase candidates (parents were guarded at
     #    build time; finalize() guarded new rows only).
     probe_embs = engine.embed_batch(benign_probe_texts).astype(np.float32)
-    kept, dropped_guard = drop_benign_blocking_vectors(
-        candidates, cand_embs, probe_embs, block_threshold
-    )
-    stats["paraphrases_benign_blocking_dropped"] = len(dropped_guard)
+    # Mask form: the surviving embeddings are a slice of the ones we already
+    # computed. Re-embedding them was a full extra pass over ~5k texts — ~40 %
+    # of the rebuild — for identical values.
+    keep_mask = benign_blocking_mask(cand_embs, probe_embs, block_threshold)
+    kept = [c for c, keep in zip(candidates, keep_mask, strict=True) if keep]
+    dropped_guard_count = int((~keep_mask).sum())
+    stats["paraphrases_benign_blocking_dropped"] = dropped_guard_count
 
-    kept_texts = [c["text"] for c in kept]
-    kept_embs = (
-        embed_chunked(kept_texts) if kept_texts else np.zeros((0, orig_embs.shape[1]), np.float32)
-    )
+    kept_embs = cand_embs[keep_mask].astype(np.float32)
 
     # 6. NG-6 hard-negative guard over BOTH vector sets: a vector that would
     #    BLOCK a benign look-alike (security work quoting an attack, training

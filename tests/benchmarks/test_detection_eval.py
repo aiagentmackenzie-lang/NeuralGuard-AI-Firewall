@@ -32,8 +32,12 @@ _TOLERANCE = 0.01  # rates are deterministic; the tolerance is for rounding only
 # 30 s per-test timeout was written for, and a timeout is not a detection result.
 pytestmark = pytest.mark.timeout(900)
 
+_MODEL_DIR = Path("models/embedding-onnx")
 requires_model = pytest.mark.skipif(
-    not (Path("models/attack_vectors.npy").exists() and Path("models/embedding-onnx").exists()),
+    not (
+        Path("models/attack_vectors.npy").exists()
+        and all((_MODEL_DIR / f).exists() for f in ("model.onnx", "tokenizer.json"))
+    ),
     reason="rebuilt corpus + ONNX model not present (CI order: rebuild first)",
 )
 
