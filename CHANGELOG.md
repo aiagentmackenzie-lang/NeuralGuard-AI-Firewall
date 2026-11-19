@@ -11,6 +11,43 @@ predates the research-frontier controls, the MCP gateway and the fleet campaign
 
 ## [Unreleased]
 
+### Added — the capability matrix, per layer and per language (P0, 2026-11-18)
+
+Every detection number this project published was English-only or aggregated
+across languages, which is how a detector that is 91 % accurate in English and
+blind in Vietnamese still prints one respectable figure.
+
+`benchmarks/detection_eval/` measures each layer in isolation (structural,
+pattern, semantic) and the deterministic core, per language, per attack family,
+and split everyday benign from NG-6 hard negatives. Two numbers for benign, not
+one: **fired** (not `allow` — the product cost, includes the judge) and
+**blocked** (BLOCK only — the definition the published SLO uses). Conflating
+them is how an honest SLO becomes a misleading headline.
+
+Corpora: 87 machine-authored multilingual attacks (10 languages × 4 families +
+7 agentic/obfuscation), 27 existing English attacks, 76 multilingual benign, the
+45 F12 benign and the 50 NG-6 hard negatives, 10 controls. Provenance is a field
+on every item; the README says plainly that machine-authored corpora are
+directional, not authority. Committed baseline + ratchet test so a layer's
+caught-rate cannot fall and its benign block-rate cannot rise unnoticed.
+
+What it found on the build that introduced it (`main` = `426dc52`):
+
+- **Core, per language:** EN 91 % caught / 22 % benign blocked; ZH and KO
+  **100 % caught and 100 % blocked** — a detector saying yes to everything, not
+  a score. PT is the weakest recall (**38 %**) despite being the only language
+  ever given a human-authored benign pass.
+- **Semantic layer:** reproduces the published SLO exactly (0/95 blocked,
+  6/95 escalated = 6.32 %) and is blind in PT/JA/VI/AR (0 % caught). For ZH its
+  signal is inverted: 88 % of attacks caught only by over-match, 100 % of benign
+  blocked.
+- **The published guarded FPR is a semantic-layer number.** The pattern layer
+  BLOCKs **15/95 (15.79 %)** on the same probes — the hard-negative class
+  (benign text *quoting* an attack) has no notion of quotation and was never in
+  the A1 gate, which scores 45 plain benign prompts. `docs/FPR_SLO.md` now says
+  this in its own section with the measured table; the README's A1 block says it
+  too. Measured work, not a wording fix.
+
 ### Added — the README's test count is finally a measurement (docs)
 
 `tests/unit/test_docs_consistency.py` compared the README against
