@@ -135,10 +135,13 @@ jobs:
           # Cost of that mistake, measured: three consecutive cold coverage runs
           # of 40-46 min where 10 would have done.
           key: ng-model-${{ hashFiles('corpus/attack_corpus_full.jsonl', 'corpus/augment_checkpoint.jsonl', 'corpus/benign_hard_negatives.jsonl', 'benchmarks/ng_vs_ns/benign_corpus.jsonl', 'scripts/export_onnx.py', 'scripts/rebuild_corpus_vectors.py', 'src/neuralguard/semantic/embedding.py', 'src/neuralguard/semantic/hygiene.py', 'src/neuralguard/config/settings.py', 'uv.lock') }}
-          # The .npy is tracked-out but rebuilt; the model is 1.1 GB. A single
-          # previous entry is enough — nothing reads the older vectors.
-          restore-keys: |
-            ng-model-
+          # NO restore-keys, deliberately. With a partial match the cache
+          # action restores the nearest entry and then SKIPS saving the new one —
+          # so main would restore a stale artifact, rebuild it, and never cache
+          # the result, paying the cold path on every run. It did exactly that
+          # three times (40-46 min each) before this was found. These artifacts
+          # are only valid for the exact key: a vector set built from a different
+          # model or corpus is not a near-miss, it is wrong.
 
       - name: Export ONNX embedding model (regenerates gitignored model artifacts)
         if: steps.model-cache.outputs.cache-hit != 'true'
