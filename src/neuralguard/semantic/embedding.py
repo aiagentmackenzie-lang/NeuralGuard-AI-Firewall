@@ -48,12 +48,18 @@ except ImportError:
 class EmbeddingEngine:
     """ONNX-based embedding engine for semantic detection.
 
-    Loads all-MiniLM-L6-v2 via ONNX Runtime and HuggingFace tokenizers.
-    Returns L2-normalized 384-dim vectors suitable for cosine similarity.
+    Loads a sentence-transformer exported to ONNX (default:
+    ``intfloat/multilingual-e5-base``) and returns L2-normalized vectors
+    suitable for cosine similarity.
+
+    The dimension is **discovered at load time** rather than hard-coded: the
+    engine previously baked in 384 for all-MiniLM-L6-v2, which made a model
+    swap a code change in three places and a silent mismatch everywhere else.
     """
 
-    # Expected output dimension for all-MiniLM-L6-v2
-    EMBEDDING_DIM = 384
+    # Dimension of the shipped default model. Kept only as a documented
+    # expectation; :attr:`embedding_dim` is the measured truth after load().
+    EMBEDDING_DIM = 768
 
     def __init__(self, settings: ScannerSettings) -> None:
         self.settings = settings
@@ -158,14 +164,19 @@ class EmbeddingEngine:
             raise RuntimeError("EmbeddingEngine not loaded. Call load() first.")
         return cast("np.ndarray", self.embed_batch([text])[0])
 
-    def embed_batch(self, texts: list[str]) -> np.ndarray:
+    def embed_batch(self, texts: list[str], *, role: str = "query") -> np.ndarray:
         """Compute L2-normalized embeddings for multiple texts.
 
         Args:
             texts: List of input texts to embed.
+            role: ``"query"`` for user prompts (default) or ``"passage"`` for
+                corpus texts. E5 models are trained with asymmetric
+                ``query: ``/``passage: `` prefixes; using the wrong one degrades
+                recall with no error raised, so the role is explicit rather than
+                inferred from the caller.
 
         Returns:
-            Normalized (len(texts), 384) numpy array (float32).
+            Normalized (len(texts), dim) numpy array (float32).
 
         Raises:
             RuntimeError: If model not loaded.
@@ -174,29 +185,37 @@ class EmbeddingEngine:
             raise RuntimeError("EmbeddingEngine not loaded. Call load() first.")
         assert self._tokenizer is not None and self._session is not None
 
+        prefix = (
+            self.settings.semantic_query_prefix
+            if role == "query"
+            else self.settings.semantic_passage_prefix
+        )
+        texts = [f"{prefix}{text}" for text in texts] if prefix else list(texts)
+
         # Tokenize
         encoded = self._tokenizer.encode_batch(texts)
         input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
         attention_mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)
-        token_type_ids = np.zeros_like(input_ids, dtype=np.int64)
+        # Feed only the inputs this graph declares. XLM-R-style encoders (the
+        # multilingual E5 family) have no token_type_ids at all and reject the
+        # extra tensor with INVALID_ARGUMENT; BERT-style ones require it. Asking
+        # the session is cheaper than a per-model branch list that rots.
+        available = {inp.name for inp in self._session.get_inputs()}
+        feed: dict[str, Any] = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if "token_type_ids" in available:
+            feed["token_type_ids"] = np.zeros_like(input_ids, dtype=np.int64)
 
         # ONNX inference
-        outputs = self._session.run(
-            None,
-            {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "token_type_ids": token_type_ids,
-            },
-        )
+        outputs = self._session.run(None, feed)
 
-        # all-MiniLM-L6-v2 output: (batch, seq_len, 384)
-        # Mean pooling over non-padded tokens
-        token_embeddings = outputs[0]  # (batch, seq_len, 384)
+        # (batch, seq_len, hidden) — mean pooling over non-padded tokens, which
+        # is the pooling these models were trained with (CLS pooling would be a
+        # silent quality regression, not a stylistic choice).
+        token_embeddings = outputs[0]
         mask_expanded = attention_mask[:, :, np.newaxis].astype(np.float32)
         sum_embeddings = np.sum(token_embeddings * mask_expanded, axis=1)
         sum_mask = np.clip(mask_expanded.sum(axis=1), a_min=1e-9, a_max=None)
-        mean_embeddings = sum_embeddings / sum_mask  # (batch, 384)
+        mean_embeddings = sum_embeddings / sum_mask
 
         # L2 normalize
         norms = np.linalg.norm(mean_embeddings, axis=1, keepdims=True)

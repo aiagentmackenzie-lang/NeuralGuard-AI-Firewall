@@ -480,92 +480,92 @@
     "semantic": {
       "attacks": {
         "total": 114,
-        "caught": 39,
-        "rate": 0.3421,
+        "caught": 68,
+        "rate": 0.5965,
         "by_language": {
           "AR": {
             "total": 8,
-            "caught": 0,
-            "rate": 0.0,
-            "blocked": 0,
-            "block_rate": 0.0
-          },
-          "DE": {
-            "total": 8,
-            "caught": 1,
-            "rate": 0.125,
-            "blocked": 0,
-            "block_rate": 0.0
-          },
-          "EN": {
-            "total": 34,
-            "caught": 17,
+            "caught": 4,
             "rate": 0.5,
-            "blocked": 6,
-            "block_rate": 0.1765
-          },
-          "ES": {
-            "total": 8,
-            "caught": 3,
-            "rate": 0.375,
             "blocked": 2,
             "block_rate": 0.25
           },
-          "FR": {
+          "DE": {
             "total": 8,
-            "caught": 2,
-            "rate": 0.25,
-            "blocked": 0,
-            "block_rate": 0.0
-          },
-          "JA": {
-            "total": 8,
-            "caught": 0,
-            "rate": 0.0,
-            "blocked": 0,
-            "block_rate": 0.0
-          },
-          "KO": {
-            "total": 8,
-            "caught": 7,
-            "rate": 0.875,
+            "caught": 8,
+            "rate": 1.0,
             "blocked": 6,
             "block_rate": 0.75
           },
+          "EN": {
+            "total": 34,
+            "caught": 16,
+            "rate": 0.4706,
+            "blocked": 7,
+            "block_rate": 0.2059
+          },
+          "ES": {
+            "total": 8,
+            "caught": 7,
+            "rate": 0.875,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "FR": {
+            "total": 8,
+            "caught": 6,
+            "rate": 0.75,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "JA": {
+            "total": 8,
+            "caught": 3,
+            "rate": 0.375,
+            "blocked": 1,
+            "block_rate": 0.125
+          },
+          "KO": {
+            "total": 8,
+            "caught": 3,
+            "rate": 0.375,
+            "blocked": 1,
+            "block_rate": 0.125
+          },
           "PT": {
             "total": 8,
-            "caught": 0,
-            "rate": 0.0,
-            "blocked": 0,
-            "block_rate": 0.0
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 1,
+            "block_rate": 0.125
           },
           "RU": {
             "total": 8,
-            "caught": 2,
-            "rate": 0.25,
+            "caught": 4,
+            "rate": 0.5,
             "blocked": 0,
             "block_rate": 0.0
           },
           "VI": {
             "total": 8,
-            "caught": 0,
-            "rate": 0.0,
-            "blocked": 0,
-            "block_rate": 0.0
+            "caught": 5,
+            "rate": 0.625,
+            "blocked": 1,
+            "block_rate": 0.125
           },
           "ZH": {
             "total": 8,
-            "caught": 7,
-            "rate": 0.875,
-            "blocked": 1,
-            "block_rate": 0.125
+            "caught": 8,
+            "rate": 1.0,
+            "blocked": 5,
+            "block_rate": 0.625
           }
         },
         "by_family": {
           "CR": {
             "total": 20,
-            "caught": 4,
-            "rate": 0.2
+            "caught": 10,
+            "rate": 0.5
           },
           "EXF": {
             "total": 5,
@@ -574,13 +574,13 @@
           },
           "EXT": {
             "total": 23,
-            "caught": 8,
-            "rate": 0.3478
+            "caught": 17,
+            "rate": 0.7391
           },
           "JB": {
             "total": 27,
-            "caught": 6,
-            "rate": 0.2222
+            "caught": 10,
+            "rate": 0.3704
           },
           "MEM": {
             "total": 2,
@@ -594,8 +594,8 @@
           },
           "PI-D": {
             "total": 26,
-            "caught": 15,
-            "rate": 0.5769
+            "caught": 26,
+            "rate": 1.0
           },
           "PI-I": {
             "total": 3,
@@ -604,17 +604,17 @@
           },
           "TOOL": {
             "total": 5,
-            "caught": 1,
-            "rate": 0.2
+            "caught": 0,
+            "rate": 0.0
           }
         }
       },
       "benign": {
         "total": 171,
-        "fired": 23,
-        "rate": 0.1345,
-        "blocked": 3,
-        "block_rate": 0.0175,
+        "fired": 17,
+        "rate": 0.0994,
+        "blocked": 2,
+        "block_rate": 0.0117,
         "by_language": {
           "AR": {
             "total": 7,
@@ -639,36 +639,36 @@
           },
           "ES": {
             "total": 8,
-            "fired": 4,
-            "rate": 0.5,
+            "fired": 2,
+            "rate": 0.25,
             "blocked": 0,
             "block_rate": 0.0
           },
           "FR": {
             "total": 8,
-            "fired": 0,
-            "rate": 0.0,
+            "fired": 1,
+            "rate": 0.125,
             "blocked": 0,
             "block_rate": 0.0
           },
           "JA": {
             "total": 7,
-            "fired": 0,
-            "rate": 0.0,
+            "fired": 1,
+            "rate": 0.1429,
             "blocked": 0,
             "block_rate": 0.0
           },
           "KO": {
             "total": 7,
-            "fired": 5,
-            "rate": 0.7143,
-            "blocked": 3,
-            "block_rate": 0.4286
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
           },
           "PT": {
             "total": 8,
-            "fired": 0,
-            "rate": 0.0,
+            "fired": 1,
+            "rate": 0.125,
             "blocked": 0,
             "block_rate": 0.0
           },
@@ -681,31 +681,31 @@
           },
           "VI": {
             "total": 7,
-            "fired": 0,
-            "rate": 0.0,
+            "fired": 2,
+            "rate": 0.2857,
             "blocked": 0,
             "block_rate": 0.0
           },
           "ZH": {
             "total": 8,
-            "fired": 8,
-            "rate": 1.0,
-            "blocked": 0,
-            "block_rate": 0.0
+            "fired": 4,
+            "rate": 0.5,
+            "blocked": 2,
+            "block_rate": 0.25
           }
         },
         "by_kind": {
           "everyday": {
             "total": 121,
-            "fired": 19,
-            "rate": 0.157,
-            "blocked": 3,
-            "block_rate": 0.0248
+            "fired": 12,
+            "rate": 0.0992,
+            "blocked": 2,
+            "block_rate": 0.0165
           },
           "hard_negative": {
             "total": 50,
-            "fired": 4,
-            "rate": 0.08,
+            "fired": 5,
+            "rate": 0.1,
             "blocked": 0,
             "block_rate": 0.0
           }
@@ -715,22 +715,22 @@
     "core": {
       "attacks": {
         "total": 114,
-        "caught": 83,
-        "rate": 0.7281,
+        "caught": 97,
+        "rate": 0.8509,
         "by_language": {
           "AR": {
             "total": 8,
-            "caught": 4,
-            "rate": 0.5,
-            "blocked": 4,
-            "block_rate": 0.5
+            "caught": 6,
+            "rate": 0.75,
+            "blocked": 5,
+            "block_rate": 0.625
           },
           "DE": {
             "total": 8,
-            "caught": 4,
-            "rate": 0.5,
-            "blocked": 4,
-            "block_rate": 0.5
+            "caught": 8,
+            "rate": 1.0,
+            "blocked": 8,
+            "block_rate": 1.0
           },
           "EN": {
             "total": 34,
@@ -741,66 +741,66 @@
           },
           "ES": {
             "total": 8,
-            "caught": 6,
-            "rate": 0.75,
-            "blocked": 5,
-            "block_rate": 0.625
+            "caught": 8,
+            "rate": 1.0,
+            "blocked": 6,
+            "block_rate": 0.75
           },
           "FR": {
             "total": 8,
-            "caught": 6,
-            "rate": 0.75,
-            "blocked": 4,
-            "block_rate": 0.5
+            "caught": 7,
+            "rate": 0.875,
+            "blocked": 5,
+            "block_rate": 0.625
           },
           "JA": {
             "total": 8,
-            "caught": 5,
-            "rate": 0.625,
+            "caught": 6,
+            "rate": 0.75,
             "blocked": 4,
             "block_rate": 0.5
           },
           "KO": {
             "total": 8,
-            "caught": 8,
-            "rate": 1.0,
-            "blocked": 7,
-            "block_rate": 0.875
+            "caught": 5,
+            "rate": 0.625,
+            "blocked": 3,
+            "block_rate": 0.375
           },
           "PT": {
             "total": 8,
-            "caught": 3,
-            "rate": 0.375,
+            "caught": 6,
+            "rate": 0.75,
             "blocked": 3,
             "block_rate": 0.375
           },
           "RU": {
             "total": 8,
-            "caught": 4,
-            "rate": 0.5,
+            "caught": 5,
+            "rate": 0.625,
             "blocked": 3,
             "block_rate": 0.375
           },
           "VI": {
             "total": 8,
-            "caught": 4,
-            "rate": 0.5,
-            "blocked": 3,
-            "block_rate": 0.375
+            "caught": 7,
+            "rate": 0.875,
+            "blocked": 4,
+            "block_rate": 0.5
           },
           "ZH": {
             "total": 8,
             "caught": 8,
             "rate": 1.0,
-            "blocked": 4,
-            "block_rate": 0.5
+            "blocked": 5,
+            "block_rate": 0.625
           }
         },
         "by_family": {
           "CR": {
             "total": 20,
-            "caught": 9,
-            "rate": 0.45
+            "caught": 12,
+            "rate": 0.6
           },
           "EXF": {
             "total": 5,
@@ -809,8 +809,8 @@
           },
           "EXT": {
             "total": 23,
-            "caught": 11,
-            "rate": 0.4783
+            "caught": 18,
+            "rate": 0.7826
           },
           "JB": {
             "total": 27,
@@ -829,8 +829,8 @@
           },
           "PI-D": {
             "total": 26,
-            "caught": 22,
-            "rate": 0.8462
+            "caught": 26,
+            "rate": 1.0
           },
           "PI-I": {
             "total": 3,
@@ -846,8 +846,8 @@
       },
       "benign": {
         "total": 171,
-        "fired": 70,
-        "rate": 0.4094,
+        "fired": 63,
+        "rate": 0.3684,
         "blocked": 49,
         "block_rate": 0.2865,
         "by_language": {
@@ -867,15 +867,15 @@
           },
           "EN": {
             "total": 95,
-            "fired": 21,
-            "rate": 0.2211,
+            "fired": 20,
+            "rate": 0.2105,
             "blocked": 15,
             "block_rate": 0.1579
           },
           "ES": {
             "total": 8,
-            "fired": 6,
-            "rate": 0.75,
+            "fired": 5,
+            "rate": 0.625,
             "blocked": 4,
             "block_rate": 0.5
           },
@@ -895,15 +895,15 @@
           },
           "KO": {
             "total": 7,
-            "fired": 7,
-            "rate": 1.0,
-            "blocked": 5,
-            "block_rate": 0.7143
+            "fired": 4,
+            "rate": 0.5714,
+            "blocked": 3,
+            "block_rate": 0.4286
           },
           "PT": {
             "total": 8,
-            "fired": 0,
-            "rate": 0.0,
+            "fired": 1,
+            "rate": 0.125,
             "blocked": 0,
             "block_rate": 0.0
           },
@@ -923,17 +923,17 @@
           },
           "ZH": {
             "total": 8,
-            "fired": 8,
-            "rate": 1.0,
-            "blocked": 2,
-            "block_rate": 0.25
+            "fired": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
           }
         },
         "by_kind": {
           "everyday": {
             "total": 121,
-            "fired": 51,
-            "rate": 0.4215,
+            "fired": 44,
+            "rate": 0.3636,
             "blocked": 34,
             "block_rate": 0.281
           },

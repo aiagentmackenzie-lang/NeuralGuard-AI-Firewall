@@ -114,8 +114,25 @@ class ScannerSettings(BaseSettings):
     # Semantic scanner (Phase 2)
     semantic_enabled: bool = Field(default=False, description="Enable semantic classification")
     semantic_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        description="Sentence-transformer model name",
+        default="intfloat/multilingual-e5-base",
+        description=(
+            "Sentence-transformer model name. Multilingual by requirement, not by "
+            "preference: the English-only incumbent (all-MiniLM-L6-v2) measured 0 %% "
+            "recall on canonical PT/JA/VI/AR attacks and inverted on Chinese "
+            "(benchmarks/detection_eval/, 2026-11-18)."
+        ),
+    )
+    semantic_query_prefix: str = Field(
+        default="query: ",
+        description=(
+            "Prefix applied to user prompts before embedding. E5 models are trained "
+            "with asymmetric 'query: '/'passage: ' prefixes; models without them "
+            "must set both to an empty string, or recall degrades silently."
+        ),
+    )
+    semantic_passage_prefix: str = Field(
+        default="passage: ",
+        description="Prefix applied to corpus texts at rebuild time (see semantic_query_prefix).",
     )
     semantic_onnx_path: str = Field(
         default="models/embedding-onnx",
@@ -128,7 +145,26 @@ class ScannerSettings(BaseSettings):
         default=0, description="ONNX Runtime intra-op threads (0=auto)"
     )
     semantic_similarity_threshold: float = Field(
-        default=0.75, description="Cosine similarity threshold for BLOCK"
+        default=0.88,
+        description=(
+            "Cosine similarity threshold for BLOCK. Model-specific: 0.75 was tuned "
+            "for all-MiniLM-L6-v2, whose similarity scale sits far lower than E5's. "
+            "Calibrated 2026-11-18 on the rebuilt E5 corpus: the NG-6 guard probes "
+            "block at 0 %%, multilingual benign blocks at 2.6 %% and semantic recall "
+            "is 60 %% (all-MiniLM-L6-v2 at its own thresholds: 34 %% recall, 4.0 %% "
+            "multilingual benign blocked)."
+        ),
+    )
+    semantic_escalate_floor: float = Field(
+        default=0.868,
+        description=(
+            "Lower bound of the ambiguous zone: matches at or above this are "
+            "ESCALATE (judge-resolvable). Model-specific for the same reason as "
+            "semantic_similarity_threshold: 0.868 reproduces the published "
+            "6.3 %% guard escalate share on E5 (MiniLM's own share was 6.32 %%, on "
+            "an entirely different scale), at 60 %% semantic recall vs MiniLM's "
+            "34 %% — measured on the shipped ONNX path, not in torch."
+        ),
     )
     semantic_attack_corpus_path: str = Field(
         default="models/attack_vectors.npy",

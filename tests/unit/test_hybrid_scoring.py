@@ -253,15 +253,23 @@ class TestHybridVerdictMapping:
         assert result.composite == 0.70
         assert result.verdict == Verdict.ESCALATE
 
-    def test_semantic_only_high_similarity_sanitizes(self, engine: HybridScoringEngine) -> None:
-        """Semantic-only at/above the BLOCK floor (0.75) still SANITIZEs from the
-        hybrid engine; the SimilarityScanner also returns BLOCK, so Layer
-        Arbitration keeps the BLOCK. The hybrid verdict stays SANITIZE/ESCALATE
-        only below the block floor."""
+    def test_semantic_only_high_similarity_sanitizes(self) -> None:
+        """Semantic-only at/above the BLOCK floor SANITIZEs from the hybrid engine.
+
+        The scenario only exists when the semantic floor sits *below* the action
+        block threshold — true for all-MiniLM-L6-v2 (0.75 floor, 0.85 block) and
+        false for multilingual-e5-base (0.88 floor), where any match at the floor
+        is already a composite BLOCK. The floor is therefore pinned to the
+        MiniLM-shaped value here, and the shipped-configuration interaction is
+        asserted separately (``TestShippedThresholdContract``).
+        """
+        config = NeuralGuardConfig()
+        config.scanner.semantic_similarity_threshold = 0.75
+        engine = HybridScoringEngine(config)
         findings = [_finding(layer=ScanLayer.SEMANTIC, confidence=0.76, verdict=Verdict.BLOCK)]
         results = [_scanner_result(ScanLayer.SEMANTIC, Verdict.BLOCK, findings)]
         result = engine.score(results)
-        # composite 0.76 < 0.85 block, but semantic_max 0.76 >= 0.75 floor -> SANITIZE
+        # composite 0.76 < 0.85 action block, but semantic_max >= floor -> SANITIZE
         assert result.verdict == Verdict.SANITIZE
 
     def test_corroboration_gate_disabled_restores_sanitize(self) -> None:
@@ -294,6 +302,9 @@ class TestHybridVerdictMapping:
         config = NeuralGuardConfig()
         config.action.score_threshold_block = 0.90
         config.action.score_threshold_sanitize = 0.70
+        # This test is about the *action* thresholds; pin the semantic floor so
+        # the corroboration gate cannot change under it when the model changes.
+        config.scanner.semantic_similarity_threshold = 0.75
         engine = HybridScoringEngine(config)
 
         # Composite = 0.85 → normally BLOCK, but custom threshold is 0.90 → SANITIZE

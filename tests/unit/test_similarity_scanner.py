@@ -30,8 +30,18 @@ from neuralguard.models.schemas import (
 
 @pytest.fixture
 def settings() -> ScannerSettings:
-    """Default scanner settings with semantic enabled."""
-    return ScannerSettings(semantic_enabled=True)
+    """Scanner settings with semantic enabled, pinned to the legacy scale.
+
+    These unit tests exercise the *mapping and overflow arithmetic*, which is
+    threshold-relative. They pin the thresholds they were written against
+    (0.60/0.75) so the numbers in the assertions stay meaningful; the shipped
+    defaults are asserted separately in ``TestShippedThresholdContract``.
+    """
+    return ScannerSettings(
+        semantic_enabled=True,
+        semantic_similarity_threshold=0.75,
+        semantic_escalate_floor=0.60,
+    )
 
 
 @pytest.fixture
@@ -63,9 +73,16 @@ def mock_corpus_dir() -> Path:
 
 @pytest.fixture
 def settings_with_mock(mock_corpus_dir: Path) -> ScannerSettings:
-    """Settings pointing to mock corpus + ONNX model."""
+    """Settings pointing to mock corpus + ONNX model, pinned to the legacy scale.
+
+    Same reasoning as the ``settings`` fixture: the numeric assertions here
+    describe threshold-relative behaviour, so the thresholds are pinned rather
+    than inherited from whatever ships today.
+    """
     return ScannerSettings(
         semantic_enabled=True,
+        semantic_similarity_threshold=0.75,
+        semantic_escalate_floor=0.60,
         semantic_attack_corpus_path=str(mock_corpus_dir / "attack_vectors.npy"),
         semantic_attack_metadata_path=str(mock_corpus_dir / "attack_metadata.json"),
     )
@@ -155,7 +172,7 @@ class TestSimilarityScannerVerdictMapping:
     def test_custom_threshold(self) -> None:
         from neuralguard.semantic.similarity import SimilarityScanner
 
-        settings = ScannerSettings(semantic_similarity_threshold=0.85)
+        settings = ScannerSettings(semantic_similarity_threshold=0.85, semantic_escalate_floor=0.60)
         scanner = SimilarityScanner(settings)
         assert scanner._similarity_to_verdict(0.84) == Verdict.ESCALATE
         assert scanner._similarity_to_verdict(0.85) == Verdict.BLOCK
@@ -636,6 +653,11 @@ class TestOverflowWindowedScan:
         from neuralguard.semantic.similarity import SimilarityScanner
 
         kwargs: dict[str, object] = {
+            # Carry the pinned thresholds through: a helper that silently
+            # reverted to the shipped defaults made the overflow arithmetic
+            # test a different product than the fixture promised.
+            "semantic_similarity_threshold": settings_with_mock.semantic_similarity_threshold,
+            "semantic_escalate_floor": settings_with_mock.semantic_escalate_floor,
             "semantic_attack_corpus_path": settings_with_mock.semantic_attack_corpus_path,
             "semantic_attack_metadata_path": settings_with_mock.semantic_attack_metadata_path,
             "semantic_overflow_window_chars": self.WINDOW_CHARS,

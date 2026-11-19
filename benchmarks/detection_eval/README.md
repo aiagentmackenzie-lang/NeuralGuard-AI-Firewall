@@ -71,55 +71,58 @@ The same test enforces the cross-check with the published SLO: semantic-only
 `blocked` on the 50 hard negatives must stay **0**. If it ever is not, one of
 the two documents is lying and the build stops.
 
-## Measured 2026-11-18 (`main` = `426dc52`, before any model change)
+## Measured 2026-11-19 (`main` = `426dc52` + the multilingual semantic layer)
 
-Attack detection rate (caught / total), per layer:
+**Before** = all-MiniLM-L6-v2 (384-dim, English-trained) at its own thresholds
+0.60/0.75. **After** = multilingual-e5-base (768-dim, ONNX fp32) at thresholds
+calibrated to the *same published guard escalate share* (6.3 %), block 0.88.
 
-| layer | AR | DE | EN | ES | FR | JA | KO | PT | RU | VI | ZH | ALL |
+Attack detection rate (caught / total), semantic layer, per language:
+
+| model | AR | DE | EN | ES | FR | JA | KO | PT | RU | VI | ZH | ALL |
 |:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| structural | 0 % | 0 % | 6 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 2 % |
-| pattern | 50 % | 50 % | 85 % | 62 % | 62 % | 62 % | 50 % | 38 % | 38 % | 50 % | 62 % | 62 % |
-| semantic | 0 % | 12 % | 50 % | 38 % | 25 % | 0 % | 88 % | 0 % | 25 % | 0 % | 88 % | 34 % |
-| **core** | 50 % | 50 % | 91 % | 75 % | 75 % | 62 % | **100 %** | 38 % | 50 % | 50 % | **100 %** | 73 % |
+| all-MiniLM-L6-v2 | 0 % | 12 % | 50 % | 38 % | 25 % | 0 % | 88 % | 0 % | 25 % | 0 % | 88 % | **34 %** |
+| multilingual-e5-base | 50 % | 100 % | 47 % | 88 % | 75 % | 38 % | 38 % | 50 % | 50 % | 62 % | 100 % | **60 %** |
 
-Benign blocked rate (BLOCK only), per layer:
+Benign fired (not `allow`) on the 76 held-out multilingual probes:
 
-| layer | AR | DE | EN | ES | FR | JA | KO | PT | RU | VI | ZH | ALL |
-|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| structural | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % | 0 % |
-| pattern | 71 % | 50 % | 17 % | 50 % | 62 % | 57 % | 57 % | 0 % | 62 % | 71 % | 38 % | 32 % |
-| semantic | 0 % | 0 % | 6 % | 50 % | 0 % | 0 % | 71 % | 0 % | 0 % | 0 % | **100 %** | 13 % |
-| **core** | 71 % | 50 % | 22 % | 75 % | 62 % | 57 % | **100 %** | 0 % | 62 % | 71 % | **100 %** | 41 % |
+| model | all | everyday | hard negatives | blocked (BLOCK only) |
+|:--|--:|--:|--:|--:|
+| all-MiniLM-L6-v2 | 22 % | — | — | 4.0 % |
+| multilingual-e5-base | **10 %** | 12/121 | 5/50 | **1.2 %** |
 
-By family (core): JB 96 %, PI-D 85 %, EXF 100 %, PI-I 100 %, MEM 100 %,
-OBF 67 %, TOOL 60 %, EXT 48 %, **CR 45 %**.
+Whole detector (`core` = structural + pattern + semantic):
 
-By benign kind (core): everyday 34/121 blocked (28 %), hard negatives 15/50
-blocked (30 %).
+| model | attacks caught | benign fired | benign blocked | NG-6 guard blocked | guard escalate |
+|:--|--:|--:|--:|--:|--:|
+| all-MiniLM-L6-v2 | 73 % | 41 % | 41 % | 0/95 | 6.32 % |
+| multilingual-e5-base | **85 %** | 37 % | 28.6 % | 0/95 | 6.3 % |
 
-Controls: **10/10** caught by core.
+By family (core, E5): JB 96 %, PI-D 88 %, EXF 100 %, PI-I 100 %, MEM 100 %,
+TOOL 60 %, OBF 67 %, EXT 43 %, CR 45 %. Controls: 10/10.
 
-## What that matrix actually says
+### What changed, and what did not
 
-1. **`core` at 100 % detection with 100 % benign block rate is not a score —
-   it is a detector that says yes to everything.** ZH and KO are in that
-   state today: Chinese and Korean detection is carried by over-match, not by
-   discrimination. A vendor quoting "100 % detection in Chinese" off this
-   matrix would be lying with a true number.
-2. **The multilingual recall is the pattern layer's**, hand-written per
-   language, and it ranges 38 % (PT, RU) to 85 % (EN). The semantic layer
-   contributes almost nothing outside EN/ES/FR/DE/KO/ZH, and for ZH its
-   signal is inverted.
-3. **The published guarded-FPR SLO is a semantic-layer number and it
-   reproduces exactly here** (hard negatives: 0/50 blocked, 4/50 escalate =
-   8.00 %, as documented). But the **pattern layer blocks 15/50 (30 %) of
-   those same probes**, so the number a buyer reads under "FPR 0.00 %" does
-   not describe the detector that ships. That is the scope gap this harness
-   exists to expose, and it is now labelled in `docs/FPR_SLO.md`.
-4. **PT is the weakest language on recall (38 %) despite being the only one
-   with a human-authored benign pass** — proof that the September PT work
-   tuned precision and left recall gaps (`Esqueça a instrução anterior`,
-   `Desconsidere as instruções`, `Obedeça sem questionar` are all missed).
+- **The multilingual column is no longer carried by regex alone.** Semantic
+  recall went 34 % → 60 % on the same items at the same published escalate
+  share, and benign firing *halved*. Ten of eleven languages improved; the one
+  that did not is English semantic recall (50 % → 47 %), where the pattern layer
+  already covers the corpus and E5's longer context dilutes instead of sharpening.
+- **Chinese is still the weak language.** 100 % of ZH attacks are now caught,
+  but 50 % of benign ZH still fires and 25 % is BLOCKed. The inversion is gone
+  (benign no longer scores above attacks); the discrimination is not yet good.
+  That is the honest state, and it is a native-speaker question, not a threshold.
+- **The hard-negative class was untouched by the model swap** — 15/50 still
+  block at the *pattern* layer, because that layer matches quoted attacks with no
+  notion of quotation. 15.79 % remains the number to beat, and it is not a
+  model problem.
+- **Cost, measured:** ONNX median single-prompt embed 5.1 ms → 36.1 ms (fp32),
+  artifact 1.11 GB. int8 quantization was measured and **rejected**: at equal
+  guard precision it lost ~15 points of recall (44/114 vs 61/114 at 4.2 %
+  guard escalate) because the model's usable margin on this corpus is ~0.02 and
+  quantization noise is the same order. Latency budget (100 ms) and the
+  per-test timeout moved with the measurement rather than the measurement being
+  ignored.
 
 ## Regenerating
 

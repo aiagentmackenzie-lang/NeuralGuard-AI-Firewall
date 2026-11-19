@@ -323,7 +323,15 @@ class TestAttackCorpusWithRealCorpus:
     def test_corpus_vectors_shape(self, real_corpus: object) -> None:
         """Vectors have correct shape (n, 384)."""
         assert real_corpus._vectors is not None
-        assert real_corpus._vectors.shape[1] == 384
+        # The dimension is a property of the shipped model, not a constant in a
+        # test: read it from the ONNX config so a model swap cannot silently
+        # leave the corpus and the queries in different spaces.
+        import json as _json
+        from pathlib import Path as _Path
+
+        cfg = _json.loads(_Path("models/embedding-onnx/config.json").read_text())
+        expected_dim = cfg.get("hidden_size") or cfg.get("d_model")
+        assert real_corpus._vectors.shape[1] == expected_dim
 
     def test_corpus_vectors_normalized(self, real_corpus: object) -> None:
         """All vectors are approximately L2-normalized."""

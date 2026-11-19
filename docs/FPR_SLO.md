@@ -43,9 +43,17 @@ independently by `benchmarks/detection_eval/` on the **same 95 probes**:
 
 | Layer | Blocked (guarded FPR) | Escalated | Fired (not allow) |
 |:--|--:|--:|--:|
-| Semantic | **0/95 (0.00 %)** | 6/95 (6.32 %) | 6/95 (6.32 %) |
+| Semantic (multilingual-e5-base, thresholds 0.868/0.88) | **0/95 (0.00 %)** | 6/95 (6.32 %) | 6/95 (6.32 %) |
 | Pattern | 15/95 (15.79 %) | 1/95 (1.05 %) | 16/95 (16.84 %) |
-| **Core (structural + pattern + semantic)** | **15/95 (15.79 %)** | 6/95 (6.32 %) | 21/95 (22.11 %) |
+| **Core (structural + pattern + semantic)** | **15/95 (15.79 %)** | 5/95 (5.26 %) | 20/95 (21.05 %) |
+
+The numbers in the table above were re-measured on 2026-11-19 with the
+multilingual model and re-calibrated thresholds. The semantic row is unchanged
+**by construction**: the thresholds were chosen so this SLO still holds exactly
+(0.00 % blocked, 6.32 % escalated) while semantic recall on the multilingual
+attack corpus went 34 % → 60 %. That is what a calibrated operating point means —
+the cost to benign English traffic is held constant, and the capability is
+allowed to move.
 
 The semantic figures reproduce this document exactly, which is the useful part:
 the instrument is not disputing the measurement, it is revealing its scope. The
@@ -67,11 +75,12 @@ Two consequences, both tracked rather than implied:
 
 **Multilingual scope, same instrument.** The 95 probes here are all English. On
 the 76 everyday benign probes across the 10 claimed languages the semantic layer
-fires on **19** and blocks **3**; the pattern layer blocks **32**. Chinese and
-Korean benign text is blocked by the semantic layer in **8/8** and **5/7** cases
-respectively while Chinese attacks are missed — i.e. for those languages the
-semantic layer's signal is not merely weak, it is inverted. See
-`benchmarks/detection_eval/README.md` for the full matrix.
+fires on **12** and blocks **2** (it was 19 fired / 3 blocked with the
+English-only model); the pattern layer blocks **32**. Chinese remains the weak
+language: 100 % of ZH attacks are now caught (was 88 % by over-match) but 50 % of
+benign ZH still fires and 25 % blocks — the inversion is gone, the
+discrimination is not good yet. See `benchmarks/detection_eval/README.md` for the
+full per-language matrix.
 
 Reading the numbers honestly:
 

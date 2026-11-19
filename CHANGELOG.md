@@ -11,6 +11,49 @@ predates the research-frontier controls, the MCP gateway and the fleet campaign
 
 ## [Unreleased]
 
+### Changed — the semantic layer is multilingual (P1, 2026-11-19)
+
+`all-MiniLM-L6-v2` was an English-trained encoder doing second-line duty for ten
+languages. The capability matrix measured it blind on canonical PT/JA/VI/AR
+attacks and inverted on Chinese. Replaced, by measurement rather than
+reputation, with **`intfloat/multilingual-e5-base`** (768-dim) after benchmarking
+four candidates at a *matched operating point* — the same 6.32 % guard escalate
+share, because comparing models at one model's absolute thresholds made E5
+collapse the guard (it dropped 6,512 of 6,513 corpus vectors and then "caught"
+100 % of everything against the single survivor).
+
+| Metric (semantic layer) | MiniLM-L6 | e5-base |
+|:--|--:|--:|
+| Multilingual attack recall (114 items, 11 languages) | 34 % | **60 %** |
+| Multilingual benign fired (76 held out) | 22 % | **10 %** |
+| Multilingual benign blocked | 4.0 % | **1.2 %** |
+| NG-6 guard blocked / escalated | 0/95, 6.32 % | 0/95, 6.32 % |
+| Whole-detector recall (`core`) | 73 % | **85 %** |
+
+- Thresholds are model-specific and now settings (0.868 escalate / 0.88 BLOCK,
+  calibrated on the rebuilt corpus), because 0.60/0.75 were MiniLM's scale and
+  using them for E5 produced the all-block failure mode above.
+- E5 needs asymmetric `query: `/`passage: ` prefixes, so embeddings carry a
+  **role** (`semantic_query_prefix` / `semantic_passage_prefix`); passing the
+  wrong one degrades recall with no error.
+- `scripts/export_onnx.py` now defaults to `ScannerSettings().semantic_model` so
+  the artifact and the runtime cannot disagree.
+- The engine no longer hard-codes 384 dimensions or the `token_type_ids` input
+  tensor: the dimension comes from the model and the input feed from the graph.
+  XLM-R-style encoders reject the extra tensor with INVALID_ARGUMENT.
+- **Quantization measured and rejected**: int8 is 278 MB and 25.7 ms vs 1.11 GB
+  and 36.1 ms, but at equal guard precision it lost ~15 points of recall
+  (44/114 vs 61/114). The model's usable margin on this corpus is ~0.02 and
+  quantization noise is the same order — so the smaller artifact is not free and
+  is not shipped.
+- Cost stated, not hidden: ONNX median single-prompt embed 5.1 ms → 36.1 ms. The
+  latency budget test (50 ms strict) and the eval suite's per-test timeout moved
+  with the measurement.
+- **Not fixed by this change:** the NG-6 hard-negative class still blocks 15/50
+  at the *pattern* layer (benign text quoting an attack, with no notion of
+  quotation). Chinese still fires on 50 % of benign ZH. Both are recorded as the
+  next measured work, and neither is a model problem.
+
 ### Added — the capability matrix, per layer and per language (P0, 2026-11-18)
 
 Every detection number this project published was English-only or aggregated
