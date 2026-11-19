@@ -438,6 +438,15 @@ re-run nightly:
 | False Positive Rate (FPR) | **0.00%** (0 of 45 benign over-blocked) |
 | Exact verdict match | 100.00% |
 
+**Scope of that FPR:** 45 plain English benign prompts. It does **not** include
+the 50 NG-6 hard negatives (benign prompts that *quote* attacks — an incident
+report reproducing the injection, awareness-training material), and the pattern
+layer blocks **15 of those 50**. [`benchmarks/detection_eval/`](benchmarks/detection_eval/README.md)
+measures every layer, per language, against both — it is the honest capability
+matrix, and it reports 15.79 % product-level guarded FPR on the 95 English
+probes rather than 0.00 %. Widening this gate to the hard negatives is tracked
+work, not a silent omission.
+
 ### Mutation-robustness gate — 16 operators, both directions
 
 Every character-level mutation operator (homoglyphs, fullwidth, leetspeak,
@@ -656,7 +665,7 @@ Plus nightly jobs: the [perf gate](.github/workflows/perf.yml) and the
 the 16-operator mutation gate). All Actions are SHA-pinned; dependabot
 covers actions + pip.
 
-**Current state:** 1,569 tests collected (1,557 passed / 12 skipped locally),
+**Current state:** 1,575 tests collected (1,563 passed / 12 skipped locally),
 91.16 % measured coverage (90 % CI floor), mypy strict clean. A nightly bench run
 and the live-fire receipts document real numbers, not aspirations.
 

@@ -34,6 +34,45 @@ blocked as an attack). Guarded FPR = blocked probes / total probes.
 | Escalate share (ambiguous zone 0.60–0.74, judge-resolvable) | 4.44% (2) | 8.00% (4) | 6.32% (6) |
 | Worst probe similarity | 0.747 | 0.696 | 0.747 |
 
+### Scope — this is a semantic-layer SLO, not a detector-level one (added 2026-11-18)
+
+The number above is measured **on the semantic layer alone**, because that is the
+layer whose threshold it tunes. It is not the false-positive rate of the
+firewall that ships, and until 2026-11-18 no document said so. Measured
+independently by `benchmarks/detection_eval/` on the **same 95 probes**:
+
+| Layer | Blocked (guarded FPR) | Escalated | Fired (not allow) |
+|:--|--:|--:|--:|
+| Semantic | **0/95 (0.00 %)** | 6/95 (6.32 %) | 6/95 (6.32 %) |
+| Pattern | 15/95 (15.79 %) | 1/95 (1.05 %) | 16/95 (16.84 %) |
+| **Core (structural + pattern + semantic)** | **15/95 (15.79 %)** | 6/95 (6.32 %) | 21/95 (22.11 %) |
+
+The semantic figures reproduce this document exactly, which is the useful part:
+the instrument is not disputing the measurement, it is revealing its scope. The
+gap is that the **NG-6 hard negatives are benign prompts that *quote* attacks**
+(an incident report reproducing the injection, awareness-training material), and
+the pattern layer matches the quoted text with no notion of quotation — so it
+blocks 15 of the 50 probes the semantic layer was carefully tuned to leave alone.
+The product-level guarded FPR on this guard set is therefore **15.79 %**, not
+0.00 %, and it is a precision defect in the pattern layer, not in the SLO.
+
+Two consequences, both tracked rather than implied:
+
+- The `A1` per-PR gate reports 0.00 % FPR on the **45 plain benign prompts only**
+  — it has never included the 50 hard negatives, which is why the gap survived.
+  `benchmarks/detection_eval/baseline.json` now measures both, together.
+- Fixing it is a design question (quote/meta-discourse suppression ahead of the
+  pattern layer), not a matter of adding rules — adding rules is what produced
+  it. It is recorded as measured work, with the number above as the target to beat.
+
+**Multilingual scope, same instrument.** The 95 probes here are all English. On
+the 76 everyday benign probes across the 10 claimed languages the semantic layer
+fires on **19** and blocks **3**; the pattern layer blocks **32**. Chinese and
+Korean benign text is blocked by the semantic layer in **8/8** and **5/7** cases
+respectively while Chinese attacks are missed — i.e. for those languages the
+semantic layer's signal is not merely weak, it is inverted. See
+`benchmarks/detection_eval/README.md` for the full matrix.
+
 Reading the numbers honestly:
 
 - **0.00% guarded FPR** is enforced three ways at once: the rebuild's

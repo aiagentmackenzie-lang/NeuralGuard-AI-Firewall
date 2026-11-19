@@ -1,0 +1,956 @@
+{
+  "corpus": {
+    "attacks": 114,
+    "attacks_by_language": 11,
+    "benign": 171,
+    "benign_everyday": 121,
+    "benign_hard_negative": 50
+  },
+  "layers": {
+    "structural": {
+      "attacks": {
+        "total": 114,
+        "caught": 2,
+        "rate": 0.0175,
+        "by_language": {
+          "AR": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "DE": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "EN": {
+            "total": 34,
+            "caught": 2,
+            "rate": 0.0588,
+            "blocked": 2,
+            "block_rate": 0.0588
+          },
+          "ES": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "FR": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "JA": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "KO": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "PT": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "RU": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "VI": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "ZH": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          }
+        },
+        "by_family": {
+          "CR": {
+            "total": 20,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "EXF": {
+            "total": 5,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "EXT": {
+            "total": 23,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "JB": {
+            "total": 27,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "MEM": {
+            "total": 2,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "OBF": {
+            "total": 3,
+            "caught": 1,
+            "rate": 0.3333
+          },
+          "PI-D": {
+            "total": 26,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "PI-I": {
+            "total": 3,
+            "caught": 1,
+            "rate": 0.3333
+          },
+          "TOOL": {
+            "total": 5,
+            "caught": 0,
+            "rate": 0.0
+          }
+        }
+      },
+      "benign": {
+        "total": 171,
+        "fired": 0,
+        "rate": 0.0,
+        "blocked": 0,
+        "block_rate": 0.0,
+        "by_language": {
+          "AR": {
+            "total": 7,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "DE": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "EN": {
+            "total": 95,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "ES": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "FR": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "JA": {
+            "total": 7,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "KO": {
+            "total": 7,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "PT": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "RU": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "VI": {
+            "total": 7,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "ZH": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          }
+        },
+        "by_kind": {
+          "everyday": {
+            "total": 121,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "hard_negative": {
+            "total": 50,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          }
+        }
+      }
+    },
+    "pattern": {
+      "attacks": {
+        "total": 114,
+        "caught": 71,
+        "rate": 0.6228,
+        "by_language": {
+          "AR": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "DE": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "EN": {
+            "total": 34,
+            "caught": 29,
+            "rate": 0.8529,
+            "blocked": 25,
+            "block_rate": 0.7353
+          },
+          "ES": {
+            "total": 8,
+            "caught": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "FR": {
+            "total": 8,
+            "caught": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "JA": {
+            "total": 8,
+            "caught": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "KO": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "PT": {
+            "total": 8,
+            "caught": 3,
+            "rate": 0.375,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "RU": {
+            "total": 8,
+            "caught": 3,
+            "rate": 0.375,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "VI": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "ZH": {
+            "total": 8,
+            "caught": 5,
+            "rate": 0.625,
+            "blocked": 3,
+            "block_rate": 0.375
+          }
+        },
+        "by_family": {
+          "CR": {
+            "total": 20,
+            "caught": 7,
+            "rate": 0.35
+          },
+          "EXF": {
+            "total": 5,
+            "caught": 5,
+            "rate": 1.0
+          },
+          "EXT": {
+            "total": 23,
+            "caught": 5,
+            "rate": 0.2174
+          },
+          "JB": {
+            "total": 27,
+            "caught": 26,
+            "rate": 0.963
+          },
+          "MEM": {
+            "total": 2,
+            "caught": 2,
+            "rate": 1.0
+          },
+          "OBF": {
+            "total": 3,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "PI-D": {
+            "total": 26,
+            "caught": 20,
+            "rate": 0.7692
+          },
+          "PI-I": {
+            "total": 3,
+            "caught": 3,
+            "rate": 1.0
+          },
+          "TOOL": {
+            "total": 5,
+            "caught": 3,
+            "rate": 0.6
+          }
+        }
+      },
+      "benign": {
+        "total": 171,
+        "fired": 55,
+        "rate": 0.3216,
+        "blocked": 47,
+        "block_rate": 0.2749,
+        "by_language": {
+          "AR": {
+            "total": 7,
+            "fired": 5,
+            "rate": 0.7143,
+            "blocked": 5,
+            "block_rate": 0.7143
+          },
+          "DE": {
+            "total": 8,
+            "fired": 4,
+            "rate": 0.5,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "EN": {
+            "total": 95,
+            "fired": 16,
+            "rate": 0.1684,
+            "blocked": 15,
+            "block_rate": 0.1579
+          },
+          "ES": {
+            "total": 8,
+            "fired": 4,
+            "rate": 0.5,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "FR": {
+            "total": 8,
+            "fired": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "JA": {
+            "total": 7,
+            "fired": 4,
+            "rate": 0.5714,
+            "blocked": 3,
+            "block_rate": 0.4286
+          },
+          "KO": {
+            "total": 7,
+            "fired": 4,
+            "rate": 0.5714,
+            "blocked": 3,
+            "block_rate": 0.4286
+          },
+          "PT": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "RU": {
+            "total": 8,
+            "fired": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "VI": {
+            "total": 7,
+            "fired": 5,
+            "rate": 0.7143,
+            "blocked": 4,
+            "block_rate": 0.5714
+          },
+          "ZH": {
+            "total": 8,
+            "fired": 3,
+            "rate": 0.375,
+            "blocked": 2,
+            "block_rate": 0.25
+          }
+        },
+        "by_kind": {
+          "everyday": {
+            "total": 121,
+            "fired": 39,
+            "rate": 0.3223,
+            "blocked": 32,
+            "block_rate": 0.2645
+          },
+          "hard_negative": {
+            "total": 50,
+            "fired": 16,
+            "rate": 0.32,
+            "blocked": 15,
+            "block_rate": 0.3
+          }
+        }
+      }
+    },
+    "semantic": {
+      "attacks": {
+        "total": 114,
+        "caught": 39,
+        "rate": 0.3421,
+        "by_language": {
+          "AR": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "DE": {
+            "total": 8,
+            "caught": 1,
+            "rate": 0.125,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "EN": {
+            "total": 34,
+            "caught": 17,
+            "rate": 0.5,
+            "blocked": 6,
+            "block_rate": 0.1765
+          },
+          "ES": {
+            "total": 8,
+            "caught": 3,
+            "rate": 0.375,
+            "blocked": 2,
+            "block_rate": 0.25
+          },
+          "FR": {
+            "total": 8,
+            "caught": 2,
+            "rate": 0.25,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "JA": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "KO": {
+            "total": 8,
+            "caught": 7,
+            "rate": 0.875,
+            "blocked": 6,
+            "block_rate": 0.75
+          },
+          "PT": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "RU": {
+            "total": 8,
+            "caught": 2,
+            "rate": 0.25,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "VI": {
+            "total": 8,
+            "caught": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "ZH": {
+            "total": 8,
+            "caught": 7,
+            "rate": 0.875,
+            "blocked": 1,
+            "block_rate": 0.125
+          }
+        },
+        "by_family": {
+          "CR": {
+            "total": 20,
+            "caught": 4,
+            "rate": 0.2
+          },
+          "EXF": {
+            "total": 5,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "EXT": {
+            "total": 23,
+            "caught": 8,
+            "rate": 0.3478
+          },
+          "JB": {
+            "total": 27,
+            "caught": 6,
+            "rate": 0.2222
+          },
+          "MEM": {
+            "total": 2,
+            "caught": 0,
+            "rate": 0.0
+          },
+          "OBF": {
+            "total": 3,
+            "caught": 2,
+            "rate": 0.6667
+          },
+          "PI-D": {
+            "total": 26,
+            "caught": 15,
+            "rate": 0.5769
+          },
+          "PI-I": {
+            "total": 3,
+            "caught": 3,
+            "rate": 1.0
+          },
+          "TOOL": {
+            "total": 5,
+            "caught": 1,
+            "rate": 0.2
+          }
+        }
+      },
+      "benign": {
+        "total": 171,
+        "fired": 23,
+        "rate": 0.1345,
+        "blocked": 3,
+        "block_rate": 0.0175,
+        "by_language": {
+          "AR": {
+            "total": 7,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "DE": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "EN": {
+            "total": 95,
+            "fired": 6,
+            "rate": 0.0632,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "ES": {
+            "total": 8,
+            "fired": 4,
+            "rate": 0.5,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "FR": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "JA": {
+            "total": 7,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "KO": {
+            "total": 7,
+            "fired": 5,
+            "rate": 0.7143,
+            "blocked": 3,
+            "block_rate": 0.4286
+          },
+          "PT": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "RU": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "VI": {
+            "total": 7,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "ZH": {
+            "total": 8,
+            "fired": 8,
+            "rate": 1.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          }
+        },
+        "by_kind": {
+          "everyday": {
+            "total": 121,
+            "fired": 19,
+            "rate": 0.157,
+            "blocked": 3,
+            "block_rate": 0.0248
+          },
+          "hard_negative": {
+            "total": 50,
+            "fired": 4,
+            "rate": 0.08,
+            "blocked": 0,
+            "block_rate": 0.0
+          }
+        }
+      }
+    },
+    "core": {
+      "attacks": {
+        "total": 114,
+        "caught": 83,
+        "rate": 0.7281,
+        "by_language": {
+          "AR": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "DE": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "EN": {
+            "total": 34,
+            "caught": 31,
+            "rate": 0.9118,
+            "blocked": 27,
+            "block_rate": 0.7941
+          },
+          "ES": {
+            "total": 8,
+            "caught": 6,
+            "rate": 0.75,
+            "blocked": 5,
+            "block_rate": 0.625
+          },
+          "FR": {
+            "total": 8,
+            "caught": 6,
+            "rate": 0.75,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "JA": {
+            "total": 8,
+            "caught": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "KO": {
+            "total": 8,
+            "caught": 8,
+            "rate": 1.0,
+            "blocked": 7,
+            "block_rate": 0.875
+          },
+          "PT": {
+            "total": 8,
+            "caught": 3,
+            "rate": 0.375,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "RU": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "VI": {
+            "total": 8,
+            "caught": 4,
+            "rate": 0.5,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "ZH": {
+            "total": 8,
+            "caught": 8,
+            "rate": 1.0,
+            "blocked": 4,
+            "block_rate": 0.5
+          }
+        },
+        "by_family": {
+          "CR": {
+            "total": 20,
+            "caught": 9,
+            "rate": 0.45
+          },
+          "EXF": {
+            "total": 5,
+            "caught": 5,
+            "rate": 1.0
+          },
+          "EXT": {
+            "total": 23,
+            "caught": 11,
+            "rate": 0.4783
+          },
+          "JB": {
+            "total": 27,
+            "caught": 26,
+            "rate": 0.963
+          },
+          "MEM": {
+            "total": 2,
+            "caught": 2,
+            "rate": 1.0
+          },
+          "OBF": {
+            "total": 3,
+            "caught": 2,
+            "rate": 0.6667
+          },
+          "PI-D": {
+            "total": 26,
+            "caught": 22,
+            "rate": 0.8462
+          },
+          "PI-I": {
+            "total": 3,
+            "caught": 3,
+            "rate": 1.0
+          },
+          "TOOL": {
+            "total": 5,
+            "caught": 3,
+            "rate": 0.6
+          }
+        }
+      },
+      "benign": {
+        "total": 171,
+        "fired": 70,
+        "rate": 0.4094,
+        "blocked": 49,
+        "block_rate": 0.2865,
+        "by_language": {
+          "AR": {
+            "total": 7,
+            "fired": 5,
+            "rate": 0.7143,
+            "blocked": 5,
+            "block_rate": 0.7143
+          },
+          "DE": {
+            "total": 8,
+            "fired": 4,
+            "rate": 0.5,
+            "blocked": 3,
+            "block_rate": 0.375
+          },
+          "EN": {
+            "total": 95,
+            "fired": 21,
+            "rate": 0.2211,
+            "blocked": 15,
+            "block_rate": 0.1579
+          },
+          "ES": {
+            "total": 8,
+            "fired": 6,
+            "rate": 0.75,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "FR": {
+            "total": 8,
+            "fired": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "JA": {
+            "total": 7,
+            "fired": 4,
+            "rate": 0.5714,
+            "blocked": 3,
+            "block_rate": 0.4286
+          },
+          "KO": {
+            "total": 7,
+            "fired": 7,
+            "rate": 1.0,
+            "blocked": 5,
+            "block_rate": 0.7143
+          },
+          "PT": {
+            "total": 8,
+            "fired": 0,
+            "rate": 0.0,
+            "blocked": 0,
+            "block_rate": 0.0
+          },
+          "RU": {
+            "total": 8,
+            "fired": 5,
+            "rate": 0.625,
+            "blocked": 4,
+            "block_rate": 0.5
+          },
+          "VI": {
+            "total": 7,
+            "fired": 5,
+            "rate": 0.7143,
+            "blocked": 4,
+            "block_rate": 0.5714
+          },
+          "ZH": {
+            "total": 8,
+            "fired": 8,
+            "rate": 1.0,
+            "blocked": 2,
+            "block_rate": 0.25
+          }
+        },
+        "by_kind": {
+          "everyday": {
+            "total": 121,
+            "fired": 51,
+            "rate": 0.4215,
+            "blocked": 34,
+            "block_rate": 0.281
+          },
+          "hard_negative": {
+            "total": 50,
+            "fired": 19,
+            "rate": 0.38,
+            "blocked": 15,
+            "block_rate": 0.3
+          }
+        }
+      }
+    }
+  },
+  "controls": {
+    "total": 10,
+    "missed_by_core": [],
+    "missed_by_language": []
+  }
+}
