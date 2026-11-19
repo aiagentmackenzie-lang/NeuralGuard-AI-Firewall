@@ -115,9 +115,67 @@ jobs:
         # coverage is measured on a reduced suite (the old 86% floor's lie).
         run: uv sync --extra dev --extra db --extra tenants --extra semantic --extra semantic-export
 
+      - name: Compute the semantic-stack fingerprint
+        id: semfp
+        # The cache key must name the inputs that change a VECTOR. That is
+        # neither a directory (the v0.3.2 key hashed all of semantic/** and so
+        # invalidated 1.1 GB for an edit to hybrid.py) nor a whole file
+        # (the v0.3.3 key hashed uv.lock and settings.py, so bumping the
+        # project's own version string — one line — cost two cold rebuilds,
+        # measured 21 m 19 s and 30 m 14 s against a warm 7-10 min job).
+        #
+        # What actually moves a vector: which model, how it truncates, which
+        # prefixes it was trained with, the threshold that decides which
+        # paraphrases survive the benign guard, and the resolved versions of the
+        # packages that tokenize or do the arithmetic. Those are read here, not
+        # inferred from a file's hash.
+        # tests/unit/test_ci_model_cache_key.py derives the settings list from
+        # embedding.py + rebuild_corpus_vectors.py, so adding a field to the
+        # vector path fails there until it is covered here.
+        run: |
+          uv run python - >> "$GITHUB_OUTPUT" <<'PY'
+          import hashlib
+          import json
+          import tomllib
+          from pathlib import Path
+
+          from neuralguard.config.settings import ScannerSettings
+
+          s = ScannerSettings()
+          values = {
+              "model": s.semantic_model,
+              "max_seq_length": s.semantic_max_seq_length,
+              "query_prefix": s.semantic_query_prefix,
+              "passage_prefix": s.semantic_passage_prefix,
+              "similarity_threshold": s.semantic_similarity_threshold,
+              "escalate_floor": s.semantic_escalate_floor,
+              "onnx_path": str(s.semantic_onnx_path),
+              "intra_threads": s.semantic_intra_threads,
+          }
+          NUMERIC = {
+              "onnxruntime",
+              "tokenizers",
+              "numpy",
+              "transformers",
+              "optimum",
+              "optimum-onnx",
+              "sentence-transformers",
+              "torch",
+              "safetensors",
+              "huggingface-hub",
+          }
+          lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+          pins = sorted(
+              f"{p['name']}=={p['version']}" for p in lock["package"] if p["name"] in NUMERIC
+          )
+          payload = json.dumps({"values": values, "pins": pins}, sort_keys=True)
+          print("fingerprint=" + hashlib.sha256(payload.encode()).hexdigest()[:16])
+          PY
+
       - name: Restore model + vector cache
         # Keyed on everything that can change the artifacts: the corpus sources,
-        # the export/rebuild scripts, the semantic package and the lockfile.
+        # the export/rebuild scripts, the embedding engine and tokenizer
+        # handling, and the derived fingerprint of the vector-input values.
         # Without this, every PR re-embeds 6,503 texts through a 768-dim model on
         # a 2-core runner (~25 min) to test code that did not touch any of it.
         id: model-cache
@@ -129,12 +187,12 @@ jobs:
             models/attack_metadata.json
           # Keyed on what actually changes the artifacts — the corpus sources,
           # the export/rebuild scripts, the embedding engine and tokenizer
-          # handling, and the lockfile. NOT the whole semantic package: an
-          # earlier key included src/neuralguard/semantic/** and so invalidated a
-          # 1.1 GB cache for changes to hybrid.py that cannot touch a vector.
-          # Cost of that mistake, measured: three consecutive cold coverage runs
-          # of 40-46 min where 10 would have done.
-          key: ng-model-${{ hashFiles('corpus/attack_corpus_full.jsonl', 'corpus/augment_checkpoint.jsonl', 'corpus/benign_hard_negatives.jsonl', 'benchmarks/ng_vs_ns/benign_corpus.jsonl', 'scripts/export_onnx.py', 'scripts/rebuild_corpus_vectors.py', 'src/neuralguard/semantic/embedding.py', 'src/neuralguard/semantic/hygiene.py', 'src/neuralguard/config/settings.py', 'uv.lock') }}
+          # handling, and the fingerprint above. Three over-broad versions of
+          # this key have already been paid for twice over: `semantic/**` (three
+          # 40-46 min cold runs), then `uv.lock` + `settings.py` (two 21-30 min
+          # cold runs for a version bump). A file is not an input; the values the
+          # file yields are.
+          key: ng-model-${{ steps.semfp.outputs.fingerprint }}-${{ hashFiles('corpus/attack_corpus_full.jsonl', 'corpus/augment_checkpoint.jsonl', 'corpus/benign_hard_negatives.jsonl', 'benchmarks/ng_vs_ns/benign_corpus.jsonl', 'scripts/export_onnx.py', 'scripts/rebuild_corpus_vectors.py', 'src/neuralguard/semantic/embedding.py', 'src/neuralguard/semantic/hygiene.py') }}
           # NO restore-keys, deliberately. With a partial match the cache
           # action restores the nearest entry and then SKIPS saving the new one —
           # so main would restore a stale artifact, rebuild it, and never cache
