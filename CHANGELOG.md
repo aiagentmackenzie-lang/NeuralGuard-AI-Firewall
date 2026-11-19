@@ -24,10 +24,42 @@ catch, in the one slot with no guard.
 to what pytest collects, delegated to a `--collect-only` subprocess so the
 number comes from the runner rather than from arithmetic in the test.
 
-### Fixed — the stale README headline
+### Fixed — the `DAN` token no longer matches inside ordinary words (i18n + JB-001)
 
-The "Current state" line now reads `1,566 tests collected (1,554 passed / 12
-skipped locally), 91.16 % measured coverage` — measured, not carried forward.
+`JB-ZH-003`, `JB-JA-003` and `JB-KO-003` opened with `(?i)(?:DAN|…)` — no word
+boundary — while the English `JB-001` had already written `\bDAN\b`. Because
+every pattern runs against every prompt regardless of language, a French
+sentence was blocked by a **Chinese** rule id: `Mode développeur désactivé dans
+le navigateur.` (`da**n**s`), `Le danseur a abandonné la scène.`, and the English
+name in `Dan is our new account manager.` all came back BLOCK at 0.88-0.96.
+
+Found by `scripts/i18n_fp_sweep.py`, a new mechanical instrument: 76 benign
+everyday sentences across the 10 languages plus 10 positive controls, run
+through the real `PatternScanner`, exit 2 if a control fails to fire so an
+instrument failure cannot look like a clean result. It measured **39/76 benign
+probes firing (51 %)** — with Portuguese at **0/8**, the one language that had
+ever been probed before, which is what makes the other nine a finding rather
+than a style preference.
+
+- i18n packs now use `(?-i:\bDAN\b)`; `JB-001` drops its global
+  case-insensitivity, so the canonical upper-case token fires and the name
+  `Dan` does not. Stated trade-off: lower-case "dan mode" no longer fires.
+- Guards written and run red first:
+  `TestCrossLanguageDanFalsePositive`, `test_person_named_dan_is_not_a_jailbreak`.
+- Deterministic gates re-run on the changed tree and unchanged: **A1 ASR 0.00 %
+  / FPR 0.00 % / exact-match 100 %**, **NG-5 Unsafe-ASR 38.89 %, Safe-ASR
+  12.50 %, hard BLOCKs 0**, **B4 baseline 0.00 % / guarded 0.00 %**.
+- The remaining ~39 candidate false positives are documented per rule family in
+  `docs/i18n_native_review_request.md` and left for the native-speaker pass: each
+  one needs a judgement (role-switch verb without a suspicious role,
+  developer-mode named in the *disabled* state, "ignore the previous footnote",
+  "repeat everything above" as a study instruction) that a regex cannot make.
+
+### Fixed — the stale README headline (docs)
+
+The "Current state" line now reads `1,569 tests collected (1,557 passed / 12
+skipped locally), 91.16 % measured coverage` — measured, not carried forward, and
+the guard caught its own first regression while this branch grew by three tests.
 Deliberately unchanged: no production behaviour, no version bump. A docs-and-
 guard change does not earn a release.
 
