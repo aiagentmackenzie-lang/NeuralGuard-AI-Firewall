@@ -189,7 +189,7 @@ JB_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.96,
         "DAN jailbreak variant — 'DAN / Do Anything Now'",
-        r"(?i)\bDAN\b(?:\s+(?:mode|jailbreak|enabled|activated|v\d+)?)?\b|\bdo\s+anything\s+now\b|\byou\s+are\s+DAN\b",
+        r"\bDAN\b(?:\s+(?i:mode|jailbreak|enabled|activated|v\d+)?)?\b|(?i:\bdo\s+anything\s+now\b)|\byou\s+are\s+DAN\b",
     ),
     (
         "JB-002",

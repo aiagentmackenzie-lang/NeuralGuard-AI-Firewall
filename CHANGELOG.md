@@ -9,6 +9,60 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
+## [Unreleased]
+
+### Added — the README's test count is finally a measurement (docs)
+
+`tests/unit/test_docs_consistency.py` compared the README against
+`docs/FPR_SLO.md` (corpus size) and against the loaded rule packs (rule count).
+It did not compare the headline test count against anything — which is why that
+number sat **47 tests stale** on `main` (1,518 claimed, 1,565 collected) after
+two releases that added contracts. The same class of drift the file exists to
+catch, in the one slot with no guard.
+
+`TestTestCountClaim` now reads the claimed count from the README and compares it
+to what pytest collects, delegated to a `--collect-only` subprocess so the
+number comes from the runner rather than from arithmetic in the test.
+
+### Fixed — the `DAN` token no longer matches inside ordinary words (i18n + JB-001)
+
+`JB-ZH-003`, `JB-JA-003` and `JB-KO-003` opened with `(?i)(?:DAN|…)` — no word
+boundary — while the English `JB-001` had already written `\bDAN\b`. Because
+every pattern runs against every prompt regardless of language, a French
+sentence was blocked by a **Chinese** rule id: `Mode développeur désactivé dans
+le navigateur.` (`da**n**s`), `Le danseur a abandonné la scène.`, and the English
+name in `Dan is our new account manager.` all came back BLOCK at 0.88-0.96.
+
+Found by `scripts/i18n_fp_sweep.py`, a new mechanical instrument: 76 benign
+everyday sentences across the 10 languages plus 10 positive controls, run
+through the real `PatternScanner`, exit 2 if a control fails to fire so an
+instrument failure cannot look like a clean result. It measured **39/76 benign
+probes firing (51 %)** — with Portuguese at **0/8**, the one language that had
+ever been probed before, which is what makes the other nine a finding rather
+than a style preference.
+
+- i18n packs now use `(?-i:\bDAN\b)`; `JB-001` drops its global
+  case-insensitivity, so the canonical upper-case token fires and the name
+  `Dan` does not. Stated trade-off: lower-case "dan mode" no longer fires.
+- Guards written and run red first:
+  `TestCrossLanguageDanFalsePositive`, `test_person_named_dan_is_not_a_jailbreak`.
+- Deterministic gates re-run on the changed tree and unchanged: **A1 ASR 0.00 %
+  / FPR 0.00 % / exact-match 100 %**, **NG-5 Unsafe-ASR 38.89 %, Safe-ASR
+  12.50 %, hard BLOCKs 0**, **B4 baseline 0.00 % / guarded 0.00 %**.
+- The remaining ~39 candidate false positives are documented per rule family in
+  `docs/i18n_native_review_request.md` and left for the native-speaker pass: each
+  one needs a judgement (role-switch verb without a suspicious role,
+  developer-mode named in the *disabled* state, "ignore the previous footnote",
+  "repeat everything above" as a study instruction) that a regex cannot make.
+
+### Fixed — the stale README headline (docs)
+
+The "Current state" line now reads `1,569 tests collected (1,557 passed / 12
+skipped locally), 91.16 % measured coverage` — measured, not carried forward, and
+the guard caught its own first regression while this branch grew by three tests.
+Deliberately unchanged: no production behaviour, no version bump. A docs-and-
+guard change does not earn a release.
+
 ## [0.3.2] — 2026-11-17
 
 ### Added — the HITL store posture is readable per pod (NG-15)
