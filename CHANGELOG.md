@@ -9,7 +9,35 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
-## [Unreleased]
+## [0.3.3] — 2026-11-19
+
+**This release exists because the artifact and the tree had diverged.** `v0.3.2`
+shipped on 2026-11-17; the multilingual detector merged on 2026-11-19 as three
+separate PRs. Between those dates the manifest pinned a published image with
+34 % multilingual semantic recall while the README described 60 %, and
+"clone and apply on a fresh cluster" installed the older detector. The tree was
+correct and the thing a consumer runs was not, which is the only kind of
+divergence that matters here.
+
+What the published image now contains: the capability matrix that measures each
+layer in isolation, `intfloat/multilingual-e5-base` (768-dim, ONNX fp32) with
+calibrated thresholds, and the corrected `DAN` boundary in the three i18n packs.
+
+**The measured cost of multilingual detection, stated rather than buried.** The
+semantic artifact grew from 24 MB to **1.11 GB** and the price shows up as
+latency and as CI time, not as a smaller number:
+
+| measurement | value | where |
+|:--|:--|:--|
+| model load at startup | **2,186 ms** | CI runner (budget is 30 s there, 10 s local) |
+| semantic scan p95 | **59.2 ms** (avg 39.7) | re-measured 2026-11-19 on the reference Mac, 40 samples, shipped thresholds |
+| semantic scan p95 / avg | **734 ms / 365 ms** | 2 weak vCPUs on the CI runner (budget 1500 ms there) |
+| corpus rebuild | **~3 min** warm / **~25 min** cold | 2-core runner, after the second-pass fix |
+
+int8 quantization was measured and **rejected**: 278 MB / 25.7 ms, but at equal
+guard precision it lost ~15 points of recall (44/114 vs 61/114) because the
+usable separation on this corpus is ~0.02 and quantization noise is the same
+order. A 4x smaller artifact that detects less is not a cheaper artifact.
 
 ### Fixed — two model-specific budgets that only CI could fail (2026-11-19)
 
