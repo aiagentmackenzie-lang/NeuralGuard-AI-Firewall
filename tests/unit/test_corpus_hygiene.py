@@ -15,6 +15,7 @@ import pytest
 
 from neuralguard.config.settings import ScannerSettings
 from neuralguard.semantic.hygiene import (
+    benign_blocking_mask,
     blocking_report,
     drop_benign_blocking_vectors,
     drop_conversational_vectors,
@@ -27,11 +28,19 @@ from neuralguard.semantic.hygiene import (
 # The rebuilt-corpus benign regression gate needs the gitignored artifacts.
 _REAL_CORPUS = Path("models/attack_vectors.npy")
 _REAL_MODEL = Path("models/embedding-onnx")
+# The directory survives a clone (config.json is tracked); the engine needs these
+# two files, which are build artifacts. Checking the directory alone let a
+# missing tokenizer surface as a FileNotFoundError inside a "skip" guard.
+_REAL_MODEL_FILES = (_REAL_MODEL / "model.onnx", _REAL_MODEL / "tokenizer.json")
 _REAL_METADATA = Path("models/attack_metadata.json")
 _REAL_BENIGN = Path("benchmarks/ng_vs_ns/benign_corpus.jsonl")
 
 requires_corpus = pytest.mark.skipif(
-    not (_REAL_CORPUS.exists() and _REAL_MODEL.exists() and _REAL_METADATA.exists()),
+    not (
+        _REAL_CORPUS.exists()
+        and all(f.exists() for f in _REAL_MODEL_FILES)
+        and _REAL_METADATA.exists()
+    ),
     reason="rebuilt corpus + ONNX model not present (run scripts/build_attack_corpus.py)",
 )
 
@@ -392,3 +401,32 @@ class TestHardNegativeCorpusFile:
         for probe in load_benign_guard_probes(self.HN_PATH):
             words = probe.split()
             assert len(words) >= 12, f"prompt too bare to be benign-dominant: {probe!r}"
+
+
+class TestBenignBlockingMask:
+    """The mask exists so the rebuild stops re-embedding survivors.
+
+    A perf shortcut that silently changes which vectors survive would be a
+    corpus regression dressed as a speedup, so it is pinned to the list form.
+    """
+
+    def test_mask_matches_the_dropping_helper(self) -> None:
+        from neuralguard.semantic.hygiene import drop_benign_blocking_vectors
+
+        rng = np.random.default_rng(7)
+        attacks = [{"text": f"attack {i}"} for i in range(6)]
+        attack_embs = rng.normal(size=(6, 8)).astype(np.float32)
+        attack_embs /= np.linalg.norm(attack_embs, axis=1, keepdims=True)
+        benign_embs = attack_embs[:2].copy()  # two probes identical to two vectors
+
+        mask = benign_blocking_mask(attack_embs, benign_embs, 0.99)
+        kept, _dropped = drop_benign_blocking_vectors(attacks, attack_embs, benign_embs, 0.99)
+        assert [a["text"] for a in kept] == [
+            a["text"] for a, keep in zip(attacks, mask, strict=True) if keep
+        ]
+        assert mask.sum() == 4
+
+    def test_empty_inputs_keep_everything(self) -> None:
+        assert benign_blocking_mask(
+            np.zeros((3, 4), np.float32), np.zeros((0, 4), np.float32), 0.8
+        ).all()

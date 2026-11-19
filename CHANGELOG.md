@@ -11,6 +11,29 @@ predates the research-frontier controls, the MCP gateway and the fleet campaign
 
 ## [Unreleased]
 
+### Fixed — the rebuild stopped re-embedding what it already had (CI, 2026-11-19)
+
+`rebuild_corpus_vectors.py` embedded ~5,100 paraphrase candidates, ran the benign
+guard over them, threw the embeddings away and **re-embedded the survivors** —
+a full second pass for identical values, ~40 % of the rebuild. On a 2-core
+runner with the 768-dim model that was the difference between a job that fits and
+one that gets cancelled at its ceiling (measured: main's first run hit exactly
+60 minutes and was killed mid-rebuild).
+
+`benign_blocking_mask()` returns the keep mask from the embeddings the caller
+already holds; the rebuild slices instead of recomputing. Verified **bit-identical**
+(`np.array_equal` on the 6,503 × 768 matrix after a full rebuild, max abs diff
+0.0), not assumed — a speedup that changes which vectors survive would be a
+corpus regression wearing a perf badge. Local rebuild 7 min → 3 min; the
+coverage job's ceiling 60 → 90 min so a genuinely cold cache can finish.
+
+Also fixed, found while debugging the above: three test guards checked that the
+`models/embedding-onnx` **directory** existed, but that directory survives a
+clone because `config.json` is tracked. A missing `tokenizer.json` therefore
+surfaced as a `FileNotFoundError` inside a "skip when the model is absent"
+guard — 18 errors on a clean tree instead of 18 documented skips. The guards now
+check `model.onnx` and `tokenizer.json`, the two files the engine actually loads.
+
 ### Changed — the semantic layer is multilingual (P1, 2026-11-19)
 
 `all-MiniLM-L6-v2` was an English-trained encoder doing second-line duty for ten

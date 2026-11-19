@@ -26,10 +26,10 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import numpy as np
 
 # "benign sentence + connector + attack tail" compounds.
 _COMPOUND_SPLIT = re.compile(
@@ -181,13 +181,36 @@ def drop_benign_blocking_vectors(
     """Drop any vector that would semantically BLOCK a known-benign probe.
 
     Mechanically enforces: no corpus vector may reach the runtime BLOCK
-    threshold (default 0.75) against any benign probe. This is the
-    corpus-side mirror of the benign regression gate.
+    threshold against any benign probe. This is the corpus-side mirror of the
+    benign regression gate.
+
+    Thin wrapper over :func:`drop_vectors_blocking_probes`; use the mask form
+    (:func:`benign_blocking_mask`) when you already hold the embeddings — the
+    rebuild used to throw them away and re-embed the survivors, which cost a
+    full second pass over ~5k texts on every CI run.
     """
     kept, _embs, dropped = drop_vectors_blocking_probes(
         attacks, attack_embs, benign_embs, block_threshold
     )
     return kept, dropped
+
+
+def benign_blocking_mask(
+    attack_embs: np.ndarray,
+    benign_embs: np.ndarray,
+    block_threshold: float,
+) -> np.ndarray:
+    """Boolean mask of the vectors that survive the benign guard.
+
+    Same predicate as ``drop_vectors_blocking_probes`` (``max`` cosine against
+    any probe below the BLOCK threshold), computed on the embeddings the caller
+    already has. Keeping the mask and the embeddings in step is the caller's
+    job — order is preserved, so ``embs[mask]`` is the kept matrix.
+    """
+    if attack_embs.size == 0 or benign_embs.size == 0:
+        return np.ones(len(attack_embs), dtype=bool)
+    sims = attack_embs @ benign_embs.T
+    return np.asarray(sims.max(axis=1) < block_threshold, dtype=bool)
 
 
 def blocking_report(

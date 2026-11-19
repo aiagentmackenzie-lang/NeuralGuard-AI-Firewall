@@ -21,9 +21,10 @@ from neuralguard.semantic.similarity import SimilarityScanner
 
 _REAL_CORPUS = Path("models/attack_vectors.npy")
 _REAL_MODEL = Path("models/embedding-onnx")
+_REAL_MODEL_FILES = (_REAL_MODEL / "model.onnx", _REAL_MODEL / "tokenizer.json")
 
 requires_corpus = pytest.mark.skipif(
-    not (_REAL_CORPUS.exists() and _REAL_MODEL.exists()),
+    not (_REAL_CORPUS.exists() and all(f.exists() for f in _REAL_MODEL_FILES)),
     reason="rebuilt corpus + ONNX model not present (CI order: rebuild first)",
 )
 
