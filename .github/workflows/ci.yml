@@ -77,7 +77,11 @@ jobs:
   coverage:
     name: Coverage gate (90%, full semantic layer)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 → 60 on 2026-11-19: the multilingual model (768-dim) takes the corpus
+    # rebuild from ~4 min to ~25 min on a 2-core runner. The model + vectors are
+    # cached below so a normal PR does not pay it; the ceiling only has to hold
+    # for the runs that do (a model or corpus change).
+    timeout-minutes: 60
     needs: [test]
     services:
       # P2-10 close-out: the pg audit-verify live-fire tests run in CI too —
@@ -108,14 +112,44 @@ jobs:
         # coverage is measured on a reduced suite (the old 86% floor's lie).
         run: uv sync --extra dev --extra db --extra tenants --extra semantic --extra semantic-export
 
+      - name: Restore model + vector cache
+        # Keyed on everything that can change the artifacts: the corpus sources,
+        # the export/rebuild scripts, the semantic package and the lockfile.
+        # Without this, every PR re-embeds 6,503 texts through a 768-dim model on
+        # a 2-core runner (~25 min) to test code that did not touch any of it.
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/embedding-onnx
+            models/attack_vectors.npy
+            models/attack_metadata.json
+          key: ng-model-${{ hashFiles('corpus/attack_corpus_full.jsonl', 'corpus/augment_checkpoint.jsonl', 'corpus/benign_hard_negatives.jsonl', 'benchmarks/ng_vs_ns/benign_corpus.jsonl', 'scripts/export_onnx.py', 'scripts/rebuild_corpus_vectors.py', 'src/neuralguard/semantic/**', 'uv.lock') }}
+          # The .npy is tracked-out but rebuilt; the model is 1.1 GB. A single
+          # previous entry is enough — nothing reads the older vectors.
+          restore-keys: |
+            ng-model-
+
       - name: Export ONNX embedding model (regenerates gitignored model artifacts)
-        # Downloads all-MiniLM-L6-v2 from HuggingFace and exports ONNX.
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        # Downloads the model named in ScannerSettings().semantic_model (no
+        # --model flag: the artifact must not disagree with the runtime).
         run: uv run python scripts/export_onnx.py
 
       - name: Rebuild semantic corpus vectors from tracked sources
+        if: steps.model-cache.outputs.cache-hit != 'true'
         # Deterministic replay of build+finalize from corpus/ (tracked);
         # the A1 gate in the suite below is the arbiter of the rebuilt corpus.
         run: uv run python scripts/rebuild_corpus_vectors.py
+
+      - name: Verify the cached artifacts are present
+        # Cheap guard against a half-written cache entry: the suite would
+        # otherwise SKIP the semantic tests and quietly measure a smaller suite —
+        # the exact failure mode the 90 % floor was raised to prevent.
+        run: |
+          test -f models/embedding-onnx/model.onnx
+          test -f models/embedding-onnx/tokenizer.json
+          test -f models/attack_vectors.npy
 
       - name: Run coverage
         run: |

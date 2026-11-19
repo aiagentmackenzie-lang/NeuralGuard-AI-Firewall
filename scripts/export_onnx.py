@@ -6,7 +6,11 @@ and copies the tokenizer files. Run once to prepare the model directory.
 
 Usage:
     pip install neuralguard[semantic-export]
-    python scripts/export_onnx.py [--model all-MiniLM-L6-v2] [--output-dir models/embedding-onnx]
+    python scripts/export_onnx.py [--model <settings default>] [--output-dir models/embedding-onnx]
+
+The default model is read from ``ScannerSettings().semantic_model`` so the
+exported artifact and the runtime cannot disagree. CI calls this with no
+``--model`` for exactly that reason.
 """
 
 from __future__ import annotations
@@ -15,6 +19,14 @@ import argparse
 import json
 import time
 from pathlib import Path
+from typing import Any
+
+
+def _default_model() -> str:
+    """The model the product actually loads — never a second source of truth."""
+    from neuralguard.config.settings import ScannerSettings
+
+    return ScannerSettings().semantic_model
 
 
 def export_model(model_name: str, output_dir: str) -> None:
@@ -64,14 +76,20 @@ def export_model(model_name: str, output_dir: str) -> None:
         return_tensors="np",
     )
 
-    outputs = session.run(
-        None,
-        {
-            "input_ids": encoded["input_ids"],
-            "attention_mask": encoded["attention_mask"],
-            "token_type_ids": np.zeros_like(encoded["input_ids"]),
-        },
-    )
+    # Feed only what the exported graph declares. BERT-style encoders require
+    # token_type_ids; XLM-R-style ones (the multilingual E5 family) have no such
+    # input and reject it with INVALID_ARGUMENT — which is how this was found
+    # in CI, after the same assumption had already been fixed in the runtime
+    # engine. Verification must exercise the graph that was actually exported.
+    available = {inp.name for inp in session.get_inputs()}
+    feed: dict[str, Any] = {
+        "input_ids": encoded["input_ids"],
+        "attention_mask": encoded["attention_mask"],
+    }
+    if "token_type_ids" in available:
+        feed["token_type_ids"] = np.zeros_like(encoded["input_ids"])
+
+    outputs = session.run(None, feed)
 
     # Mean pooling
     token_embeddings = outputs[0]
@@ -115,8 +133,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export sentence-transformer model to ONNX")
     parser.add_argument(
         "--model",
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        help="Model name from HuggingFace (default: sentence-transformers/all-MiniLM-L6-v2)",
+        default=None,
+        help=(
+            "Model name from HuggingFace. Default: ScannerSettings().semantic_model "
+            "(single source of truth — an export that disagrees with the runtime is a "
+            "silent corpus/model mismatch)."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -124,7 +146,7 @@ def main() -> None:
         help="Output directory for ONNX model files",
     )
     args = parser.parse_args()
-    export_model(args.model, args.output_dir)
+    export_model(args.model or _default_model(), args.output_dir)
 
 
 if __name__ == "__main__":

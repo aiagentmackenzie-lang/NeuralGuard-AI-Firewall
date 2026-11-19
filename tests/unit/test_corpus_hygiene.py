@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from neuralguard.config.settings import ScannerSettings
 from neuralguard.semantic.hygiene import (
     blocking_report,
     drop_benign_blocking_vectors,
@@ -237,15 +238,17 @@ class TestLoadBenignGuardProbes:
 class TestRebuiltCorpusBenignGate:
     """F12 regression gate: the 45-benign A1 set vs the REBUILT corpus.
 
-    Bar (from the F12 ledger): every A1 benign prompt must stay < 0.60
-    similarity to every corpus vector — with at most the 3 documented
-    escalates (BEN-007/013/020, handled by hybrid + judge corroboration).
-    No benign prompt may ever reach the 0.75 BLOCK threshold.
+    Bar (from the F12 ledger): every A1 benign prompt must stay below the
+    escalate floor, with at most the 3 documented escalates (BEN-007/013/020,
+    handled by hybrid + judge corroboration). No benign prompt may ever reach
+    the BLOCK threshold. Both bounds come from settings — they are properties of
+    the shipped model (0.60/0.75 for all-MiniLM-L6-v2, 0.87/0.88 for
+    multilingual-e5-base), not constants a test should re-declare.
     """
 
     DOCUMENTED_ESCALATES = {"BEN-007", "BEN-013", "BEN-020"}
-    ESCALATE_FLOOR = 0.60
-    BLOCK_THRESHOLD = 0.75
+    ESCALATE_FLOOR = ScannerSettings().semantic_escalate_floor
+    BLOCK_THRESHOLD = ScannerSettings().semantic_similarity_threshold
 
     @requires_corpus
     def test_benign_max_similarity_within_documented_bounds(self):

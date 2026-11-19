@@ -19,6 +19,7 @@ import pytest
 
 from neuralguard.config.settings import ScannerSettings
 from neuralguard.models.schemas import ScanLayer
+from neuralguard.semantic.embedding import EmbeddingEngine
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -193,15 +194,17 @@ class TestEmbeddingEngineConfig:
         assert s.semantic_max_seq_length == 256
 
     def test_similarity_threshold_default(self) -> None:
-        """Default similarity threshold is 0.75."""
+        """Default similarity threshold is the calibrated shipped value."""
         s = ScannerSettings()
-        assert s.semantic_similarity_threshold == 0.75
+        # 0.88 is calibrated for multilingual-e5-base on the rebuilt corpus
+        # (0.75 was all-MiniLM-L6-v2's scale; the two are not interchangeable).
+        assert s.semantic_similarity_threshold == 0.88
 
     def test_onnx_path_default(self) -> None:
         """Default ONNX path is models/embedding-onnx."""
         s = ScannerSettings()
         assert s.semantic_onnx_path == "models/embedding-onnx"
-        assert s.semantic_model == "sentence-transformers/all-MiniLM-L6-v2"
+        assert s.semantic_model == "intfloat/multilingual-e5-base"
 
     def test_attack_corpus_path_default(self) -> None:
         """Default attack corpus path."""
@@ -265,10 +268,17 @@ class TestEmbeddingEngineMath:
         assert similarity > 0.99  # Should be ~1.0
 
     def test_embedding_dim_constant(self) -> None:
-        """Embedding dimension is always 384 for all-MiniLM-L6-v2."""
-        from neuralguard.semantic.embedding import EmbeddingEngine
+        """The dimension follows the shipped model, not a literal.
 
-        assert EmbeddingEngine.EMBEDDING_DIM == 384
+        It was hard-coded to 384 (all-MiniLM-L6-v2) and that constant was read by
+        nothing at runtime while being asserted here — the exact shape of a test
+        that reports a model swap as a failure of the test instead of the
+        contract. The ONNX config is the source of truth.
+        """
+        from pathlib import Path
+
+        cfg = json.loads(Path("models/embedding-onnx/config.json").read_text())
+        assert (cfg.get("hidden_size") or cfg.get("d_model")) == EmbeddingEngine.EMBEDDING_DIM
 
     def test_mean_pooling_respects_mask(self) -> None:
         """Mean pooling should ignore padded tokens (mask=0)."""
@@ -326,10 +336,10 @@ class TestEmbeddingEngineWithModel:
         """Model loads in under 2 seconds."""
         assert engine.load_time_ms < 2000, f"Load time {engine.load_time_ms:.0f}ms exceeds 2s"
 
-    def test_embed_returns_384_dim(self, engine: object) -> None:
-        """Single embed returns 384-dimensional vector."""
+    def test_embed_returns_model_dim(self, engine: object) -> None:
+        """Single embed returns the model's dimensionality."""
         result = engine.embed("Hello world")
-        assert result.shape == (384,)
+        assert result.shape == (EmbeddingEngine.EMBEDDING_DIM,)
 
     def test_embed_returns_float32(self, engine: object) -> None:
         """Embedding dtype is float32."""
@@ -346,7 +356,7 @@ class TestEmbeddingEngineWithModel:
         """Batch embed returns correct shape."""
         texts = ["Hello", "World", "Test"]
         result = engine.embed_batch(texts)
-        assert result.shape == (3, 384)
+        assert result.shape == (3, EmbeddingEngine.EMBEDDING_DIM)
 
     def test_embed_deterministic(self, engine: object) -> None:
         """Same input always produces same embedding."""
@@ -373,7 +383,12 @@ class TestEmbeddingEngineWithModel:
           failing on a noisy neighbour. The strict budget is enforced wherever
           it is meaningful — a normal machine.
         """
-        budget_ms = 250.0 if os.environ.get("CI") else 50.0
+        # Budget is model-specific and measured, not aspirational. ONNX medians
+        # on the reference machine: all-MiniLM-L6-v2 5.1 ms, multilingual-e5-base
+        # 36.1 ms (fp32) / 25.7 ms (int8). The 7x cost buys multilingual recall —
+        # see scripts/benchmark_embedding_models.py — so the strict budget moved
+        # with it rather than the measurement being ignored.
+        budget_ms = 400.0 if os.environ.get("CI") else 100.0
         engine.embed("warmup")  # first inference pays model/allocator setup
 
         latencies = []
@@ -423,7 +438,7 @@ class TestEmbeddingEngineWithModel:
         assert "token_count" in result
         assert "latency_ms" in result
         assert "model" in result
-        assert result["embedding_dim"] == 384
+        assert result["embedding_dim"] == EmbeddingEngine.EMBEDDING_DIM
         assert result["latency_ms"] > 0
 
     def test_unload_clears_state(self, engine: object) -> None:

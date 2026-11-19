@@ -83,7 +83,7 @@ class EmbeddingEngineLike(Protocol):
 
     def load(self) -> None: ...
 
-    def embed_batch(self, texts: list[str]) -> Any: ...  # (n, dim) float array
+    def embed_batch(self, texts: list[str], *, role: str = "query") -> Any: ...  # (n, dim)
 
 
 def load_originals(corpus_path: Path) -> list[dict[str, Any]]:
@@ -175,7 +175,9 @@ def rebuild(
         # killed ~100 s into the batch). Per-text embeddings are independent,
         # so chunking changes nothing about the values.
         chunks = [
-            engine.embed_batch(texts[i : i + batch_size]).astype(np.float32)
+            # role="passage": E5-style models embed corpus text asymmetrically
+            # from queries. Getting this backwards degrades recall with no error.
+            engine.embed_batch(texts[i : i + batch_size], role="passage").astype(np.float32)
             for i in range(0, len(texts), batch_size)
         ]
         return np.vstack(chunks) if chunks else np.zeros((0, 384), np.float32)

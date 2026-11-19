@@ -33,7 +33,7 @@ class FakeEngine:
     def load(self) -> None:
         self.load_calls += 1
 
-    def embed_batch(self, texts: list[str]) -> np.ndarray:
+    def embed_batch(self, texts: list[str], **_kwargs: object) -> np.ndarray:
         out = np.zeros((len(texts), self.dim), dtype=np.float32)
         for i, text in enumerate(texts):
             if text in self.keyed:

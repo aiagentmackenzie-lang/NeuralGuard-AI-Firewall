@@ -76,10 +76,16 @@ _CORPUS_SEVERITY_MAP: dict[str, Severity] = {
 
 _SEMANTIC_RULE_PREFIX = "SEM"
 
-# Minimum similarity that produces an ESCALATE finding.
-# Matches between this and semantic_similarity_threshold are ambiguous
-# and need hybrid scoring + judge to resolve.
-ESCALATE_FLOOR = 0.60
+# Default minimum similarity that produces an ESCALATE finding. Matches between
+# this and semantic_similarity_threshold are ambiguous and need hybrid scoring +
+# judge to resolve.
+#
+# Kept as the fallback for callers that have no settings object; production code
+# reads ``settings.semantic_escalate_floor``. The value is model-specific — it
+# was 0.60 for all-MiniLM-L6-v2 and is 0.86 for multilingual-e5-base, because
+# the two models occupy different similarity ranges entirely (measured
+# 2026-11-18; see scripts/benchmark_embedding_models.py).
+ESCALATE_FLOOR = 0.86
 
 # NG-6: ceiling for a per-tenant BLOCK threshold override. Above this a
 # threshold stops meaning anything (a match that rare never protects anyone).
@@ -100,6 +106,11 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
 
     def __init__(self, settings: ScannerSettings) -> None:
         super().__init__(settings)
+        # Model-specific ambiguous-zone floor (0.60 for all-MiniLM-L6-v2,
+        # 0.86 for multilingual-e5-base). Read once at construction so a scan,
+        # the FPR report and the tenant-threshold validation cannot disagree
+        # about where the ambiguous zone starts.
+        self._escalate_floor = float(settings.semantic_escalate_floor)
         self._engine = EmbeddingEngine(settings)
         self._corpus = AttackCorpus(settings)
         self._initialized = False
@@ -172,7 +183,7 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
         for name, probes in guard_sets.items():
             probe_embs = self._engine.embed_batch(probes)
             report = blocking_report(
-                probes, probe_embs, corpus_vecs, block_threshold, ESCALATE_FLOOR
+                probes, probe_embs, corpus_vecs, block_threshold, self._escalate_floor
             )
             report["fpr_percent"] = round(100.0 * report["block_count"] / report["probes"], 2)
             report["escalate_percent"] = round(
@@ -265,10 +276,10 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
 
         # Search corpus
         # Compute the search threshold: use the lower of the effective
-        # similarity threshold and ESCALATE_FLOOR, so we catch ambiguous
-        # matches (0.60-0.74) that hybrid scoring + judge need to evaluate.
+        # similarity threshold and the escalate floor, so we catch ambiguous
+        # matches that hybrid scoring + judge need to evaluate.
         threshold = block_threshold
-        search_threshold = min(threshold, ESCALATE_FLOOR)
+        search_threshold = min(threshold, self._escalate_floor)
         try:
             matches = self._corpus.search(embedding, threshold=search_threshold, top_k=3)
         except Exception as exc:
@@ -375,7 +386,7 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
         context when the request's tenant config carries an override (the
         tenant's FPR/sensitivity dial). Defense in depth: the value is
         re-validated HERE — anything malformed or out of the
-        [ESCALATE_FLOOR, _TENANT_BLOCK_CEILING] bounds falls back to the
+        [escalate floor, _TENANT_BLOCK_CEILING] bounds falls back to the
         global threshold with a loud log. Never silent, never below the
         ambiguous zone (a threshold under 0.60 would map matches the
         corpus search does not even surface).
@@ -388,11 +399,11 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
         except (TypeError, ValueError):
             logger.warning("tenant_block_threshold_invalid", value=repr(override))
             return self.settings.semantic_similarity_threshold
-        if not (ESCALATE_FLOOR <= value <= _TENANT_BLOCK_CEILING):
+        if not (self._escalate_floor <= value <= _TENANT_BLOCK_CEILING):
             logger.warning(
                 "tenant_block_threshold_out_of_bounds",
                 value=value,
-                floor=ESCALATE_FLOOR,
+                floor=self._escalate_floor,
                 ceiling=_TENANT_BLOCK_CEILING,
             )
             return self.settings.semantic_similarity_threshold
@@ -415,7 +426,7 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
             block_threshold = self.settings.semantic_similarity_threshold
         if similarity >= block_threshold:
             return Verdict.BLOCK
-        if similarity >= ESCALATE_FLOOR:
+        if similarity >= self._escalate_floor:
             return Verdict.ESCALATE
         return Verdict.ALLOW
 
@@ -442,7 +453,7 @@ class SimilarityScanner(BaseScanner["ScannerSettings"]):
 
         embeddings = self._engine.embed_batch(windows)
         threshold = block_threshold
-        search_threshold = min(threshold, ESCALATE_FLOOR)
+        search_threshold = min(threshold, self._escalate_floor)
 
         per_window_max: list[float] = []
         findings: list[Finding] = []

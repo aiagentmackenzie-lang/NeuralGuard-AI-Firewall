@@ -27,11 +27,9 @@ from benchmarks.detection_eval.harness import evaluate
 _BASELINE = Path("benchmarks/detection_eval/baseline.json")
 _TOLERANCE = 0.01  # rates are deterministic; the tolerance is for rounding only
 
-# The matrix embeds 300+ items against a 6,503-vector corpus. The project-wide
-# 30 s per-test timeout was set when the semantic layer was a 384-dim English
-# model running in well under a second; on a CI runner this suite takes longer,
-# and a timeout is not a detection result. Measured on the runner before
-# raising: 3 x Timeout (>30.0s) with the suite otherwise green.
+# The matrix embeds 300+ items against a 6,503-vector corpus with the shipped
+# multilingual model — far slower than the 384-dim English model the project-wide
+# 30 s per-test timeout was written for, and a timeout is not a detection result.
 pytestmark = pytest.mark.timeout(900)
 
 requires_model = pytest.mark.skipif(
