@@ -14,6 +14,9 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+# The real-model classes embed prompts through the 768-dim multilingual model; the project-wide 30 s default was set for a 384-dim English model.
+pytestmark = pytest.mark.timeout(600)
+
 from neuralguard.config.settings import ScannerSettings
 from neuralguard.models.schemas import (
     EvaluateRequest,

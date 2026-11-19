@@ -332,9 +332,21 @@ class TestEmbeddingEngineWithModel:
         """Model loads successfully."""
         assert engine.loaded
 
-    def test_load_time_under_2s(self, engine: object) -> None:
-        """Model loads in under 2 seconds."""
-        assert engine.load_time_ms < 2000, f"Load time {engine.load_time_ms:.0f}ms exceeds 2s"
+    def test_load_time_within_budget(self, engine: object) -> None:
+        """Model load stays inside a startup budget.
+
+        The budget moved with the artifact, not the other way round: 2 s was
+        set for a 24 MB English model; the shipped multilingual model is
+        1.11 GB and measured 2,186 ms on a GitHub runner (under 1 s on the
+        reference Mac). A startup budget is still worth having — it catches a
+        pathological regression — so it is 10 s locally and 30 s in CI, with the
+        measured values here rather than a number that quietly stopped being
+        true.
+        """
+        budget_ms = 30000.0 if os.environ.get("CI") else 10000.0
+        assert engine.load_time_ms < budget_ms, (
+            f"Load time {engine.load_time_ms:.0f}ms exceeds {budget_ms / 1000:.0f}s"
+        )
 
     def test_embed_returns_model_dim(self, engine: object) -> None:
         """Single embed returns the model's dimensionality."""

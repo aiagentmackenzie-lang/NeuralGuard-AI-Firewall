@@ -16,6 +16,9 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+# The published-invariant test embeds 95 probes against 6,503 vectors with the 768-dim multilingual model; on a CI runner that exceeds the project-wide 30 s default (~3.4 s of pure embedding on the reference Mac).
+pytestmark = pytest.mark.timeout(600)
+
 from neuralguard.config.settings import ScannerSettings
 from neuralguard.semantic.similarity import SimilarityScanner
 

@@ -11,6 +11,23 @@ predates the research-frontier controls, the MCP gateway and the fleet campaign
 
 ## [Unreleased]
 
+### Fixed — two model-specific budgets that only CI could fail (2026-11-19)
+
+The multilingual model made two assumptions false on a CI runner while both
+still passed on the reference Mac:
+
+- `test_load_time_under_2s` asserted a 2 s startup for what was a 24 MB model.
+  The shipped artifact is 1.11 GB and measured **2,186 ms** on the runner. The
+  budget moved with the artifact (10 s local / 30 s CI) and the measured values
+  are in the test, rather than a constant that quietly stopped being true.
+- Five real-model test modules inherit the project-wide **30 s** per-test
+  timeout, which was written for a 384-dim English model. They now declare
+  `pytest.mark.timeout(600)` — the FPR-invariant test alone embeds 95 probes
+  against 6,503 vectors, and it was killed at 30 s mid-suite on `main`.
+
+Both were green locally and red in CI, which is the point: a budget tuned to the
+machine you develop on is not a budget.
+
 ### Fixed — the rebuild stopped re-embedding what it already had (CI, 2026-11-19)
 
 `rebuild_corpus_vectors.py` embedded ~5,100 paraphrase candidates, ran the benign
