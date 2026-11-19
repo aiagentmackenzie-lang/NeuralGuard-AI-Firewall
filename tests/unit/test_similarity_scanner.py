@@ -7,6 +7,7 @@ the actual ONNX model + attack corpus.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -582,18 +583,26 @@ class TestSimilarityScannerWithRealModel:
         if result.verdict == Verdict.ALLOW:
             assert len(result.findings) == 0
 
-    def test_latency_under_50ms(self, scanner: object) -> None:
+    def test_latency_within_budget(self, scanner: object) -> None:
         """Semantic scan P95 latency should stay well under any regression-inducing bug.
 
         A regression that re-loads the corpus or re-initializes the ONNX session
         per scan would push latency into the 1000ms+ range, so the P95 budget is
         a meaningful regression guard while honestly reflecting ONNX inference
-        + 7,623-vector corpus similarity. Budget is 400ms: ~19ms p95 on the dev
-        Mac mini, but shared-CI vCPUs measured 125ms (2026-09-05) — the guard
-        targets the 1000ms+ reload regression class, not machine speed. The
-        previous 5-sample "P95" was actually the max-of-5 and flaked under CPU
-        contention (observed 74ms during the full suite). 40 samples gives a
-        real 95th percentile.
+        + 6,503-vector corpus similarity.
+
+        The budget moved with the model (2026-11-19): the 384-dim English model
+        measured ~19 ms p95 on the dev Mac and 125 ms on shared CI vCPUs; the
+        shipped 768-dim multilingual model measures **~62 ms p95 locally and
+        734 ms p95 / 365 ms avg on a 2-core CI runner**. That is the real price
+        of multilingual detection, and it is why the budget is now 250 ms local /
+        1500 ms CI rather than a single number that would either flake in CI or
+        hide a genuine 10x regression.
+
+        The guard still targets the reload class (1000 ms+), not machine speed;
+        the CI ceiling is set above the measured CI cost so a contended runner
+        does not fail a product that is behaving. 40 samples gives a real 95th
+        percentile (the previous 5-sample "P95" was the max-of-5).
         """
         # Warm up (first scan pays the session/corpus warmup cost).
         req = EvaluateRequest(prompt="warmup")
@@ -619,7 +628,10 @@ class TestSimilarityScannerWithRealModel:
         latencies.sort()
         p95 = latencies[int(len(latencies) * 0.95)]
         avg_latency = sum(latencies) / len(latencies)
-        assert p95 < 400, f"P95 latency {p95:.1f}ms exceeds 400ms (avg: {avg_latency:.1f}ms)"
+        budget_ms = 1500.0 if os.environ.get("CI") else 250.0
+        assert p95 < budget_ms, (
+            f"P95 latency {p95:.1f}ms exceeds {budget_ms:.0f}ms (avg: {avg_latency:.1f}ms)"
+        )
 
     def test_finding_metadata_includes_similarity(self, scanner: object) -> None:
         """Findings include similarity metadata."""
