@@ -46,7 +46,7 @@ spec:
           # CycloneDX SBOM attestation, buildx provenance + SPDX SBOM in the
           # index). Pinned by DIGEST, not tag: a tag is mutable and the signature
           # covers the digest. Runbook: docs/runbooks/artifact_signing.md §4.
-          image: ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:bef1681b8f94fd6bf96b2fbfb397b2dd0d273cfc67fd081579e2acd9c5e3eb41
+          image: ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:b2ce684b481e420edacd6935e74aa0b0372da8cc94a20d06d336dd095544fd3e
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
