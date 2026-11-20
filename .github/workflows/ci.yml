@@ -179,7 +179,7 @@ jobs:
         # Without this, every PR re-embeds 6,503 texts through a 768-dim model on
         # a 2-core runner (~25 min) to test code that did not touch any of it.
         id: model-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             models/embedding-onnx
