@@ -9,7 +9,43 @@ The project had no changelog before this file, and the previous tag (`v0.2.1`)
 predates the research-frontier controls, the MCP gateway and the fleet campaign
 — so `0.3.0` carries everything since, not just the work of the last few weeks.
 
-## [Unreleased]
+## [0.3.3] — 2026-11-19
+
+**This release exists because the artifact and the tree had diverged.** `v0.3.2`
+shipped on 2026-11-17; the multilingual detector merged on 2026-11-19 as three
+separate PRs. Between those dates the manifest pinned a published image with
+34 % multilingual semantic recall while the README described 60 %, and
+"clone and apply on a fresh cluster" installed the older detector. The tree was
+correct and the thing a consumer runs was not, which is the only kind of
+divergence that matters here.
+
+What the published image now contains: the capability matrix that measures each
+layer in isolation, `intfloat/multilingual-e5-base` (768-dim, ONNX fp32) with
+calibrated thresholds, the corrected `DAN` boundary in the three i18n packs,
+and the five measured PT pattern-pack recall gaps closed (PT core 75 % → 85 %).
+
+The claim in the paragraph above was checked against the artifact, not
+remembered: pulling the previous pinned digest and asking it directly returns
+`semantic_model = sentence-transformers/all-MiniLM-L6-v2`,
+`semantic_similarity_threshold = 0.75`, and **no `semantic_escalate_floor`
+attribute at all** — the two-threshold calibration the multilingual model
+requires did not exist in the shipped image.
+
+**The measured cost of multilingual detection, stated rather than buried.** The
+semantic artifact grew from 24 MB to **1.11 GB** and the price shows up as
+latency and as CI time, not as a smaller number:
+
+| measurement | value | where |
+|:--|:--|:--|
+| model load at startup | **2,186 ms** | CI runner (budget is 30 s there, 10 s local) |
+| semantic scan p95 | **59.2 ms** (avg 39.7) | re-measured 2026-11-19 on the reference Mac, 40 samples, shipped thresholds |
+| semantic scan p95 / avg | **734 ms / 365 ms** | 2 weak vCPUs on the CI runner (budget 1500 ms there) |
+| corpus rebuild | **~3 min** warm / **~25 min** cold | 2-core runner, after the second-pass fix |
+
+int8 quantization was measured and **rejected**: 278 MB / 25.7 ms, but at equal
+guard precision it lost ~15 points of recall (44/114 vs 61/114) because the
+usable separation on this corpus is ~0.02 and quantization noise is the same
+order. A 4x smaller artifact that detects less is not a cheaper artifact.
 
 ### Fixed — five measured PT recall gaps, and the corpus that can now ratchet them
 
@@ -53,35 +89,31 @@ Still open and unchanged: the two PT judgement calls for a native speaker
 (`PI-D-PT-001` severity, `PI-D-PT-002` rewrite) in
 `docs/i18n_native_review_request.md`.
 
-## [0.3.3] — 2026-11-19
+### Fixed — CI spent 1.1 GB of cache on a version string (2026-11-19)
 
-**This release exists because the artifact and the tree had diverged.** `v0.3.2`
-shipped on 2026-11-17; the multilingual detector merged on 2026-11-19 as three
-separate PRs. Between those dates the manifest pinned a published image with
-34 % multilingual semantic recall while the README described 60 %, and
-"clone and apply on a fresh cluster" installed the older detector. The tree was
-correct and the thing a consumer runs was not, which is the only kind of
-divergence that matters here.
+The model/vector cache key hashed **files** rather than the values those files
+yield, and this release paid for it twice: bumping the project's own version
+string rewrites `uv.lock` by one line, which invalidated 1.11 GB and forced a
+full corpus rebuild. The two coverage runs of this release measured **21 m 19 s
+and 30 m 14 s** of rebuild against a warm job of 7-10 min. The previous version
+of the key had the same defect one directory up (`src/neuralguard/semantic/**`),
+costing three 40-46 min runs.
 
-What the published image now contains: the capability matrix that measures each
-layer in isolation, `intfloat/multilingual-e5-base` (768-dim, ONNX fp32) with
-calibrated thresholds, and the corrected `DAN` boundary in the three i18n packs.
+The key now takes a fingerprint of the values that actually move a vector — the
+model, its truncation and prefixes, the threshold that decides which paraphrases
+survive the benign guard, and the resolved versions of the packages that tokenize
+or do the arithmetic. Measured sensitivity: a 0.3.3→0.3.4 version bump leaves the
+fingerprint **unchanged** (`7b8afc8e5c137be2`), a `tokenizers` 0.22.2→0.22.3 bump
+changes it (`3f70649682e2c3ec`). Cold 31 m 12 s → warm **9 m 26 s** on the same
+key. The guard derives the settings list from the embedding and rebuild sources,
+so a new field on the vector path fails the test until the workflow covers it.
 
-**The measured cost of multilingual detection, stated rather than buried.** The
-semantic artifact grew from 24 MB to **1.11 GB** and the price shows up as
-latency and as CI time, not as a smaller number:
-
-| measurement | value | where |
-|:--|:--|:--|
-| model load at startup | **2,186 ms** | CI runner (budget is 30 s there, 10 s local) |
-| semantic scan p95 | **59.2 ms** (avg 39.7) | re-measured 2026-11-19 on the reference Mac, 40 samples, shipped thresholds |
-| semantic scan p95 / avg | **734 ms / 365 ms** | 2 weak vCPUs on the CI runner (budget 1500 ms there) |
-| corpus rebuild | **~3 min** warm / **~25 min** cold | 2-core runner, after the second-pass fix |
-
-int8 quantization was measured and **rejected**: 278 MB / 25.7 ms, but at equal
-guard precision it lost ~15 points of recall (44/114 vs 61/114) because the
-usable separation on this corpus is ~0.02 and quantization noise is the same
-order. A 4x smaller artifact that detects less is not a cheaper artifact.
+A third CI budget was found by verifying that fix rather than assuming it: the
+single-embed latency ceiling was 400 ms, written for a fast runner, and a rerun
+of the same commit measured **546.6 ms p95 / 263.8 ms median** after passing 20
+minutes earlier on a different ephemeral machine. The reference Mac measures
+51.6 ms p95. The CI ceiling is now 1200 ms; the strict 100 ms budget is unchanged
+where it is measurable.
 
 ### Fixed — two model-specific budgets that only CI could fail (2026-11-19)
 
