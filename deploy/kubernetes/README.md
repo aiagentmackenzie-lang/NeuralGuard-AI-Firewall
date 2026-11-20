@@ -26,6 +26,17 @@ Raw manifests (+ kustomize). **Validation status, honestly:**
   to need a `rollout restart` converges on its own (attempts 1–2 failed, attempt
   5 created the schema, `RESTARTS 0`). Evidence in
   [that drill](#cluster-drill--2026-11-17-re-run-against-v031-the-fix-in-the-artifact).
+- ✅ **Re-drilled 2026-11-20 against the v0.3.3 digest** — a fresh kind cluster
+  pulled `ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:b2ce684b481e…` from
+  GHCR (nothing loaded locally); 2/2 Running, **RESTARTS 0**, unauth `/v1/info`
+  **401**, benign **200 allow**, injection **403 `PI-D-001`**, signed audit rows
+  with **both chains VALID**, redis outage → `/v1/ready` **503** while
+  `/v1/health` stays **200**, late-Postgres convergence in ~30 s with
+  `RESTARTS 0`. Evidence in
+  [that drill](#cluster-drill--2026-11-20-against-the-v033-digest).
+  It also settled a claim this document was carrying: **the image does not
+  contain the model weights** (see below), so "the published image contains the
+  multilingual detector" is true of its *configuration*, not of its weights.
 - ✅ **Two-pod HITL drill 2026-11-17** — the shared escalation store proven
   across **two pods behind a Service** (not just two processes): raise on A,
   approve on B, the held request resumes on A, the record is consumed,
@@ -204,6 +215,71 @@ digest does not contain the fix yet. That substitution is the exact mistake the
 **Not healed by design:** a table dropped *out of band* on a running pod needs a
 restart — the app does not re-run schema creation mid-flight. Readiness now
 says so, which is the difference that matters.
+
+## Cluster drill — 2026-11-20 against the v0.3.3 digest
+
+**What this drill was for.** v0.3.3 exists because `main` and the published
+artifact had diverged. The manifest pinned v0.3.2, whose image answers
+`semantic_model = sentence-transformers/all-MiniLM-L6-v2`,
+`semantic_similarity_threshold = 0.75`, and has **no `semantic_escalate_floor`
+attribute at all**. This is the first cluster run against the replacement.
+
+**Environment.** Fresh `kind create cluster --name ng-drill --wait 180s`
+(25 s), colima on the default profile. Secrets generated into a throwaway file,
+never committed. **No `kind load` at any point** — the node pulled the image
+from GHCR, as the pod's own `imageID` records:
+
+```
+neuralguard-7d8b884cf6-6zwj8: ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:b2ce684b481e…
+neuralguard-7d8b884cf6-fbbv4: ghcr.io/aiagentmackenzie-lang/neuralguard@sha256:b2ce684b481e…
+```
+
+| Check | Result |
+|:--|:--|
+| Pods | **2/2 Running, RESTARTS 0** (also 0 on postgres and redis) |
+| `/v1/info` unauthenticated | **401** |
+| `/v1/info` authenticated | `version: 0.3.3` |
+| Benign prompt | **200**, `verdict: allow`, 5.1 ms, layers `structural, agent_guardian, pattern` |
+| Injection prompt | **403**, `verdict: block`, `PI-D-001` @ 0.95 + `PI-D-008` @ 0.88 |
+| Audit rows | 2 rows in `audit_events`, written by the published image |
+| Audit chains | `audit-verify` → **2 events, both chains VALID** (**per-worker** and **global-order**), 0 parse errors |
+| Redis scaled to 0 | `/v1/ready` **503** `redis:"fail"`, `/v1/health` stays **200**, app pods **RESTARTS 0** |
+| Redis restored | `/v1/ready` **200**, next request `allow` — no restart needed |
+| `postgres-0` deleted | `audit_db: fail` → `degraded` → **`ok`/`healthy` in ~30 s**, app pods **RESTARTS 0** |
+
+### What the drill corrected in this document
+
+**The image does not contain the model weights, and never did.** `Dockerfile`
+says so explicitly ("the models themselves stay OUT of the image (gitignored
+build artifacts); profiles mount models/ at /app/models"), and the artifact
+proves it: `/app/models` **does not exist** in
+`sha256:b2ce684b481e…` — the image is **198 MB**. So
+`NEURALGUARD_SCANNER_SEMANTIC_ENABLED: "false"` in `configmap.yaml` is honest
+and must stay the default: with no mount, the layer would silently degrade.
+
+What v0.3.3 actually changed in the artifact is the **selection and the
+calibration** — the image now names `intfloat/multilingual-e5-base` and carries
+`0.88` / `0.868`, and `scripts/export_onnx.py` defaults to `ScannerSettings().semantic_model`,
+so a model exported *from this tree* cannot disagree with the runtime. The
+weights remain a deployment input.
+
+### The defect this drill found (open, not fixed)
+
+**A Redis outage is reported to clients as `429 rate_limit_exceeded` with
+`retry_after: 1`, forever.** The posture is correct — the request is refused,
+readiness goes `503`, nothing is written as if it succeeded — but the reason is
+wrong, and it is wrong in the one direction that hurts: an automated client
+honours `Retry-After: 1` and retries indefinitely against a store that is down.
+Reproduced twice, 8 s apart, with redis at 0 replicas and the pod never
+restarting. The audit-store path already names its outages (`503`, audited);
+the rate limiter should do the same rather than borrowing the rate-limit
+vocabulary. Recorded here rather than fixed in a deployment PR.
+
+### Environment limitations (not manifest defects)
+
+The HPA reports `FailedGetResourceMetric`: **metrics-server is not installed in
+this kind cluster**, and the custom-metric template in `hpa.yaml` stays
+commented. That is the pre-existing, documented limit — not a finding.
 
 ## Two-pod HITL drill — 2026-11-17
 

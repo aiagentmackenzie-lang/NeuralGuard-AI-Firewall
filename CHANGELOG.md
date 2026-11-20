@@ -20,9 +20,19 @@ correct and the thing a consumer runs was not, which is the only kind of
 divergence that matters here.
 
 What the published image now contains: the capability matrix that measures each
-layer in isolation, `intfloat/multilingual-e5-base` (768-dim, ONNX fp32) with
-calibrated thresholds, the corrected `DAN` boundary in the three i18n packs,
-and the five measured PT pattern-pack recall gaps closed (PT core 75 % → 85 %).
+layer in isolation, the **selection and calibration** of
+`intfloat/multilingual-e5-base` (768-dim, ONNX fp32; thresholds 0.88 / 0.868),
+the corrected `DAN` boundary in the three i18n packs, and the five measured PT
+pattern-pack recall gaps closed (PT core 75 % → 85 %).
+
+**The weights are not in the image, and that is deliberate.** `Dockerfile` keeps
+`models/` out of the build context and a profile mounts it at `/app/models`; the
+v0.3.3 artifact has no `/app/models` directory and is 198 MB. So
+`configmap.yaml` sets `NEURALGUARD_SCANNER_SEMANTIC_ENABLED: "false"` and is
+right to — a cluster that wants the semantic layer supplies the model. What the
+release fixes is that a model exported *from this tree* can no longer disagree
+with the runtime that loads it, because `export_onnx.py` defaults to
+`ScannerSettings().semantic_model`.
 
 The claim in the paragraph above was checked against the artifact, not
 remembered: pulling the previous pinned digest and asking it directly returns
