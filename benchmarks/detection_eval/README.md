@@ -45,7 +45,7 @@ block the weather question".
 
 | File | Items | Provenance |
 |:--|--:|:--|
-| `corpus_multilingual_attacks.jsonl` | 87 | **Machine-authored 2026-11-18**, 10 languages × 4 families (PI-D, JB, EXT, CR) + 7 language-neutral agentic/obfuscation items. **Not human-reviewed.** |
+| `corpus_multilingual_attacks.jsonl` | 92 | **Machine-authored 2026-11-18**, 10 languages × 4 families (PI-D, JB, EXT, CR) + 7 language-neutral agentic/obfuscation items, **plus 5 PT items added 2026-11-19** that name the pattern-pack recall gaps measured at handover (singular `instrução`, `desconsidere`, the new-instruction and obedience shapes, the article in "mostre o prompt"). **Not human-reviewed.** |
 | `benchmarks/ng_vs_ns/attack_corpus.jsonl` | 27 | The existing English A1 regression corpus (reused, not duplicated) |
 | `corpus_multilingual_benign.jsonl` | 76 | Machine-authored everyday sentences, 10 languages (imported from the i18n sweep so there is one copy) |
 | `benchmarks/ng_vs_ns/benign_corpus.jsonl` | 45 | The F12 English benign corpus behind the published SLO |
@@ -100,6 +100,18 @@ Whole detector (`core` = structural + pattern + semantic):
 
 By family (core, E5): JB 96 %, PI-D 88 %, EXF 100 %, PI-I 100 %, MEM 100 %,
 TOOL 60 %, OBF 67 %, EXT 43 %, CR 45 %. Controls: 10/10.
+
+> The two tables above are the **model-swap comparison as measured on the
+> 114-item attack corpus**. They are left at their measured values rather than
+> recomputed on a larger corpus, because a before/after whose denominator moved
+> underneath it is not a comparison. The corpus has since grown to 119.
+
+**Current figures (2026-11-19, after the PT pack recall fix, 119 attacks):**
+pattern layer PT **62 %** (was 38 %), core PT **85 %** (was 75 %), core all
+**86 %**, semantic PT 54 %. Benign is unchanged on every column — multilingual
+benign fired 10 %, blocked 1.2 %, **PT still 0/8** — and the NG-6 hard-negative
+class is untouched at **15/50 blocked**, because nothing in this fix touched
+the quotation problem that causes it.
 
 ### What changed, and what did not
 

@@ -1,6 +1,6 @@
 {
   "corpus": {
-    "attacks": 114,
+    "attacks": 119,
     "attacks_by_language": 11,
     "benign": 171,
     "benign_everyday": 121,
@@ -9,9 +9,9 @@
   "layers": {
     "structural": {
       "attacks": {
-        "total": 114,
+        "total": 119,
         "caught": 2,
-        "rate": 0.0175,
+        "rate": 0.0168,
         "by_language": {
           "AR": {
             "total": 8,
@@ -63,7 +63,7 @@
             "block_rate": 0.0
           },
           "PT": {
-            "total": 8,
+            "total": 13,
             "caught": 0,
             "rate": 0.0,
             "blocked": 0,
@@ -103,7 +103,7 @@
             "rate": 0.0
           },
           "EXT": {
-            "total": 23,
+            "total": 24,
             "caught": 0,
             "rate": 0.0
           },
@@ -123,7 +123,7 @@
             "rate": 0.3333
           },
           "PI-D": {
-            "total": 26,
+            "total": 30,
             "caught": 0,
             "rate": 0.0
           },
@@ -244,9 +244,9 @@
     },
     "pattern": {
       "attacks": {
-        "total": 114,
-        "caught": 71,
-        "rate": 0.6228,
+        "total": 119,
+        "caught": 76,
+        "rate": 0.6387,
         "by_language": {
           "AR": {
             "total": 8,
@@ -298,11 +298,11 @@
             "block_rate": 0.375
           },
           "PT": {
-            "total": 8,
-            "caught": 3,
-            "rate": 0.375,
-            "blocked": 3,
-            "block_rate": 0.375
+            "total": 13,
+            "caught": 8,
+            "rate": 0.6154,
+            "blocked": 8,
+            "block_rate": 0.6154
           },
           "RU": {
             "total": 8,
@@ -338,9 +338,9 @@
             "rate": 1.0
           },
           "EXT": {
-            "total": 23,
-            "caught": 5,
-            "rate": 0.2174
+            "total": 24,
+            "caught": 6,
+            "rate": 0.25
           },
           "JB": {
             "total": 27,
@@ -358,9 +358,9 @@
             "rate": 0.0
           },
           "PI-D": {
-            "total": 26,
-            "caught": 20,
-            "rate": 0.7692
+            "total": 30,
+            "caught": 24,
+            "rate": 0.8
           },
           "PI-I": {
             "total": 3,
@@ -479,9 +479,9 @@
     },
     "semantic": {
       "attacks": {
-        "total": 114,
-        "caught": 68,
-        "rate": 0.5965,
+        "total": 119,
+        "caught": 71,
+        "rate": 0.5966,
         "by_language": {
           "AR": {
             "total": 8,
@@ -533,11 +533,11 @@
             "block_rate": 0.125
           },
           "PT": {
-            "total": 8,
-            "caught": 4,
-            "rate": 0.5,
-            "blocked": 1,
-            "block_rate": 0.125
+            "total": 13,
+            "caught": 7,
+            "rate": 0.5385,
+            "blocked": 2,
+            "block_rate": 0.1538
           },
           "RU": {
             "total": 8,
@@ -573,9 +573,9 @@
             "rate": 0.0
           },
           "EXT": {
-            "total": 23,
-            "caught": 17,
-            "rate": 0.7391
+            "total": 24,
+            "caught": 18,
+            "rate": 0.75
           },
           "JB": {
             "total": 27,
@@ -593,9 +593,9 @@
             "rate": 0.6667
           },
           "PI-D": {
-            "total": 26,
-            "caught": 26,
-            "rate": 1.0
+            "total": 30,
+            "caught": 28,
+            "rate": 0.9333
           },
           "PI-I": {
             "total": 3,
@@ -714,9 +714,9 @@
     },
     "core": {
       "attacks": {
-        "total": 114,
-        "caught": 97,
-        "rate": 0.8509,
+        "total": 119,
+        "caught": 102,
+        "rate": 0.8571,
         "by_language": {
           "AR": {
             "total": 8,
@@ -768,11 +768,11 @@
             "block_rate": 0.375
           },
           "PT": {
-            "total": 8,
-            "caught": 6,
-            "rate": 0.75,
-            "blocked": 3,
-            "block_rate": 0.375
+            "total": 13,
+            "caught": 11,
+            "rate": 0.8462,
+            "blocked": 8,
+            "block_rate": 0.6154
           },
           "RU": {
             "total": 8,
@@ -808,9 +808,9 @@
             "rate": 1.0
           },
           "EXT": {
-            "total": 23,
-            "caught": 18,
-            "rate": 0.7826
+            "total": 24,
+            "caught": 19,
+            "rate": 0.7917
           },
           "JB": {
             "total": 27,
@@ -828,8 +828,8 @@
             "rate": 0.6667
           },
           "PI-D": {
-            "total": 26,
-            "caught": 26,
+            "total": 30,
+            "caught": 30,
             "rate": 1.0
           },
           "PI-I": {

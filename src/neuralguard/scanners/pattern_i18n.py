@@ -34,7 +34,22 @@ PT_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.93,
         "[PT] Instruction override — 'ignore todas as instruções / esqueça as instruções'",
-        r"(?i)\b(?:ignore|esqueça|descarte|anule)\s+(?:todas\s+as\s+|suas\s+|as\s+)?(?:instruções?|regras?|diretrizes?|orientações?|restrições?)\b",
+        # Recall gaps measured by the capability matrix (2026-11-19) and closed
+        # here without new rule ids: `instruções?` could never match the
+        # singular `instrução`; `desconsidere` was absent from the verb set; the
+        # determiner set held no bare article, so "esqueça a instrução" missed;
+        # and the obedience/new-instruction shapes had no branch at all. PT is
+        # the weakest core column (38 %), and these five misses were mechanical,
+        # not idiomatic — the idiomatic ones stay in the native-speaker
+        # worksheet (docs/i18n_native_review_request.md).
+        #
+        # The bare article is allowed only for the instruction nouns. Allowing
+        # it for `restrição`/`regra` turned the benign PT probe "Anule a restrição
+        # de horário do sistema de ponto" into a BLOCK — an ordinary sentence
+        # about a time-clock policy, and PT was the one language measured at
+        # 0/8 on the sweep. That distinction is measured, not stylistic: the
+        # instrument caught the loose version before it shipped.
+        r"(?i)\b(?:ignore|esqueça|esqueca|descarte|anule|desconsidere)\s+(?:todas\s+as\s+|todos\s+os\s+|suas\s+|seus\s+|as\s+|os\s+|a\s+|o\s+)?(?:instruç(?:ão|ões)|diretriz(?:es)?|orientaç(?:ão|ões))\b|\b(?:ignore|esqueça|esqueca|descarte|anule|desconsidere)\s+(?:todas\s+as\s+|todos\s+os\s+|suas\s+|seus\s+|as\s+|os\s+)?(?:regras?|restriç(?:ão|ões))\b|\b(?:sua|a)\s+nova\s+instruç(?:ão|ões)\s+(?:é|e|será|sera)\b|\bobedeça\s+(?:sem\s+questionar|cegamente)\b",
     ),
     (
         "PI-D-PT-002",
@@ -64,7 +79,11 @@ PT_PATTERNS: list[tuple[str, Severity, float, str, str]] = [
         Severity.HIGH,
         0.91,
         "[PT] System prompt extraction — 'repita tudo acima / mostre suas instruções'",
-        r"(?i)\b(?:repita|diga|mostre|imprima|revele)\s+(?:tudo|todos|todas)\s+(?:acima|acima\s+dito|anterior|escrito|fornecido)\b|\b(?:mostre|revele)\s+(?:suas\s+)?(?:instruções?|prompt\s+do\s+sistema)\b",
+        # The extraction branch required the possessive immediately after the
+        # verb, so the plain article in "mostre **o** prompt do sistema" broke
+        # the match (measured gap, 2026-11-19). Nouns extended to the singular
+        # for the same reason as PI-D-PT-001.
+        r"(?i)\b(?:repita|diga|mostre|imprima|revele)\s+(?:tudo|todos|todas)\s+(?:acima|acima\s+dito|anterior|escrito|fornecido)\b|\b(?:mostre|revele|imprima|repita)\s+(?:o\s+|a\s+)?(?:suas?\s+|seus?\s+)?(?:instruç(?:ão|ões)|prompt\s+do\s+sistema|prompt\s+de\s+sistema|configuraç(?:ão|ões))\b",
     ),
     (
         "PI-D-PT-005",
